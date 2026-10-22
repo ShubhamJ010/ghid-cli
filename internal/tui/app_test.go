@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/ghost-hid/ghid/internal/adb"
 )
 
 func TestAppendComboKey(t *testing.T) {
@@ -197,5 +198,28 @@ func TestQuickSendHexValidation(t *testing.T) {
 	}
 	if !mod1.isErrorNotice || !strings.Contains(mod1.notice, "16 hexadecimal characters") {
 		t.Errorf("expected error notice about 16 hex chars, got %q (isErr=%v)", mod1.notice, mod1.isErrorNotice)
+	}
+}
+
+func TestTelemetryCardDoesNotExposeSnippets(t *testing.T) {
+	m := Model{
+		state:       StateMenu,
+		deviceModel: "Pixel 7",
+		device:      &adb.Device{Serial: "192.168.1.50:5555"},
+		status:      adb.GatewayStatus{Registered: true, Connected: false},
+	}
+	card := m.renderTelemetryCard()
+
+	if strings.Contains(card, "Snippets") || strings.Contains(card, "Keychain") {
+		t.Fatalf("telemetry card should not expose Snippets or Keychain:\n%s", card)
+	}
+	if !strings.Contains(card, "Phone:") || !strings.Contains(card, "Target:") {
+		t.Fatalf("telemetry card missing Phone or Target rows:\n%s", card)
+	}
+	if !strings.Contains(card, "SDP:") || !strings.Contains(card, "Link:") {
+		t.Fatalf("telemetry card missing SDP or Link labels:\n%s", card)
+	}
+	if !strings.Contains(card, "READY") || !strings.Contains(card, "DISCONNECTED") {
+		t.Fatalf("telemetry card missing status badges:\n%s", card)
 	}
 }

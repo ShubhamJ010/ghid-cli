@@ -628,6 +628,8 @@ func (m Model) triggerAction(action string) (tea.Model, tea.Cmd) {
 			}
 			return m.manager.SendComboWithResolver(combo.Keys, m.snippetsStore.Resolver())
 		})
+		studio.width = m.width
+		studio.height = m.height
 		m.comboStudio = &studio
 		m.state = StateComboStudio
 		return m, studio.Init()

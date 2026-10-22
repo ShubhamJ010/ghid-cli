@@ -202,3 +202,59 @@ func assertCallContains(t *testing.T, calls [][]string, want string) {
 	}
 	t.Fatalf("no call containing %q in %v", want, calls)
 }
+
+func TestComboSaveWithEmojiAndDescription(t *testing.T) {
+	app, _, _, _, stdout, stderr := setupTestApp(t)
+
+	// 1. Save with flags after positional
+	stdout.Reset()
+	stderr.Reset()
+	if code := app.Run([]string{"combo", "save", "Login", "ctrl+alt+del", "--emoji", "🔑", "--desc", "Windows unlock", "--fav"}); code != 0 {
+		t.Fatalf("combo save with emoji/desc failed: %s", stderr.String())
+	}
+	saved, ok := app.comboStore().Find("Login")
+	if !ok {
+		t.Fatal("combo Login not found")
+	}
+	if saved.Emoji != "🔑" || saved.Description != "Windows unlock" || !saved.Favorite {
+		t.Fatalf("unexpected saved combo: %+v", saved)
+	}
+
+	// 2. Add with flags before positional
+	stdout.Reset()
+	stderr.Reset()
+	if code := app.Run([]string{"combo", "add", "--emoji", "🔒", "--desc", "Lock screen", "Lock", "win+l"}); code != 0 {
+		t.Fatalf("combo add with flags before positional failed: %s", stderr.String())
+	}
+	lockCombo, ok := app.comboStore().Find("Lock")
+	if !ok {
+		t.Fatal("combo Lock not found")
+	}
+	if lockCombo.Emoji != "🔒" || lockCombo.Description != "Lock screen" {
+		t.Fatalf("unexpected lock combo: %+v", lockCombo)
+	}
+
+	// 3. Shorthand flags with equal signs
+	stdout.Reset()
+	stderr.Reset()
+	if code := app.Run([]string{"combo", "save", "-e=🚀", "-d=Quick run", "Run", "win+r"}); code != 0 {
+		t.Fatalf("combo save shorthand failed: %s", stderr.String())
+	}
+	runCombo, ok := app.comboStore().Find("Run")
+	if !ok {
+		t.Fatal("combo Run not found")
+	}
+	if runCombo.Emoji != "🚀" || runCombo.Description != "Quick run" {
+		t.Fatalf("unexpected run combo: %+v", runCombo)
+	}
+
+	// 4. Listing in non-TTY mode shows emojis and descriptions aligned
+	stdout.Reset()
+	if code := app.Run([]string{"combo", "list"}); code != 0 {
+		t.Fatalf("combo list failed: %s", stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "🔑") || !strings.Contains(out, "Windows unlock") {
+		t.Fatalf("listing should contain emoji and description:\n%s", out)
+	}
+}

@@ -84,7 +84,7 @@ func (m Model) renderInit() string {
 }
 
 func (m Model) renderTelemetryCard() string {
-	devText := "None"
+	devText := "None (waiting for adb link)"
 	if m.device != nil {
 		devText = fmt.Sprintf("%s (%s)", m.deviceModel, m.device.Serial)
 	}
@@ -103,7 +103,7 @@ func (m Model) renderTelemetryCard() string {
 		connBadge = BadgeDisconnected.Render()
 	}
 
-	targetText := "None"
+	targetText := "None (press [d] to pair or select)"
 	selDev := m.cfg.GetSelectedDevice()
 	if selDev != nil {
 		targetText = fmt.Sprintf("%s [%s]", selDev.Name, selDev.Address)
@@ -111,39 +111,43 @@ func (m Model) renderTelemetryCard() string {
 		targetText = fmt.Sprintf("%s [%s]", m.status.Target, m.status.Address)
 	}
 
-	snipText := "username, password (default)"
-	if m.snippetsStore != nil {
-		u, _, _ := m.snippetsStore.Get("username")
-		p, _, _ := m.snippetsStore.Get("password")
-		if u.Value != "" || p.Value != "" {
-			uVal := u.Value
-			if uVal == "" {
-				uVal = "(unset)"
-			}
-			pVal := "(unset)"
-			if p.Value != "" {
-				pVal = "•••••• (🔒 Keychain)"
-			}
-			snipText = fmt.Sprintf("%s / %s", uVal, pVal)
-		} else {
-			snipText = "username, password (empty • prompt on run)"
+	cardWidth := 78
+	if m.width > 0 {
+		cardWidth = m.width - 4
+		if cardWidth < 70 {
+			cardWidth = 70
+		} else if cardWidth > 96 {
+			cardWidth = 96
 		}
-	} else if m.cfg.DefaultUser != "" {
-		snipText = m.cfg.DefaultUser
+	}
+	innerWidth := cardWidth - 6
+
+	rightColWidth := 24
+	leftColWidth := innerWidth - rightColWidth - 2
+	if leftColWidth < 28 {
+		leftColWidth = 28
 	}
 
-	labelStyle := lipgloss.NewStyle().Foreground(ColorFgMuted).Width(16)
+	labelStyle := lipgloss.NewStyle().Foreground(ColorFgMuted)
 	valStyle := lipgloss.NewStyle().Foreground(ColorFgLight).Bold(true)
 
-	cardContent := fmt.Sprintf(
-		"%s %s\n%s %s\n%s %s  %s\n%s %s",
-		labelStyle.Render("Phone Device:"), valStyle.Render(devText),
-		labelStyle.Render("Gateway SDP:"), sdpBadge,
-		labelStyle.Render("Target Laptop:"), valStyle.Render(targetText), connBadge,
-		labelStyle.Render("Snippets:"), valStyle.Render(snipText),
-	)
+	labelPhone := labelStyle.Render("📱 Phone:  ")
+	labelTarget := labelStyle.Render("💻 Target: ")
+	labelSDP := labelStyle.Render("SDP:  ")
+	labelLink := labelStyle.Render("Link: ")
 
-	return CardStyle.Width(64).Render(cardContent)
+	valPhone := valStyle.Render(truncate(devText, leftColWidth-11))
+	valTarget := valStyle.Render(truncate(targetText, leftColWidth-11))
+
+	left1 := padRight(labelPhone+valPhone, leftColWidth)
+	left2 := padRight(labelTarget+valTarget, leftColWidth)
+
+	right1 := labelSDP + sdpBadge
+	right2 := labelLink + connBadge
+
+	cardContent := fmt.Sprintf("%s  %s\n%s  %s", left1, right1, left2, right2)
+
+	return CardStyle.Width(cardWidth).Render(cardContent)
 }
 
 func (m Model) renderMenu() string {
@@ -151,18 +155,39 @@ func (m Model) renderMenu() string {
 	sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(ColorCyan).Render("ACTIONS"))
 	sb.WriteString("\n")
 
+	cardWidth := 78
+	if m.width > 0 {
+		cardWidth = m.width - 4
+		if cardWidth < 70 {
+			cardWidth = 70
+		} else if cardWidth > 96 {
+			cardWidth = 96
+		}
+	}
+
 	for i, item := range m.menuItems {
 		var line string
 		keyStr := KeyBadgeStyle.Render(fmt.Sprintf("[%s]", item.Key))
-		titleStr := lipgloss.NewStyle().Bold(true).Width(14).Render(item.Title)
+		titleStr := lipgloss.NewStyle().Bold(true).Width(12).Render(item.Title)
 		descStr := SubtitleStyle.Render(item.Description)
 
+		content := fmt.Sprintf("%s %s %s - %s", keyStr, item.Icon, titleStr, descStr)
 		if i == m.menuIndex {
 			prefix := lipgloss.NewStyle().Foreground(ColorCyan).Bold(true).Render("▶ ")
-			line = MenuSelectedStyle.Width(64).Render(fmt.Sprintf("%s%s %s %s - %s", prefix, keyStr, item.Icon, titleStr, descStr))
+			line = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(ColorCyan).
+				Background(lipgloss.Color("#313244")).
+				PaddingLeft(1).
+				Width(cardWidth).
+				Render(prefix + content)
 		} else {
 			prefix := "  "
-			line = MenuItemStyle.Render(fmt.Sprintf("%s%s %s %s - %s", prefix, keyStr, item.Icon, titleStr, descStr))
+			line = lipgloss.NewStyle().
+				Foreground(ColorFgLight).
+				PaddingLeft(1).
+				Width(cardWidth).
+				Render(prefix + content)
 		}
 		sb.WriteString(line)
 		sb.WriteString("\n")

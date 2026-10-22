@@ -160,3 +160,94 @@ func TestComboStudioSendButton(t *testing.T) {
 		t.Fatalf("SEND button sent %v, want [win+l]", sent)
 	}
 }
+
+func TestComboStudioCreateWithEmojiAndDescription(t *testing.T) {
+	m, store := newTestStudio(t, nil)
+	nm, _ := m.Update(keyRune('n'))
+	m = nm.(ComboStudioModel)
+	if m.mode != studioCreate {
+		t.Fatal("n should open the create form")
+	}
+
+	m.nameInput.SetValue("Login")
+	m.emojiInput.SetValue("🔑")
+	m.descInput.SetValue("Windows unlock credentials")
+	m.keysInput.SetValue("ctrl+alt+del")
+
+	nm, _ = m.saveCombo(false)
+	m = nm.(ComboStudioModel)
+	if len(m.list) != 1 {
+		t.Fatalf("expected 1 combo, got %d", len(m.list))
+	}
+	saved, ok := store.Find("Login")
+	if !ok {
+		t.Fatal("saved combo not found in store")
+	}
+	if saved.Emoji != "🔑" {
+		t.Fatalf("expected emoji 🔑, got %q", saved.Emoji)
+	}
+	if saved.Description != "Windows unlock credentials" {
+		t.Fatalf("expected description 'Windows unlock credentials', got %q", saved.Description)
+	}
+
+	// Edit the combo and update description
+	nm, _ = m.Update(keyRune('e'))
+	m = nm.(ComboStudioModel)
+	if m.emojiInput.Value() != "🔑" {
+		t.Fatalf("edit form should populate emoji, got %q", m.emojiInput.Value())
+	}
+	if m.descInput.Value() != "Windows unlock credentials" {
+		t.Fatalf("edit form should populate description, got %q", m.descInput.Value())
+	}
+
+	m.descInput.SetValue("Updated credential injection")
+	nm, _ = m.saveCombo(false)
+	m = nm.(ComboStudioModel)
+
+	updated, _ := store.Find("Login")
+	if updated.Description != "Updated credential injection" {
+		t.Fatalf("expected updated description, got %q", updated.Description)
+	}
+	if updated.Emoji != "🔑" {
+		t.Fatalf("emoji should be preserved, got %q", updated.Emoji)
+	}
+}
+
+func TestComboStudioFormTabCycle(t *testing.T) {
+	m, _ := newTestStudio(t, nil)
+	nm, _ := m.Update(keyRune('n'))
+	m = nm.(ComboStudioModel)
+
+	// Cycle through 0 -> 1 -> 2 -> 3 -> 4 -> 5 -> 0
+	expected := []int{1, 2, 3, 4, 5, 0}
+	for _, exp := range expected {
+		nm, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+		m = nm.(ComboStudioModel)
+		if m.formFocus != exp {
+			t.Fatalf("expected formFocus=%d, got %d", exp, m.formFocus)
+		}
+	}
+}
+
+func TestComboStudioTableViewAlignment(t *testing.T) {
+	m, store := newTestStudio(t, nil)
+	store.Add(combos.Combo{Name: "Open RustDesk", Keys: "win+s ->{0.7} type:rustdesk", Favorite: false})
+	store.Add(combos.Combo{Name: "Login", Keys: "ctrl+alt+del ->{1.0} esc", Emoji: "🔑", Description: "Windows unlock & credential injection", Favorite: true})
+	store.Add(combos.Combo{Name: "Lock", Keys: "win+l", Emoji: "🔒", Description: "Instant Windows lock screen (Win + L)", Favorite: true})
+	store.Add(combos.Combo{Name: "Sleep", Keys: "win+x ->{0.5} u ->{0.3} s", Emoji: "🌙", Description: "Windows sleep sequence + countdown exit", Favorite: false})
+	m.list, _ = store.Load()
+
+	view := m.View()
+	lines := strings.Split(view, "\n")
+	if !strings.Contains(view, "Open RustDesk") || !strings.Contains(view, "Login") {
+		t.Fatalf("view should contain combos:\n%s", view)
+	}
+	if !strings.Contains(view, "DESCRIPTION") {
+		t.Fatalf("view should contain DESCRIPTION column header:\n%s", view)
+	}
+	for i, l := range lines {
+		if strings.Contains(l, "DESCRIPTION") && strings.HasPrefix(strings.TrimSpace(l), "DESCRIPTION") {
+			t.Fatalf("DESCRIPTION header wrapped to its own line (line %d):\n%s", i, view)
+		}
+	}
+}

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -9,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"errors"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ghost-hid/ghid/internal/adb"
@@ -20,6 +20,7 @@ import (
 	"github.com/ghost-hid/ghid/internal/snippets"
 	"github.com/ghost-hid/ghid/internal/tui"
 	"github.com/ghost-hid/ghid/internal/vault"
+	"github.com/mattn/go-runewidth"
 )
 
 // App manages command line execution and dependency lifecycle.
@@ -632,30 +633,47 @@ func (a *App) handleCombo(serial string, args []string, jsonOutput bool) int {
 		}
 		return a.handleComboValidate(strings.Join(args[1:], " "), jsonOutput)
 
-	case "save", "add":
-		if len(args) < 3 {
-			return a.comboFail(jsonOutput, "usage: ghid combo save <name> <keys...> [--fav] [--emoji <e>] [--desc <d>]")
-		}
-		name := args[1]
+	case "save", "add", "set", "edit":
+		var positional []string
 		isFav := false
 		emoji := ""
 		description := ""
-		var keyTokens []string
-		for i := 2; i < len(args); i++ {
+
+		for i := 1; i < len(args); i++ {
 			arg := args[i]
-			if arg == "--fav" || arg == "--favorite" {
+			switch {
+			case arg == "--fav" || arg == "--favorite" || arg == "-f":
 				isFav = true
-			} else if arg == "--emoji" && i+1 < len(args) {
-				emoji = args[i+1]
-				i++
-			} else if (arg == "--desc" || arg == "--description") && i+1 < len(args) {
-				description = args[i+1]
-				i++
-			} else {
-				keyTokens = append(keyTokens, arg)
+			case arg == "--emoji" || arg == "-e":
+				if i+1 < len(args) {
+					emoji = args[i+1]
+					i++
+				}
+			case strings.HasPrefix(arg, "--emoji="):
+				emoji = strings.TrimPrefix(arg, "--emoji=")
+			case strings.HasPrefix(arg, "-e="):
+				emoji = strings.TrimPrefix(arg, "-e=")
+			case arg == "--desc" || arg == "--description" || arg == "-d":
+				if i+1 < len(args) {
+					description = args[i+1]
+					i++
+				}
+			case strings.HasPrefix(arg, "--desc="):
+				description = strings.TrimPrefix(arg, "--desc=")
+			case strings.HasPrefix(arg, "--description="):
+				description = strings.TrimPrefix(arg, "--description=")
+			case strings.HasPrefix(arg, "-d="):
+				description = strings.TrimPrefix(arg, "-d=")
+			default:
+				positional = append(positional, arg)
 			}
 		}
-		keys := strings.Join(keyTokens, " ")
+
+		if len(positional) < 2 {
+			return a.comboFail(jsonOutput, "usage: ghid combo save <name> <keys...> [--emoji <e>] [--desc <d>] [--fav]")
+		}
+		name := positional[0]
+		keys := strings.Join(positional[1:], " ")
 		_, existed := store.Find(name)
 		list, err := store.Add(combos.Combo{
 			Name:        name,
@@ -797,7 +815,7 @@ func (a *App) handleComboSchema(store *combos.Store, jsonOutput bool) int {
 		"commands": map[string]string{
 			"list":     "ghid combo list --json",
 			"fav":      "ghid combo fav <name> --json",
-			"save":     "ghid combo save \"Name\" \"keys\" [--fav] --json",
+			"save":     "ghid combo save \"Name\" \"keys\" [--emoji <e>] [--desc <d>] [--fav] --json",
 			"send":     "ghid combo send \"Name\" --json",
 			"delete":   "ghid combo delete \"Name\" --json",
 			"validate": "ghid combo validate \"keys\" --json",
@@ -943,11 +961,17 @@ func (a *App) listCombos(store *combos.Store, jsonOutput bool) int {
 		if c.Emoji != "" {
 			emojiStr = c.Emoji + " "
 		}
+		nameWithEmoji := emojiStr + c.Name
+		nameWidth := runewidth.StringWidth(nameWithEmoji)
+		namePad := ""
+		if nameWidth < 24 {
+			namePad = strings.Repeat(" ", 24-nameWidth)
+		}
 		descStr := ""
 		if c.Description != "" {
 			descStr = fmt.Sprintf(" (%s)", c.Description)
 		}
-		fmt.Fprintf(a.Stdout, "  %2d. %s%s%-24s %s%s\n", i+1, favIcon, emojiStr, c.Name, c.Keys, descStr)
+		fmt.Fprintf(a.Stdout, "  %2d. %s%s%s %-26s%s\n", i+1, favIcon, nameWithEmoji, namePad, c.Keys, descStr)
 	}
 	fmt.Fprintf(a.Stdout, "\n  Send one with 'ghid combo send <name>' or toggle favorite with 'ghid combo fav <name>'\n\n")
 	return 0
@@ -1526,7 +1550,7 @@ Commands:
   combo fav <name>  Toggle favorite (pin with ❤️ to top of dashboard action list)
   combo schema      Grammar + every accepted token (JSON for AI agents)
   combo validate <keys>  Validate without saving or sending
-  combo save <name> <keys...> [--fav]   Save a named combo (keyboard + mouse + text + $VAR)
+  combo save <name> <keys...> [--emoji <e>] [--desc <d>] [--fav]   Save a named combo (keyboard + mouse + text + $VAR)
   combo send <name> Send a saved combo
   combo delete <name> [-f]      Delete a combo (--json skips confirmation)
   combo <keys>      Send a one-shot shortcut (e.g. 'win+d', 'ctrl+alt+del')

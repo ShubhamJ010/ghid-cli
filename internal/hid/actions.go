@@ -105,7 +105,6 @@ func mouseActionFor(canonical string) MouseAction {
 	}
 }
 
-
 // Control and lifecycle directives recognized by the GhostHID sequence runner.
 const (
 	DirectiveExit       = "!EXIT"
