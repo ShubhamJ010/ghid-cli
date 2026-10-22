@@ -4,7 +4,7 @@ Headless Android Bluetooth HID controller and automation gateway.
 
 GhostHID turns an Android phone into a physical Bluetooth Human Interface Device (HID) composite peripheral. It injects keyboard keystrokes, pointer gestures, text strings, and automated login sequences into any paired Windows, macOS, or Linux computer.
 
-The phone runs a background Android Foreground Service controlled locally or over Wi-Fi via ADB commands and the `ghid` command-line utility.
+The phone runs a background Android service controlled locally or over Wi-Fi via ADB and the `ghid` command-line utility.
 
 ```mermaid
 flowchart LR
@@ -15,23 +15,33 @@ flowchart LR
     class Host,Phone,Target node
 ```
 
----
+## Why GhostHID?
+
+macOS does not support the Bluetooth HID Peripheral role. A Mac can connect to external keyboards and mice as a host, but it cannot advertise itself as a Bluetooth input device to control another computer.
+
+Android 9+ (API 28+) supports the native Bluetooth HID Device profile (`BluetoothHidDevice`). GhostHID uses an Android device as an ADB-driven transport bridge. You control the Android phone from your Mac over USB or Wi-Fi using ADB, and the phone connects to your target machine (such as a Windows laptop) as a standard Bluetooth keyboard and mouse. The target system requires no custom software, drivers, or agent daemons. It sees only a standard wireless HID peripheral.
+
+### Agent and automation design
+
+GhostHID is built for headless operation and AI agents:
+- Every command supports `--json` with structured schemas and machine-readable output.
+- Scripting invocations disable interactive prompts, confirmations, and terminal alternate screens.
+- Deterministic exit codes allow scripts and agents to distinguish connection errors from syntax or device errors.
+- Low-latency keystroke injection, combo sequences, and raw HID reports allow autonomous agents to operate target computers without accessibility APIs or screen-scraping hooks.
 
 ## Documentation Index
 
-- [System Architecture Specification](file:///Users/sj/Desktop/ws/ghost-hid/docs/architecture.md): Subsystem topology, Android foreground service lifecycle, dual-report HID descriptor bytecode, and security model.
-- [Execution and Lifecycle Flows](file:///Users/sj/Desktop/ws/ghost-hid/docs/flows.md): Sequence diagrams for automated login, combo execution, Bluetooth SDP handshakes, ACPI sleep teardown, and diagnostic health checks.
-- [Wire and Report Protocol Specification](file:///Users/sj/Desktop/ws/ghost-hid/docs/protocol-spec.md): Binary report payloads, L2CAP channels, USB HID scancode translation table, and ADB intent extras.
-- [Troubleshooting and Operational Runbook](file:///Users/sj/Desktop/ws/ghost-hid/docs/troubleshooting.md): Step-by-step diagnosis for ADB transport drops, Windows audio-vs-HID driver binding, Bluetooth state desync, and macOS Keychain in SSH.
-- [Automation and Agent Integration Guide](file:///Users/sj/Desktop/ws/ghost-hid/docs/agent-integration.md): Machine-readable `--json` schemas, exit code definitions, and integration recipes for Bash, Python, and Node.js.
-- [Standalone Android Toolchain (Zero Gradle)](file:///Users/sj/Desktop/ws/ghost-hid/docs/build-and-toolchain.md): Technical breakdown of the 1.8-second APK compilation pipeline using `aapt2`, `javac`, `d8`, `zipalign`, and `apksigner`.
-- [Architecture Decision Records](file:///Users/sj/Desktop/ws/ghost-hid/docs/decisions/):
-  - [ADR-001: Headless Android Service with BroadcastReceiver IPC over ADB](file:///Users/sj/Desktop/ws/ghost-hid/docs/decisions/ADR-001-headless-android-service-adb-ipc.md)
-  - [ADR-002: Dual-Report HID Descriptor for Keyboard and Mouse](file:///Users/sj/Desktop/ws/ghost-hid/docs/decisions/ADR-002-dual-report-descriptor-for-keyboard-and-mouse.md)
-  - [ADR-003: Charm TUI with Structured JSON API and Native Credential Vault](file:///Users/sj/Desktop/ws/ghost-hid/docs/decisions/ADR-003-charm-tui-with-json-agent-api-and-keychain-vault.md)
-  - [ADR-004: Snippets Subsystem, Dynamic Combo Variables, and Unified Quick Send](file:///Users/sj/Desktop/ws/ghost-hid/docs/decisions/ADR-004-snippets-subsystem-and-quick-send.md)
-
----
+- [System Architecture Specification](docs/architecture.md): Subsystem topology, Android foreground service lifecycle, dual-report HID descriptor bytecode, and security model.
+- [Execution and Lifecycle Flows](docs/flows.md): Sequence diagrams for automated login, combo execution, Bluetooth SDP handshakes, ACPI sleep teardown, and diagnostic health checks.
+- [Wire and Report Protocol Specification](docs/protocol-spec.md): Binary report payloads, L2CAP channels, USB HID scancode translation table, and ADB intent extras.
+- [Troubleshooting and Operational Runbook](docs/troubleshooting.md): Step-by-step diagnosis for ADB transport drops, Windows audio-vs-HID driver binding, Bluetooth state desync, and macOS Keychain in SSH.
+- [Automation and Agent Integration Guide](docs/agent-integration.md): Machine-readable `--json` schemas, exit code definitions, and integration recipes for Bash, Python, and Node.js.
+- [Standalone Android Toolchain (Zero Gradle)](docs/build-and-toolchain.md): Technical breakdown of the 1.8-second APK compilation pipeline using `aapt2`, `javac`, `d8`, `zipalign`, and `apksigner`.
+- [Architecture Decision Records](docs/decisions/):
+  - [ADR-001: Headless Android Service with BroadcastReceiver IPC over ADB](docs/decisions/ADR-001-headless-android-service-adb-ipc.md)
+  - [ADR-002: Dual-Report HID Descriptor for Keyboard and Mouse](docs/decisions/ADR-002-dual-report-descriptor-for-keyboard-and-mouse.md)
+  - [ADR-003: Charm TUI with Structured JSON API and Native Credential Vault](docs/decisions/ADR-003-charm-tui-with-json-agent-api-and-keychain-vault.md)
+  - [ADR-004: Snippets Subsystem, Dynamic Combo Variables, and Unified Quick Send](docs/decisions/ADR-004-snippets-subsystem-and-quick-send.md)
 
 ## Quick Start
 
@@ -56,7 +66,7 @@ ghid uninstall-bin
 ```
 
 ### 2. Connect Your Phone via ADB
-Enable Developer Options and USB Debugging on your Android phone. Plug it in via USB or connect over Wi-Fi:
+Enable Developer Options and USB Debugging on your Android phone. Connect via USB or Wi-Fi:
 
 ```bash
 # Connect over Wi-Fi (if wireless debugging is enabled on phone)
@@ -64,7 +74,7 @@ adb connect 192.168.1.80:41839
 ```
 
 ### 3. Build and Install the Phone APK
-The build script uses Android command-line tools directly (`aapt2`, `javac`, `d8`, `zipalign`, `apksigner`) with zero Gradle overhead:
+The build script compiles directly with Android SDK tools (`aapt2`, `javac`, `d8`, `zipalign`, `apksigner`) without Gradle:
 
 ```bash
 ./build.sh
@@ -74,19 +84,11 @@ ghid install-apk
 ### 4. Pair Phone to Target Computer
 Pair the phone and target computer over Bluetooth before first use. See [Bluetooth Pairing Setup](#bluetooth-pairing-setup) for the required Windows settings.
 
----
-
-## Hardware and Power Note (Wake-on-Bluetooth)
-
-During ACPI sleep states (Modern Standby, S3, or S4 hibernating), internal Bluetooth controllers on most PC laptops are powered down and cannot receive incoming Bluetooth packets.
-
-Standard operating procedure:
-1. Tap any physical key or press the power button on the target laptop to power on the Bluetooth controller.
-2. Run `ghid`.
-3. The phone connects to the laptop over Bluetooth within two seconds.
-4. Select `[1] login` or run `ghid login` to unlock the computer.
-
----
+> [!NOTE]
+> **Wake-on-Bluetooth limitation**
+> During ACPI sleep states (Modern Standby, S3, or S4 hibernating), internal Bluetooth controllers on most PC laptops are powered down and cannot receive incoming Bluetooth packets.
+>
+> Tap any physical key or press the power button on the target laptop to power on its Bluetooth controller before connecting via `ghid`.
 
 ## Interactive Console
 
@@ -97,7 +99,7 @@ ghid
 ```
 
 ### Startup Diagnostics
-On startup, `ghid` checks the environment:
+On startup, `ghid` runs through environment checks:
 1. Checks for connected USB or wireless ADB devices. If disconnected, an interactive menu allows entering custom IP addresses, ports, or pairing codes.
 2. Checks whether package `com.poc.hiddebug` is installed. Offers to install pre-built APK or compile from source.
 3. Checks whether phone Bluetooth is enabled.
@@ -129,7 +131,7 @@ Actions:
 - `login`: Wakes screen (`Ctrl+Alt+Del` then `Esc`), types username and password from the Keychain vault, and presses `Enter`.
 - `lock`: Dispatches `Win + L` immediately.
 - `sleep`: Dispatches Windows sleep sequence (`Win + X`, then `u`, then `s`), counts down 5 seconds, disconnects Bluetooth, and terminates the Android foreground service.
-- `type`: Sends raw text strings as sequence of keystrokes.
+- `type`: Sends raw text strings as a sequence of keystrokes.
 - `combo`: Opens the interactive Combo Studio.
 - `raw`: Sends explicit 8-byte raw hex reports directly to the HID driver.
 - `devices`: Manages target device list and active selection.
@@ -137,14 +139,12 @@ Actions:
 - `doctor`: Runs full diagnostic checks on ADB, APK, Bluetooth, and Keychain.
 - `exit`: Disconnects Bluetooth and terminates phone service to conserve battery.
 
----
-
 ## Command-Line Usage and Automation API
 
-All commands support `--json` for scripts, CI jobs, and AI agents. In JSON mode, prompts are disabled, destructive actions like delete proceed without confirmation, and errors return exit code 1 with JSON error bodies.
+All commands support `--json` for scripts, CI jobs, and AI agents. In JSON mode, interactive prompts are disabled, actions proceed without confirmation, and errors return exit code 1 with JSON error bodies.
 
 ### System Diagnostics (`doctor`)
-Runs a comprehensive inspection across ADB, Android package status, Bluetooth state, SDP registration, laptop connection, and Keychain storage:
+Checks ADB, Android package status, Bluetooth state, SDP registration, target connection, and Keychain storage:
 
 ```bash
 ghid doctor --json
@@ -210,7 +210,7 @@ ghid lock
 ghid sleep --countdown 5
 ```
 
-### Quick Send: Keystroke Typing & Raw Reports (`quick`)
+### Quick Send: Keystroke Typing and Raw Reports (`quick`)
 Unified entry point for ad-hoc text typing and raw HID hex reports:
 
 ```bash
@@ -223,7 +223,7 @@ ghid quick --raw "08000f0000000000"
 ghid quick "raw:08000f0000000000" --json
 ```
 
-### Combo Macros & Mouse Gestures (`combo`)
+### Combo Macros and Mouse Gestures (`combo`)
 ```bash
 # One-shot keyboard combos
 ghid combo "win+r"
@@ -245,7 +245,7 @@ Combos can be validated, saved, listed, and sent via CLI or JSON without loading
 # Inspect accepted grammar tokens and mouse actions
 ghid combo schema --json
 
-# Validate a complex chained sequence before saving
+# Validate a chained sequence before saving
 ghid combo validate "win+s ->{0.7} type:rustdesk ->{0.4} enter" --json
 
 # Save a named combo (updates if already exists)
@@ -309,8 +309,6 @@ ghid tail
 ghid filelog
 ```
 
----
-
 ## Combo Sequence Grammar
 
 Chained sequences separate steps with `->` and optional delay values in curly braces (`->{seconds}`):
@@ -339,8 +337,6 @@ Examples:
 
 macOS-specific key aliases (`cmd`, `option`, `opt`, `super`) are rejected by the validator to prevent ambiguous keycode mappings.
 
----
-
 ## Bluetooth Pairing Setup
 
 To ensure Windows binds the phone as a Bluetooth HID keyboard rather than an audio device:
@@ -358,9 +354,9 @@ To ensure Windows binds the phone as a Bluetooth HID keyboard rather than an aud
    - Confirm the numeric passkey on both Windows and the phone.
    - Once paired, Windows binds the Bluetooth HID Keyboard and Mouse drivers.
 
----
+## Building from Source
 
-## Building the Android APK
+### Android APK
 
 Prerequisites:
 - OpenJDK 17
@@ -375,4 +371,14 @@ Build the APK:
 Install to connected phone:
 ```bash
 ghid install-apk
+```
+
+### CLI Binary (`ghid`)
+
+Prerequisites:
+- Go 1.21+
+
+Build the binary:
+```bash
+go build -o ghid ./cmd/ghid
 ```
