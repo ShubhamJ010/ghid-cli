@@ -5,6 +5,18 @@ CMD="$1"
 shift || true
 
 case "$CMD" in
+    start)
+        echo "🚀 Starting GhostHID background service..."
+        adb shell am start-foreground-service -n com.poc.hiddebug/.HidService > /dev/null
+        sleep 1.5
+        adb shell cat /sdcard/Android/data/com.poc.hiddebug/files/status.json 2>/dev/null || true
+        ;;
+    stop)
+        echo "🛑 Stopping GhostHID background service and freeing resources..."
+        adb shell am broadcast -n com.poc.hiddebug/.HidCommandReceiver -a com.poc.hiddebug.ACTION_CMD --es cmd stop > /dev/null
+        adb shell am stopservice -n com.poc.hiddebug/.HidService > /dev/null
+        echo "Service stopped. Bluetooth HID freed."
+        ;;
     lock)
         echo "⚡ Sending Win + L lock command..."
         adb shell am broadcast -n com.poc.hiddebug/.HidCommandReceiver -a com.poc.hiddebug.ACTION_LOCK > /dev/null
@@ -54,7 +66,7 @@ case "$CMD" in
         adb shell cat /sdcard/Android/data/com.poc.hiddebug/files/status.json 2>/dev/null || echo "Status file not found"
         ;;
     *)
-        echo "Usage: $0 {lock|sleep|type <text>|combo <keys>|connect|disconnect|status}"
+        echo "Usage: $0 {start|stop|lock|sleep|type <text>|combo <keys>|connect|disconnect|status}"
         exit 1
         ;;
 esac

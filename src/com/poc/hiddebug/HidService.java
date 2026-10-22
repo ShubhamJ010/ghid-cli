@@ -454,7 +454,10 @@ public class HidService extends Service {
             String action = intent.getAction();
             String cmd = intent.getStringExtra("cmd");
 
-            if (ACTION_LOCK.equals(action) || "lock".equalsIgnoreCase(cmd)) {
+            if ("stop".equalsIgnoreCase(cmd)) {
+                stopServiceCompletely();
+                return START_NOT_STICKY;
+            } else if (ACTION_LOCK.equals(action) || "lock".equalsIgnoreCase(cmd)) {
                 sendWinL();
             } else if (ACTION_TYPE.equals(action) || "type".equalsIgnoreCase(cmd)) {
                 String text = intent.getStringExtra("text");
@@ -519,12 +522,36 @@ public class HidService extends Service {
         return mBinder;
     }
 
+    public void stopServiceCompletely() {
+        log("Stopping HidService and freeing Bluetooth resources...");
+        disconnectTarget();
+        if (mHidDevice != null) {
+            try {
+                mHidDevice.unregisterApp();
+            } catch (Exception ignored) {}
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE);
+        } else {
+            stopForeground(true);
+        }
+        stopSelf();
+    }
+
     @Override
     public void onDestroy() {
         super.onDestroy();
         sInstance = null;
-        if (mHidDevice != null && mAdapter != null) {
-            mAdapter.closeProfileProxy(BluetoothProfile.HID_DEVICE, mHidDevice);
+        if (mHidDevice != null) {
+            try {
+                mHidDevice.unregisterApp();
+            } catch (Exception ignored) {}
+            if (mAdapter != null) {
+                mAdapter.closeProfileProxy(BluetoothProfile.HID_DEVICE, mHidDevice);
+            }
+            mHidDevice = null;
         }
+        mConnectionState = BluetoothProfile.STATE_DISCONNECTED;
+        writeStatusFile();
     }
 }
