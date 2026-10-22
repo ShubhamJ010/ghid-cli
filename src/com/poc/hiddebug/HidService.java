@@ -11,29 +11,28 @@ import android.bluetooth.BluetoothHidDeviceAppSdpSettings;
 import android.bluetooth.BluetoothProfile;
 import android.content.Context;
 import android.content.Intent;
-import android.os.Binder;
 import android.os.Build;
-import android.os.Handler;
 import android.os.IBinder;
-import android.os.Looper;
 import android.util.Log;
 
 import java.io.File;
 import java.io.FileWriter;
 import java.lang.reflect.Method;
 import java.text.SimpleDateFormat;
-import java.util.ArrayList;
 import java.util.Date;
-import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+/**
+ * GhostHID Headless Transport Gateway
+ * Runs in background, binds BluetoothHidDevice, and handles raw HID commands via ADB IPC.
+ */
 public class HidService extends Service {
 
-    public static final String TAG = "HID_DEBUG";
-    private static final String CHANNEL_ID = "hid_service_channel";
+    public static final String TAG = "GHOST_HID";
+    private static final String CHANNEL_ID = "ghost_hid_gateway";
 
     public static final String ACTION_CMD = "com.poc.hiddebug.ACTION_CMD";
     public static final String ACTION_LOCK = "com.poc.hiddebug.ACTION_LOCK";
@@ -75,15 +74,6 @@ public class HidService extends Service {
         (byte) 0xC0                      // End Collection
     };
 
-    public interface StateListener {
-        void onLog(String log);
-        void onStateUpdated();
-    }
-
-    private static HidService sInstance;
-    private final IBinder mBinder = new LocalBinder();
-    private final List<StateListener> mListeners = new ArrayList<>();
-
     private BluetoothAdapter mAdapter;
     private BluetoothHidDevice mHidDevice;
     private BluetoothDevice mTargetDevice;
@@ -91,31 +81,23 @@ public class HidService extends Service {
     private int mConnectionState = BluetoothProfile.STATE_DISCONNECTED;
 
     private ExecutorService mExecutor;
-    private Handler mHandler;
     private SimpleDateFormat mTimeFormat;
-
-    public class LocalBinder extends Binder {
-        public HidService getService() {
-            return HidService.this;
-        }
-    }
-
-    public static HidService getInstance() {
-        return sInstance;
-    }
+    private File mLogFile;
 
     @Override
     public void onCreate() {
         super.onCreate();
-        sInstance = this;
         mExecutor = Executors.newSingleThreadExecutor();
-        mHandler = new Handler(Looper.getMainLooper());
-        mTimeFormat = new SimpleDateFormat("HH:mm:ss.SSS", Locale.US);
+        mTimeFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US);
+
+        try {
+            mLogFile = new File(getExternalFilesDir(null), "gateway.log");
+        } catch (Exception ignored) {}
 
         createNotificationChannel();
-        startForeground(1001, buildNotification("HID Service Running"));
+        startForeground(1001, buildNotification("GhostHID Gateway: Ready"));
 
-        log("HidService created.");
+        log("GhostHID Gateway Service started (Headless Mode).");
         initBluetooth();
     }
 
@@ -123,14 +105,12 @@ public class HidService extends Service {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel channel = new NotificationChannel(
                 CHANNEL_ID,
-                "HID Background Service",
+                "GhostHID Gateway",
                 NotificationManager.IMPORTANCE_LOW
             );
-            channel.setDescription("Maintains Bluetooth HID connection in the background");
+            channel.setDescription("Maintains headless Bluetooth HID bridge");
             NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-            if (nm != null) {
-                nm.createNotificationChannel(channel);
-            }
+            if (nm != null) nm.createNotificationChannel(channel);
         }
     }
 
@@ -142,7 +122,7 @@ public class HidService extends Service {
             builder = new Notification.Builder(this);
         }
         return builder
-            .setContentTitle("HID Debug Service")
+            .setContentTitle("GhostHID Gateway")
             .setContentText(text)
             .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
             .setOngoing(true)
@@ -156,25 +136,13 @@ public class HidService extends Service {
         }
     }
 
-    public void addListener(StateListener l) {
-        synchronized (mListeners) {
-            if (!mListeners.contains(l)) mListeners.add(l);
-        }
-    }
-
-    public void removeListener(StateListener l) {
-        synchronized (mListeners) {
-            mListeners.remove(l);
-        }
-    }
-
     private void initBluetooth() {
         mAdapter = BluetoothAdapter.getDefaultAdapter();
         if (mAdapter == null) {
-            log("ERROR: Bluetooth not supported!");
+            log("ERROR: Bluetooth adapter not available!");
             return;
         }
-        log("Bluetooth enabled: " + mAdapter.isEnabled());
+        log("Bluetooth enabled=" + mAdapter.isEnabled() + ", LocalName=" + mAdapter.getName());
         mAdapter.getProfileProxy(this, mProfileListener, BluetoothProfile.HID_DEVICE);
     }
 
@@ -185,7 +153,7 @@ public class HidService extends Service {
                 mHidDevice = (BluetoothHidDevice) proxy;
                 log("BluetoothHidDevice proxy connected.");
                 registerHidApp();
-                refreshDevices();
+                refreshDevices(null);
             }
         }
 
@@ -195,7 +163,7 @@ public class HidService extends Service {
                 mHidDevice = null;
                 mIsRegistered = false;
                 log("BluetoothHidDevice proxy disconnected.");
-                notifyStateChanged();
+                writeStatusFile();
             }
         }
     };
@@ -204,7 +172,7 @@ public class HidService extends Service {
         if (mHidDevice == null) return;
         BluetoothHidDeviceAppSdpSettings sdp = new BluetoothHidDeviceAppSdpSettings(
             "OnePlus HID Keyboard",
-            "Virtual HID Keyboard",
+            "Virtual HID Keyboard Gateway",
             "Android",
             BluetoothHidDevice.SUBCLASS1_KEYBOARD,
             HID_KEYBOARD_DESCRIPTOR
@@ -218,21 +186,21 @@ public class HidService extends Service {
         public void onAppStatusChanged(BluetoothDevice pluggedDevice, boolean registered) {
             mIsRegistered = registered;
             log("onAppStatusChanged: registered=" + registered);
-            notifyStateChanged();
+            writeStatusFile();
         }
 
         @Override
         public void onConnectionStateChanged(BluetoothDevice device, int state) {
             mConnectionState = state;
-            log("onConnectionStateChanged: [" + (device != null ? device.getName() : "null") + "] -> " + stateToString(state));
+            String name = (device != null) ? device.getName() : "Unknown";
+            log("onConnectionStateChanged: [" + name + "] -> " + stateToString(state));
             if (state == BluetoothProfile.STATE_CONNECTED) {
                 mTargetDevice = device;
-                updateNotification("Connected to " + device.getName());
+                updateNotification("Connected to " + name);
             } else {
-                updateNotification("Status: " + stateToString(state));
+                updateNotification("Gateway Status: " + stateToString(state));
             }
             writeStatusFile();
-            notifyStateChanged();
         }
 
         @Override
@@ -252,7 +220,7 @@ public class HidService extends Service {
         }
     };
 
-    public void refreshDevices() {
+    public void refreshDevices(String specificAddress) {
         if (mAdapter == null) return;
         try {
             Set<BluetoothDevice> paired = mAdapter.getBondedDevices();
@@ -260,9 +228,14 @@ public class HidService extends Service {
                 for (BluetoothDevice d : paired) {
                     String name = d.getName();
                     String addr = d.getAddress();
+                    if (specificAddress != null && specificAddress.equalsIgnoreCase(addr)) {
+                        mTargetDevice = d;
+                        log("Target explicitly selected: " + name + " [" + addr + "]");
+                        break;
+                    }
                     if (name != null && (name.startsWith("LP-") || name.contains("TZD") || addr.equalsIgnoreCase("38:FC:98:E8:E3:87"))) {
                         mTargetDevice = d;
-                        log("Target laptop selected: " + name + " [" + addr + "]");
+                        log("Target laptop matched: " + name + " [" + addr + "]");
                     }
                 }
             }
@@ -270,19 +243,18 @@ public class HidService extends Service {
             log("refreshDevices error: " + e.getMessage());
         }
         writeStatusFile();
-        notifyStateChanged();
     }
 
-    public void connectTarget() {
-        if (mHidDevice == null || mTargetDevice == null) {
-            refreshDevices();
+    public void connectTarget(String specificAddress) {
+        if (specificAddress != null || mTargetDevice == null) {
+            refreshDevices(specificAddress);
         }
         if (mHidDevice != null && mTargetDevice != null) {
-            log("Connecting to " + mTargetDevice.getName() + "...");
+            log("Connecting to " + mTargetDevice.getName() + " [" + mTargetDevice.getAddress() + "]...");
             boolean ok = mHidDevice.connect(mTargetDevice);
             log("connect() returned: " + ok);
         } else {
-            log("Cannot connect: HID proxy or target is null");
+            log("connect() failed: target device not found");
         }
     }
 
@@ -293,13 +265,24 @@ public class HidService extends Service {
         }
     }
 
+    public void sendRawReport(byte[] report) {
+        if (mHidDevice == null || mTargetDevice == null || report == null) {
+            log("Cannot send raw report: device not ready");
+            return;
+        }
+        mExecutor.execute(() -> {
+            boolean ok = mHidDevice.sendReport(mTargetDevice, 1, report);
+            log("sendRawReport(" + bytesToHex(report) + ") -> " + ok);
+        });
+    }
+
     public void sendWinL() {
         if (mHidDevice == null || mTargetDevice == null) {
             log("Cannot send Win+L: device not ready");
             return;
         }
         mExecutor.execute(() -> {
-            log(">>> Executing Win+L lock sequence...");
+            log(">>> Executing Win+L sequence...");
             byte[] down = new byte[] { (byte) 0x08, 0x00, (byte) 0x0F, 0, 0, 0, 0, 0 };
             byte[] up = new byte[8];
             boolean r1 = mHidDevice.sendReport(mTargetDevice, 1, down);
@@ -324,48 +307,29 @@ public class HidService extends Service {
     public void typeText(String text) {
         if (mHidDevice == null || mTargetDevice == null || text == null) return;
         mExecutor.execute(() -> {
-            log(">>> Typing text (" + text.length() + " chars): " + text);
+            log(">>> Typing string (" + text.length() + " chars)");
             for (int i = 0; i < text.length(); i++) {
                 char c = text.charAt(i);
                 byte modifier = 0;
                 byte code = 0;
 
-                if (c >= 'a' && c <= 'z') {
-                    code = (byte) (0x04 + (c - 'a'));
-                } else if (c >= 'A' && c <= 'Z') {
-                    modifier = 0x02; // Shift
-                    code = (byte) (0x04 + (c - 'A'));
-                } else if (c >= '1' && c <= '9') {
-                    code = (byte) (0x1E + (c - '1'));
-                } else if (c == '0') {
-                    code = 0x27;
-                } else if (c == ' ') {
-                    code = 0x2C;
-                } else if (c == '\n' || c == '\r') {
-                    code = 0x28; // Enter
-                } else if (c == '\t') {
-                    code = 0x2B; // Tab
-                } else if (c == '.') {
-                    code = 0x37;
-                } else if (c == ',') {
-                    code = 0x36;
-                } else if (c == '-') {
-                    code = 0x2D;
-                } else if (c == '_') {
-                    modifier = 0x02; code = 0x2D;
-                } else if (c == '!') {
-                    modifier = 0x02; code = 0x1E;
-                } else if (c == '@') {
-                    modifier = 0x02; code = 0x1F;
-                } else if (c == '#') {
-                    modifier = 0x02; code = 0x20;
-                } else if (c == '$') {
-                    modifier = 0x02; code = 0x21;
-                } else if (c == '%') {
-                    modifier = 0x02; code = 0x22;
-                } else if (c == ':') {
-                    modifier = 0x02; code = 0x33;
-                }
+                if (c >= 'a' && c <= 'z') code = (byte) (0x04 + (c - 'a'));
+                else if (c >= 'A' && c <= 'Z') { modifier = 0x02; code = (byte) (0x04 + (c - 'A')); }
+                else if (c >= '1' && c <= '9') code = (byte) (0x1E + (c - '1'));
+                else if (c == '0') code = 0x27;
+                else if (c == ' ') code = 0x2C;
+                else if (c == '\n' || c == '\r') code = 0x28;
+                else if (c == '\t') code = 0x2B;
+                else if (c == '.') code = 0x37;
+                else if (c == ',') code = 0x36;
+                else if (c == '-') code = 0x2D;
+                else if (c == '_') { modifier = 0x02; code = 0x2D; }
+                else if (c == '!') { modifier = 0x02; code = 0x1E; }
+                else if (c == '@') { modifier = 0x02; code = 0x1F; }
+                else if (c == '#') { modifier = 0x02; code = 0x20; }
+                else if (c == '$') { modifier = 0x02; code = 0x21; }
+                else if (c == '%') { modifier = 0x02; code = 0x22; }
+                else if (c == ':') { modifier = 0x02; code = 0x33; }
 
                 if (code != 0) {
                     byte[] down = new byte[] { modifier, 0, code, 0, 0, 0, 0, 0 };
@@ -376,7 +340,7 @@ public class HidService extends Service {
                     try { Thread.sleep(25); } catch (Exception ignored) {}
                 }
             }
-            log(">>> Finished typing.");
+            log(">>> Typing complete.");
         });
     }
 
@@ -417,7 +381,7 @@ public class HidService extends Service {
     }
 
     public void unpairTarget() {
-        if (mTargetDevice == null) refreshDevices();
+        if (mTargetDevice == null) refreshDevices(null);
         if (mTargetDevice != null) {
             try {
                 log("Unpairing " + mTargetDevice.getName() + "...");
@@ -426,7 +390,6 @@ public class HidService extends Service {
                 mTargetDevice = null;
                 mConnectionState = BluetoothProfile.STATE_DISCONNECTED;
                 writeStatusFile();
-                notifyStateChanged();
             } catch (Exception e) {
                 log("Unpair error: " + e.getMessage());
             }
@@ -442,7 +405,8 @@ public class HidService extends Service {
             fw.write("  \"connected\": " + (mConnectionState == BluetoothProfile.STATE_CONNECTED) + ",\n");
             fw.write("  \"state\": \"" + stateToString(mConnectionState) + "\",\n");
             fw.write("  \"target\": \"" + (mTargetDevice != null ? mTargetDevice.getName() : "none") + "\",\n");
-            fw.write("  \"address\": \"" + (mTargetDevice != null ? mTargetDevice.getAddress() : "none") + "\"\n");
+            fw.write("  \"address\": \"" + (mTargetDevice != null ? mTargetDevice.getAddress() : "none") + "\",\n");
+            fw.write("  \"updated\": \"" + mTimeFormat.format(new Date()) + "\"\n");
             fw.write("}\n");
             fw.close();
         } catch (Exception ignored) {}
@@ -460,13 +424,16 @@ public class HidService extends Service {
             } else if (ACTION_LOCK.equals(action) || "lock".equalsIgnoreCase(cmd)) {
                 sendWinL();
             } else if (ACTION_TYPE.equals(action) || "type".equalsIgnoreCase(cmd)) {
-                String text = intent.getStringExtra("text");
-                typeText(text);
+                typeText(intent.getStringExtra("text"));
             } else if ("combo".equalsIgnoreCase(cmd)) {
-                String keys = intent.getStringExtra("keys");
-                sendCombo(keys);
+                sendCombo(intent.getStringExtra("keys"));
+            } else if ("raw".equalsIgnoreCase(cmd)) {
+                String hex = intent.getStringExtra("hex");
+                if (hex != null && hex.length() == 16) {
+                    sendRawReport(hexToBytes(hex));
+                }
             } else if ("connect".equalsIgnoreCase(cmd)) {
-                connectTarget();
+                connectTarget(intent.getStringExtra("address"));
             } else if ("disconnect".equalsIgnoreCase(cmd)) {
                 disconnectTarget();
             } else if ("unpair".equalsIgnoreCase(cmd)) {
@@ -481,9 +448,19 @@ public class HidService extends Service {
         return START_STICKY;
     }
 
-    public boolean isRegistered() { return mIsRegistered; }
-    public int getConnectionState() { return mConnectionState; }
-    public BluetoothDevice getTargetDevice() { return mTargetDevice; }
+    public void stopServiceCompletely() {
+        log("Stopping GhostHID Gateway service and freeing Bluetooth resources...");
+        disconnectTarget();
+        if (mHidDevice != null) {
+            try { mHidDevice.unregisterApp(); } catch (Exception ignored) {}
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE);
+        } else {
+            stopForeground(true);
+        }
+        stopSelf();
+    }
 
     public String stateToString(int state) {
         switch (state) {
@@ -497,55 +474,41 @@ public class HidService extends Service {
 
     public void log(String msg) {
         final String line = "[" + mTimeFormat.format(new Date()) + "] " + msg;
-        Log.d(TAG, msg);
-        mHandler.post(() -> {
-            synchronized (mListeners) {
-                for (StateListener l : mListeners) {
-                    l.onLog(line);
-                }
-            }
-        });
+        Log.e(TAG, msg);
+        if (mLogFile != null) {
+            mExecutor.execute(() -> {
+                try (FileWriter fw = new FileWriter(mLogFile, true)) {
+                    fw.write(line + "\n");
+                } catch (Exception ignored) {}
+            });
+        }
     }
 
-    private void notifyStateChanged() {
-        mHandler.post(() -> {
-            synchronized (mListeners) {
-                for (StateListener l : mListeners) {
-                    l.onStateUpdated();
-                }
-            }
-        });
+    private static String bytesToHex(byte[] bytes) {
+        StringBuilder sb = new StringBuilder();
+        for (byte b : bytes) sb.append(String.format("%02x", b));
+        return sb.toString();
+    }
+
+    private static byte[] hexToBytes(String hex) {
+        byte[] b = new byte[hex.length() / 2];
+        for (int i = 0; i < b.length; i++) {
+            int index = i * 2;
+            b[i] = (byte) Integer.parseInt(hex.substring(index, index + 2), 16);
+        }
+        return b;
     }
 
     @Override
     public IBinder onBind(Intent intent) {
-        return mBinder;
-    }
-
-    public void stopServiceCompletely() {
-        log("Stopping HidService and freeing Bluetooth resources...");
-        disconnectTarget();
-        if (mHidDevice != null) {
-            try {
-                mHidDevice.unregisterApp();
-            } catch (Exception ignored) {}
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            stopForeground(STOP_FOREGROUND_REMOVE);
-        } else {
-            stopForeground(true);
-        }
-        stopSelf();
+        return null; // Headless service, no binding needed
     }
 
     @Override
     public void onDestroy() {
         super.onDestroy();
-        sInstance = null;
         if (mHidDevice != null) {
-            try {
-                mHidDevice.unregisterApp();
-            } catch (Exception ignored) {}
+            try { mHidDevice.unregisterApp(); } catch (Exception ignored) {}
             if (mAdapter != null) {
                 mAdapter.closeProfileProxy(BluetoothProfile.HID_DEVICE, mHidDevice);
             }
@@ -553,5 +516,6 @@ public class HidService extends Service {
         }
         mConnectionState = BluetoothProfile.STATE_DISCONNECTED;
         writeStatusFile();
+        log("GhostHID Gateway destroyed.");
     }
 }

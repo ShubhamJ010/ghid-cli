@@ -111,10 +111,31 @@ Send arbitrary modifiers and keycodes (`win`, `ctrl`, `alt`, `shift`, `del`, `es
 ./cli.sh combo "ctrl+shift+esc"
 ```
 
-### Connect / Disconnect
+### Connect / Disconnect / Unpair
 ```bash
 ./cli.sh connect
 ./cli.sh disconnect
+./cli.sh unpair
+```
+
+### Raw 8-Byte HID Reports
+Inject arbitrary hex HID reports directly:
+```bash
+# Example: Win + L
+./cli.sh raw 08000f0000000000
+```
+
+### Inspect Logs & Diagnostics
+GhostHID features dual logging to Logcat and disk (`gateway.log`):
+```bash
+# Dump last 30 log lines
+./cli.sh logs
+
+# Stream live logs from device in real-time
+./cli.sh tail
+
+# Read persistent log file from device storage
+./cli.sh filelog
 ```
 
 ---

@@ -16,19 +16,10 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!-- Pure Headless Gateway - No Launcher Activity or Icon -->
     <application
-        android:label="HID Debug PoC"
-        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
-
-        <activity
-            android:name=".MainActivity"
-            android:exported="true"
-            android:configChanges="orientation|screenSize">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
+        android:label="GhostHID Gateway"
+        android:hasCode="true">
 
         <service
             android:name=".HidService"

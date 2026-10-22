@@ -8,7 +8,7 @@ import android.util.Log;
 
 public class HidCommandReceiver extends BroadcastReceiver {
 
-    private static final String TAG = "HID_DEBUG";
+    private static final String TAG = "GHOST_HID";
 
     @Override
     public void onReceive(Context context, Intent intent) {
