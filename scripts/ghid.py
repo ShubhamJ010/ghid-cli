@@ -493,6 +493,10 @@ class AdbManager:
         )
 
     def send_sleep_sequence(self, delays: Optional[Dict[str, float]] = None) -> None:
+        self.send_combo("esc")
+        time.sleep(0.3)
+        self.send_combo("esc")
+        time.sleep(0.4)
         self.send_combo("win+x")
         time.sleep(0.6)
         self.send_combo("u")

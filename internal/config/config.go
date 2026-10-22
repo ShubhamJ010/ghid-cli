@@ -33,6 +33,7 @@ type Config struct {
 	DeviceSerial       string         `json:"device_serial,omitempty"`
 	Delays             Delays         `json:"delays"`
 	Devices            []TargetDevice `json:"devices"`
+	storePath          string         `json:"-"`
 }
 
 func DefaultConfig() Config {
@@ -60,6 +61,18 @@ func DefaultConfig() Config {
 	}
 }
 
+// Store encapsulates persistent configuration loading and saving.
+type Store struct {
+	Path string
+}
+
+func NewStore(path string) *Store {
+	if path == "" {
+		path = GetConfigPath()
+	}
+	return &Store{Path: path}
+}
+
 func GetConfigPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -68,16 +81,7 @@ func GetConfigPath() string {
 	return filepath.Join(home, ".config", "ghid", "config.json")
 }
 
-func LoadConfig() Config {
-	cfg := DefaultConfig()
-	path := GetConfigPath()
-
-	data, err := os.ReadFile(path)
-	if err == nil {
-		_ = json.Unmarshal(data, &cfg)
-	}
-
-	// Ensure default device exists and is selected
+func normalizeDevices(cfg *Config) {
 	if len(cfg.Devices) == 0 {
 		name := "LP-TZD-0X114650"
 		addr := "38:FC:98:E8:E3:87"
@@ -94,9 +98,7 @@ func LoadConfig() Config {
 			},
 		}
 		cfg.TargetAddress = addr
-		_ = SaveConfig(cfg)
 	} else {
-		// Ensure exactly one device is selected
 		hasSelected := false
 		for i := range cfg.Devices {
 			if cfg.Devices[i].Selected {
@@ -110,14 +112,24 @@ func LoadConfig() Config {
 			cfg.TargetAddress = cfg.Devices[0].Address
 		}
 	}
+}
 
+func (s *Store) Load() Config {
+	cfg := DefaultConfig()
+	cfg.storePath = s.Path
+
+	data, err := os.ReadFile(s.Path)
+	if err == nil {
+		_ = json.Unmarshal(data, &cfg)
+		cfg.storePath = s.Path
+	}
+
+	normalizeDevices(&cfg)
 	return cfg
 }
 
-func SaveConfig(cfg Config) error {
-	path := GetConfigPath()
-	dir := filepath.Dir(path)
-
+func (s *Store) Save(cfg Config) error {
+	dir := filepath.Dir(s.Path)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
@@ -127,7 +139,23 @@ func SaveConfig(cfg Config) error {
 		return err
 	}
 
-	return os.WriteFile(path, data, 0600)
+	return os.WriteFile(s.Path, data, 0600)
+}
+
+func LoadConfig() Config {
+	return NewStore("").Load()
+}
+
+func SaveConfig(cfg Config) error {
+	path := cfg.storePath
+	if path == "" {
+		path = GetConfigPath()
+	}
+	return NewStore(path).Save(cfg)
+}
+
+func (c *Config) SetStorePath(p string) {
+	c.storePath = p
 }
 
 func (c *Config) GetSelectedDevice() *TargetDevice {

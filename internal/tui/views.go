@@ -37,7 +37,7 @@ func (m Model) View() string {
 	case StateTextInput:
 		sb.WriteString(m.renderTextInput("⌨️ Virtual Keyboard: Type Text"))
 	case StateComboInput:
-		sb.WriteString(m.renderTextInput("🎹 Key Combination (e.g. win+d, ctrl+alt+del)"))
+		sb.WriteString(m.renderComboInput())
 	case StateRawInput:
 		sb.WriteString(m.renderTextInput("⚙️ Raw 8-Byte HID Report (16 Hex Characters)"))
 	case StateCredsMenu:
@@ -409,13 +409,23 @@ func (m Model) renderSleepCountdown() string {
 	bar := m.progress.ViewAs(percent)
 
 	content := fmt.Sprintf(
-		"🌙 %s\n\nWindows sleep sequence (Win+X ➔ u ➔ s) dispatched!\nTerminating gateway to prevent phone battery drain in:\n\n  %s %s\n\n%s",
+		"🌙 %s\n\nWindows sleep sequence (Esc ➔ Esc ➔ Win+X ➔ u ➔ s) dispatched!\nTerminating gateway to prevent phone battery drain in:\n\n  %s %s\n\n%s",
 		TitleStyle.Render("Windows Host Sleep"),
 		lipgloss.NewStyle().Bold(true).Foreground(ColorYellow).Render(fmt.Sprintf("%d SECONDS", m.sleepSeconds)),
 		m.spinner.View(),
 		bar,
 	)
 	return CardStyle.Width(54).Render(content)
+}
+
+func (m Model) renderComboInput() string {
+	content := fmt.Sprintf(
+		"%s\n\n%s\n\n%s",
+		TitleStyle.Render("🎹 Key Combination & Sequence Recorder"),
+		m.textInput.View(),
+		SubtitleStyle.Render("[Enter]: Transmit • Shortcuts (Ctrl+L, Alt+P, Esc) auto-record • Delays: -> (1.0s) or ->{1.5} • [Ctrl+D / Esc on empty]: Cancel"),
+	)
+	return FocusCardStyle.Width(72).Render(content)
 }
 
 func (m Model) renderTextInput(title string) string {

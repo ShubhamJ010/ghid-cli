@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -264,11 +265,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg != nil {
 			m.notice = fmt.Sprintf("Login failed: %v", msg)
 			m.isErrorNotice = true
-		} else {
-			m.notice = "✔ Login sequence successfully transmitted!"
-			m.isErrorNotice = false
+			m.state = StateMenu
+			return m, nil
 		}
-		m.state = StateMenu
+		m.quitting = true
+		return m, tea.Quit
 
 	case sleepTickMsg:
 		if m.state == StateSleepCountdown {
@@ -305,6 +306,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.state = StateDeviceRegisterGuide
 				return m, nil
 			}
+			if m.state == StateComboInput {
+				if strings.TrimSpace(m.textInput.Value()) == "" {
+					m.state = StateMenu
+					m.notice = ""
+					return m, nil
+				}
+				return m.updateComboInput(msg)
+			}
 			if m.state != StateMenu && m.state != StateInit && m.state != StateSleepCountdown {
 				m.state = StateMenu
 				m.notice = ""
@@ -315,8 +324,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch m.state {
 		case StateMenu:
 			return m.updateMenu(msg)
-		case StateTextInput, StateComboInput, StateRawInput:
+		case StateTextInput, StateRawInput:
 			return m.updateInput(msg)
+		case StateComboInput:
+			return m.updateComboInput(msg)
 		case StateLoginPrompt:
 			return m.updateLoginPrompt(msg)
 		case StateCredsMenu:
@@ -443,7 +454,7 @@ func (m Model) triggerAction(action string) (tea.Model, tea.Cmd) {
 
 	case "combo":
 		m.state = StateComboInput
-		m.textInput.Placeholder = "e.g. win+d, ctrl+alt+del, alt+tab"
+		m.textInput.Placeholder = "Press keys (Ctrl+L, Alt+P, Esc) or type -> (1.0s) / ->{1.5}"
 		m.textInput.SetValue("")
 		m.textInput.Focus()
 		return m, textinput.Blink
@@ -730,6 +741,94 @@ func (m Model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return actionDoneMsg{notice: successMsg, isError: false}
 		}
 	}
+	var cmd tea.Cmd
+	m.textInput, cmd = m.textInput.Update(msg)
+	return m, cmd
+}
+
+func appendComboKey(current string, keyName string) string {
+	current = strings.TrimSpace(current)
+	if current == "" {
+		return keyName
+	}
+	if strings.HasSuffix(current, "->") || strings.HasSuffix(current, "}") {
+		return current + " " + keyName
+	}
+	if strings.HasSuffix(current, "+") {
+		return current + keyName
+	}
+	return current + " -> " + keyName
+}
+
+func (m Model) updateComboInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	keyStr := msg.String()
+	switch keyStr {
+	case "enter":
+		val := strings.TrimSpace(m.textInput.Value())
+		if val == "" {
+			m.state = StateMenu
+			return m, nil
+		}
+		m.state = StateMenu
+		return m, func() tea.Msg {
+			err := m.manager.SendCombo(val)
+			if err != nil {
+				return actionDoneMsg{notice: fmt.Sprintf("Error: %v", err), isError: true}
+			}
+			return actionDoneMsg{notice: fmt.Sprintf("✔ Key combo sequence dispatched: %s", val), isError: false}
+		}
+
+	case "ctrl+d", "ctrl+q", "ctrl+g":
+		m.state = StateMenu
+		return m, nil
+
+	case "esc":
+		current := strings.TrimSpace(m.textInput.Value())
+		if current == "" {
+			m.state = StateMenu
+			return m, nil
+		}
+		newVal := appendComboKey(current, "esc")
+		m.textInput.SetValue(newVal)
+		m.textInput.SetCursor(len(newVal))
+		return m, nil
+
+	case "backspace":
+		var cmd tea.Cmd
+		m.textInput, cmd = m.textInput.Update(msg)
+		return m, cmd
+
+	case "left", "right", "home", "end":
+		var cmd tea.Cmd
+		m.textInput, cmd = m.textInput.Update(msg)
+		return m, cmd
+
+	case "tab":
+		newVal := appendComboKey(m.textInput.Value(), "tab")
+		m.textInput.SetValue(newVal)
+		m.textInput.SetCursor(len(newVal))
+		return m, nil
+	}
+
+	// Capture modifier key combinations: ctrl+..., alt+...
+	if strings.HasPrefix(keyStr, "ctrl+") || strings.HasPrefix(keyStr, "alt+") {
+		newVal := appendComboKey(m.textInput.Value(), keyStr)
+		m.textInput.SetValue(newVal)
+		m.textInput.SetCursor(len(newVal))
+		return m, nil
+	}
+
+	// Capture Function keys f1-f12
+	if strings.HasPrefix(keyStr, "f") && len(keyStr) >= 2 && len(keyStr) <= 3 {
+		if _, err := strconv.Atoi(keyStr[1:]); err == nil {
+			newVal := appendComboKey(m.textInput.Value(), keyStr)
+			m.textInput.SetValue(newVal)
+			m.textInput.SetCursor(len(newVal))
+			return m, nil
+		}
+	}
+
+	// Standard text editing for typing characters: "->", "->{1.5}", "super+l", etc.
 	var cmd tea.Cmd
 	m.textInput, cmd = m.textInput.Update(msg)
 	return m, cmd

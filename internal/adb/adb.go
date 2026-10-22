@@ -5,10 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/ghost-hid/ghid/internal/hid"
 )
 
 const (
@@ -22,9 +23,9 @@ const (
 )
 
 type Device struct {
-	Serial string
-	State  string
-	Model  string
+	Serial string `json:"serial"`
+	State  string `json:"state"`
+	Model  string `json:"model,omitempty"`
 }
 
 type GatewayStatus struct {
@@ -40,75 +41,65 @@ type Manager struct {
 	AdbPath string
 	Serial  string
 	Root    string
+	runner  Runner
 }
 
 func NewManager(serial string) (*Manager, error) {
-	adbPath, err := LocateAdb()
+	runner, err := NewExecRunner()
 	if err != nil {
 		return nil, err
 	}
 
 	root, _ := os.Getwd()
 	return &Manager{
-		AdbPath: adbPath,
+		AdbPath: runner.AdbPath(),
 		Serial:  serial,
 		Root:    root,
+		runner:  runner,
 	}, nil
 }
 
-func LocateAdb() (string, error) {
-	if env := os.Getenv("ADB_PATH"); env != "" {
-		if fi, err := os.Stat(env); err == nil && !fi.IsDir() {
-			return env, nil
-		}
+func NewManagerWithRunner(runner Runner, serial, root string) *Manager {
+	if root == "" {
+		root, _ = os.Getwd()
 	}
-
-	if path, err := exec.LookPath("adb"); err == nil {
-		return path, nil
+	return &Manager{
+		AdbPath: runner.AdbPath(),
+		Serial:  serial,
+		Root:    root,
+		runner:  runner,
 	}
-
-	home, _ := os.UserHomeDir()
-	commonPaths := []string{
-		"/opt/homebrew/bin/adb",
-		filepath.Join(home, "Library/Android/sdk/platform-tools/adb"),
-		"/usr/local/bin/adb",
-		"/usr/bin/adb",
-	}
-
-	for _, p := range commonPaths {
-		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
-			return p, nil
-		}
-	}
-
-	return "", errors.New("Android Debug Bridge ('adb') was not found in PATH or standard directories")
 }
 
 func (m *Manager) Run(args ...string) (string, error) {
-	var fullArgs []string
-	if m.Serial != "" {
-		fullArgs = append(fullArgs, "-s", m.Serial)
+	if m.runner == nil {
+		r, err := NewExecRunner()
+		if err != nil {
+			return "", err
+		}
+		m.runner = r
+		m.AdbPath = r.AdbPath()
 	}
-	fullArgs = append(fullArgs, args...)
-
-	cmd := exec.Command(m.AdbPath, fullArgs...)
-	out, err := cmd.CombinedOutput()
-	outputStr := strings.TrimSpace(string(out))
-	if err != nil {
-		return outputStr, fmt.Errorf("adb %s failed: %w (output: %s)", strings.Join(args, " "), err, outputStr)
-	}
-	return outputStr, nil
+	return m.runner.Run(m.Serial, args...)
 }
 
 func (m *Manager) GetDevices() ([]Device, error) {
-	cmd := exec.Command(m.AdbPath, "devices", "-l")
-	out, err := cmd.Output()
+	if m.runner == nil {
+		r, err := NewExecRunner()
+		if err != nil {
+			return nil, err
+		}
+		m.runner = r
+		m.AdbPath = r.AdbPath()
+	}
+
+	out, err := m.runner.Run("", "devices", "-l")
 	if err != nil {
 		return nil, err
 	}
 
 	var devices []Device
-	lines := strings.Split(string(out), "\n")
+	lines := strings.Split(out, "\n")
 	if len(lines) <= 1 {
 		return devices, nil
 	}
@@ -175,30 +166,28 @@ func (m *Manager) SelectDevice() (*Device, error) {
 }
 
 func (m *Manager) ConnectWireless(addr string) error {
-	cmd := exec.Command(m.AdbPath, "connect", addr)
-	out, err := cmd.CombinedOutput()
-	s := strings.ToLower(string(out))
+	out, err := m.runner.Run("", "connect", addr)
+	s := strings.ToLower(out)
 	if strings.Contains(s, "connected to") {
 		m.Serial = addr
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("%s (%w)", strings.TrimSpace(string(out)), err)
+		return fmt.Errorf("%s (%w)", strings.TrimSpace(out), err)
 	}
-	return fmt.Errorf("%s", strings.TrimSpace(string(out)))
+	return fmt.Errorf("%s", strings.TrimSpace(out))
 }
 
 func (m *Manager) PairWireless(addr, code string) error {
-	cmd := exec.Command(m.AdbPath, "pair", addr, code)
-	out, err := cmd.CombinedOutput()
-	s := strings.ToLower(string(out))
+	out, err := m.runner.Run("", "pair", addr, code)
+	s := strings.ToLower(out)
 	if strings.Contains(s, "successfully paired") {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("%s (%w)", strings.TrimSpace(string(out)), err)
+		return fmt.Errorf("%s (%w)", strings.TrimSpace(out), err)
 	}
-	return fmt.Errorf("%s", strings.TrimSpace(string(out)))
+	return fmt.Errorf("%s", strings.TrimSpace(out))
 }
 
 func (m *Manager) IsPackageInstalled() bool {
@@ -237,11 +226,14 @@ func (m *Manager) BuildApk() error {
 		buildScript = "build.sh"
 	}
 
-	cmd := exec.Command("bash", buildScript)
-	cmd.Dir = filepath.Dir(buildScript)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	if m.runner == nil {
+		r, err := NewExecRunner()
+		if err != nil {
+			return err
+		}
+		m.runner = r
+	}
+	return m.runner.RunCommand(filepath.Dir(buildScript), "bash", buildScript)
 }
 
 func (m *Manager) GetBluetoothState() bool {
@@ -328,8 +320,20 @@ func (m *Manager) SendLock() error {
 }
 
 func (m *Manager) SendCombo(keys string) error {
-	_, err := m.Run("shell", "am", "broadcast", "-n", ReceiverName, "-a", ActionCmd, "--es", "cmd", "combo", "--es", "keys", keys)
-	return err
+	steps, err := hid.ParseComboSequence(keys)
+	if err != nil {
+		return err
+	}
+	for _, step := range steps {
+		clean := hid.NormalizeComboForAndroid(step.Combo)
+		if _, err := m.Run("shell", "am", "broadcast", "-n", ReceiverName, "-a", ActionCmd, "--es", "cmd", "combo", "--es", "keys", clean); err != nil {
+			return err
+		}
+		if step.Delay > 0 {
+			time.Sleep(step.Delay)
+		}
+	}
+	return nil
 }
 
 func (m *Manager) TypeText(text string) error {
@@ -346,6 +350,10 @@ func (m *Manager) SendRaw(hexReport string) error {
 }
 
 func (m *Manager) SendSleepSequence() error {
+	_ = m.SendCombo("esc")
+	time.Sleep(300 * time.Millisecond)
+	_ = m.SendCombo("esc")
+	time.Sleep(400 * time.Millisecond)
 	_ = m.SendCombo("win+x")
 	time.Sleep(600 * time.Millisecond)
 	_ = m.SendCombo("u")

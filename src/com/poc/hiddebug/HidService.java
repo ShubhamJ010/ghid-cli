@@ -365,15 +365,32 @@ public class HidService extends Service {
 
             for (String p : parts) {
                 p = p.trim();
-                if (p.equals("win") || p.equals("gui") || p.equals("cmd")) modifier |= 0x08;
-                else if (p.equals("ctrl")) modifier |= 0x01;
-                else if (p.equals("alt")) modifier |= 0x04;
+                if (p.equals("win") || p.equals("gui") || p.equals("cmd") || p.equals("super") || p.equals("meta")) modifier |= 0x08;
+                else if (p.equals("ctrl") || p.equals("control")) modifier |= 0x01;
+                else if (p.equals("alt") || p.equals("opt") || p.equals("option")) modifier |= 0x04;
                 else if (p.equals("shift")) modifier |= 0x02;
                 else if (p.equals("del") || p.equals("delete")) key = 0x4C;
+                else if (p.equals("backspace")) key = 0x2A;
                 else if (p.equals("esc") || p.equals("escape")) key = 0x29;
                 else if (p.equals("enter") || p.equals("return")) key = 0x28;
                 else if (p.equals("tab")) key = 0x2B;
                 else if (p.equals("space")) key = 0x2C;
+                else if (p.equals("up")) key = 0x52;
+                else if (p.equals("down")) key = 0x51;
+                else if (p.equals("left")) key = 0x50;
+                else if (p.equals("right")) key = 0x4F;
+                else if (p.equals("home")) key = 0x4A;
+                else if (p.equals("end")) key = 0x4D;
+                else if (p.equals("pageup") || p.equals("pgup")) key = 0x4B;
+                else if (p.equals("pagedown") || p.equals("pgdn")) key = 0x4E;
+                else if (p.startsWith("f") && p.length() >= 2) {
+                    try {
+                        int fNum = Integer.parseInt(p.substring(1));
+                        if (fNum >= 1 && fNum <= 12) {
+                            key = (byte) (0x3A + (fNum - 1));
+                        }
+                    } catch (Exception ignored) {}
+                }
                 else if (p.length() == 1) {
                     char c = p.charAt(0);
                     if (c >= 'a' && c <= 'z') key = (byte) (0x04 + (c - 'a'));
