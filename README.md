@@ -21,6 +21,10 @@ flowchart LR
 
 - [System Architecture Specification](file:///Users/sj/Desktop/ws/ghost-hid/docs/architecture.md): Subsystem topology, Android foreground service lifecycle, dual-report HID descriptor bytecode, and security model.
 - [Execution and Lifecycle Flows](file:///Users/sj/Desktop/ws/ghost-hid/docs/flows.md): Sequence diagrams for automated login, combo execution, Bluetooth SDP handshakes, ACPI sleep teardown, and diagnostic health checks.
+- [Wire and Report Protocol Specification](file:///Users/sj/Desktop/ws/ghost-hid/docs/protocol-spec.md): Binary report payloads, L2CAP channels, USB HID scancode translation table, and ADB intent extras.
+- [Troubleshooting and Operational Runbook](file:///Users/sj/Desktop/ws/ghost-hid/docs/troubleshooting.md): Step-by-step diagnosis for ADB transport drops, Windows audio-vs-HID driver binding, Bluetooth state desync, and macOS Keychain in SSH.
+- [Automation and Agent Integration Guide](file:///Users/sj/Desktop/ws/ghost-hid/docs/agent-integration.md): Machine-readable `--json` schemas, exit code definitions, and integration recipes for Bash, Python, and Node.js.
+- [Standalone Android Toolchain (Zero Gradle)](file:///Users/sj/Desktop/ws/ghost-hid/docs/build-and-toolchain.md): Technical breakdown of the 1.8-second APK compilation pipeline using `aapt2`, `javac`, `d8`, `zipalign`, and `apksigner`.
 - [Architecture Decision Records](file:///Users/sj/Desktop/ws/ghost-hid/docs/decisions/):
   - [ADR-001: Headless Android Service with BroadcastReceiver IPC over ADB](file:///Users/sj/Desktop/ws/ghost-hid/docs/decisions/ADR-001-headless-android-service-adb-ipc.md)
   - [ADR-002: Dual-Report HID Descriptor for Keyboard and Mouse](file:///Users/sj/Desktop/ws/ghost-hid/docs/decisions/ADR-002-dual-report-descriptor-for-keyboard-and-mouse.md)
