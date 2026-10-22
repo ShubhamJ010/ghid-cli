@@ -242,6 +242,17 @@ public class HidService extends Service {
         } catch (Exception e) {
             log("refreshDevices error: " + e.getMessage());
         }
+        if (mTargetDevice == null && specificAddress != null && !specificAddress.isEmpty() && !"none".equalsIgnoreCase(specificAddress)) {
+            try {
+                BluetoothDevice dev = mAdapter.getRemoteDevice(specificAddress);
+                if (dev != null) {
+                    log("Target not in bonded devices. Requesting createBond() with " + specificAddress + "...");
+                    dev.createBond();
+                }
+            } catch (Exception e) {
+                log("createBond error: " + e.getMessage());
+            }
+        }
         writeStatusFile();
     }
 
@@ -380,19 +391,26 @@ public class HidService extends Service {
         });
     }
 
-    public void unpairTarget() {
-        if (mTargetDevice == null) refreshDevices(null);
-        if (mTargetDevice != null) {
-            try {
-                log("Unpairing " + mTargetDevice.getName() + "...");
-                Method m = mTargetDevice.getClass().getMethod("removeBond");
-                m.invoke(mTargetDevice);
+    public void unpairTarget(String targetAddr) {
+        if (mAdapter == null) return;
+        try {
+            Set<BluetoothDevice> paired = mAdapter.getBondedDevices();
+            if (paired != null) {
+                for (BluetoothDevice d : paired) {
+                    if (targetAddr == null || targetAddr.isEmpty() || d.getAddress().equalsIgnoreCase(targetAddr)) {
+                        log("Unpairing " + d.getName() + " [" + d.getAddress() + "]...");
+                        Method m = d.getClass().getMethod("removeBond");
+                        m.invoke(d);
+                    }
+                }
+            }
+            if (mTargetDevice != null && (targetAddr == null || targetAddr.isEmpty() || mTargetDevice.getAddress().equalsIgnoreCase(targetAddr))) {
                 mTargetDevice = null;
                 mConnectionState = BluetoothProfile.STATE_DISCONNECTED;
                 writeStatusFile();
-            } catch (Exception e) {
-                log("Unpair error: " + e.getMessage());
             }
+        } catch (Exception e) {
+            log("Unpair error: " + e.getMessage());
         }
     }
 
@@ -437,7 +455,7 @@ public class HidService extends Service {
             } else if ("disconnect".equalsIgnoreCase(cmd)) {
                 disconnectTarget();
             } else if ("unpair".equalsIgnoreCase(cmd)) {
-                unpairTarget();
+                unpairTarget(intent.getStringExtra("address"));
             } else if ("register".equalsIgnoreCase(cmd)) {
                 registerHidApp();
             } else if ("status".equalsIgnoreCase(cmd)) {

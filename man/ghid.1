@@ -1,0 +1,338 @@
+.TH GHID 1 "2026-10-22" "GhostHID 1.0.0" "User Commands"
+.SH NAME
+ghid \- Headless Android Bluetooth HID Keyboard Controller & Automation Gateway
+.SH SYNOPSIS
+.B ghid
+[\fB\-\-json\fR] [\fB\-s\fR \fIserial\fR] [\fIcommand\fR] [\fIarguments...\fR]
+.SH DESCRIPTION
+.B ghid
+is the command-line interface for the GhostHID platform. It converts
+a rooted or standard Android phone connected via USB or Wireless ADB
+into a fully programmatic, headless Bluetooth HID (Human Interface
+Device) keyboard for a target Windows laptop or PC.
+.PP
+Unlike software-based remote-control agents, GhostHID operates at the
+Bluetooth hardware host controller layer (Bluetooth HID Device Profile
+/ SDP). The target computer recognizes the phone as a physical,
+driverless peripheral keyboard.
+.PP
+When invoked without arguments in an interactive terminal,
+.B ghid
+launches an interactive console that monitors device status, connects
+to the target machine, and exposes actions for automated login, screen
+locking, system sleep, typing, and diagnostic health checks.
+.PP
+For AI agents and automated scripts, all commands can be invoked
+non-interactively and support the
+.B \-\-json
+flag for structured, machine-readable output.
+
+.SH HARDWARE & BLUETOOTH BEHAVIOR NOTE
+.B Wake-on-Bluetooth limitation:
+When the target Windows laptop is in ACPI sleep (Modern Standby / S3),
+the host's Bluetooth controller is unpowered and cannot receive
+Bluetooth packets. The target laptop must be manually awakened
+(e.g. tapping the physical power button or a key on the laptop's
+built-in keyboard).
+.PP
+Once the laptop is awake, running
+.B ghid
+will automatically connect the phone's HID profile over Bluetooth
+L2CAP channels within 1\(en2 seconds.
+
+.SH INTERACTIVE WORKFLOW
+When launched interactively:
+.IP 1. 4
+.B ADB & Device Verification:
+Detects connected Android devices. If no device is detected, presents
+an interactive recovery menu offering to connect to configured
+Wireless ADB endpoints, scan for USB devices, or pair a new device
+using an Android pairing code.
+.IP 2. 4
+.B APK Validation:
+Checks if \fIcom.poc.hiddebug\fR is installed on the device. If missing,
+prompts to install the pre-compiled APK or build it directly from
+source via \fIbuild.sh\fR.
+.IP 3. 4
+.B Bluetooth HID Gateway:
+Ensures the phone's Bluetooth radio is enabled, starts the foreground
+Android service, and negotiates SDP registration.
+.IP 4. 4
+.B Target Link:
+Connects to the paired target laptop Bluetooth address.
+.IP 5. 4
+.B Action Menu:
+Provides numbered actions:
+.RS 8
+.IP \(bu 2
+\fBlogin\fR: Authenticates with Windows using cached macOS Keychain credentials.
+.IP \(bu 2
+\fBlock\fR: Sends instant Win+L keystroke sequence.
+.IP \(bu 2
+\fBsleep\fR: Dispatches Win+X \(-> u \(-> s sleep sequence, begins a countdown,
+disconnects Bluetooth, and terminates background phone services.
+.IP \(bu 2
+\fBtype\fR: Prompts for arbitrary text and injects it character-by-character.
+.IP \(bu 2
+\fBcombo\fR: Sends shortcuts (e.g. \fIctrl+alt+del\fR, \fIwin+d\fR, \fIalt+tab\fR).
+.IP \(bu 2
+\fBraw\fR: Transmits raw 8-byte HID reports.
+.IP \(bu 2
+\fBcreds\fR: Inspects or updates cached credentials in macOS Keychain.
+.IP \(bu 2
+\fBreconnect\fR: Re-establishes dropped Bluetooth connection.
+.IP \(bu 2
+\fBexit\fR: Disconnects target and terminates phone foreground service.
+.RE
+
+.SH COMMANDS
+.TP
+.B devices \fR[\fBlist\fR | \fBadd\fR | \fBselect\fR | \fBdelete\fR]
+Manage registered target Bluetooth devices (Windows PCs or Apple Macs).
+.RS
+.TP
+\fBlist\fR [\fB\-\-json\fR]
+List all registered devices with active indicator and platform badge.
+.TP
+\fBadd\fR \fB\-\-name\fR \fIname\fR \fB\-\-addr\fR \fImac\fR [\fB\-\-os\fR \fIwindows|macos\fR] [\fB\-\-select\fR]
+Register a new device into the config and optionally activate it immediately.
+.TP
+\fBselect\fR \fItarget\fR
+Switch the active target device by ID, name, or MAC address,
+and initiate connection.
+.TP
+\fBdelete\fR \fItarget\fR [\fB\-f\fR]
+Unregister a device from configuration and unpair Bluetooth bonding on phone.
+.RE
+.TP
+.B interactive \fR(alias: \fBi\fR)
+Launch interactive terminal user interface (default in a TTY).
+.TP
+.B status \fR[\fB\-\-json\fR]
+Display current Android gateway and Bluetooth connection status.
+Exits with 0 if connected to target, 1 otherwise.
+.TP
+.B start
+Start Android foreground service (\fIHidService\fR) and register
+SDP profile.
+.TP
+.B stop
+Disconnect Bluetooth and stop the Android foreground service.
+.TP
+.B restart
+Restart the Android foreground service.
+.TP
+.B connect \fR[\fIaddress\fR]
+Initiate Bluetooth HID connection to target laptop. If \fIaddress\fR is omitted,
+uses the saved address in configuration.
+.TP
+.B disconnect
+Disconnect active Bluetooth HID session.
+.TP
+.B unpair
+Remove Bluetooth pairing bond with target laptop from phone.
+.TP
+.B login \fR[\fB\-u\fR \fIusername\fR] [\fB\-p\fR \fIpassword\fR] [\fB\-\-save\fR] [\fB\-f\fR]
+Execute automated Windows login sequence:
+.RS
+1. Send Ctrl+Alt+Delete to wake lock screen
+.br
+2. Send Escape to clear lock screen overlay
+.br
+3. Type Username
+.br
+4. Send Tab key
+.br
+5. Type Password
+.br
+6. Send Enter key
+.RE
+If credentials are not provided via arguments,
+.B ghid
+checks the macOS Keychain for stored credentials. In interactive mode,
+it will prompt for missing values and offer to cache them.
+.TP
+.B lock
+Instantly send Windows lock shortcut (\fIWin + L\fR).
+.TP
+.B sleep \fR[\fB\-\-countdown\fR \fIsecs\fR] [\fB\-\-no-exit\fR]
+Dispatches Windows sleep sequence (\fIWin+X\fR \(-> \fIu\fR \(-> \fIs\fR).
+Begins countdown timer (default: 5 seconds), then cleanly disconnects
+Bluetooth and stops Android gateway service so that zero background
+battery drain occurs.
+.TP
+.B type \fItext...\fR
+Type arbitrary string arguments through virtual keyboard.
+.TP
+.B combo \fIkeys\fR
+Send key combination. Supported keys include: \fIctrl\fR, \fIalt\fR,
+\fIshift\fR, \fIwin\fR, \fIdel\fR, \fIenter\fR, \fIesc\fR, \fItab\fR,
+\fIspace\fR, \fIup\fR, \fIdown\fR, \fIleft\fR, \fIright\fR, and
+alphanumerics \fIa\fR\(en\fIz\fR, \fI0\fR\(en\fI9\fR.
+.TP
+.B raw \fIhex16\fR
+Send raw 8-byte (16 hex character) USB HID keyboard report.
+Byte 0 is modifier bitmap, Byte 1 is reserved (0x00), Bytes 2\(en7
+are keycode array.
+.TP
+.B creds \fR{\fBstatus\fR|\fBset\fR|\fBclear\fR} [\fB\-u\fR \fIuser\fR] [\fB\-p\fR \fIpass\fR]
+Manage stored login credentials inside secure macOS Keychain
+(service: \fIghost-hid\fR).
+.TP
+.B doctor \fR[\fB\-\-json\fR]
+Run comprehensive diagnostic sweep checking ADB availability, device
+connection, package installation, phone Bluetooth state, SDP profile
+registration, target laptop connectivity, and macOS Keychain accessibility.
+.TP
+.B install-apk \fR[\fB\-\-path\fR \fIapk\fR] [\fB\-\-build\fR]
+Install or update GhostHID application APK onto target Android device.
+.TP
+.B build
+Compile Android APK from source using standalone toolchain in \fIbuild.sh\fR.
+.TP
+.B logs \fR[\fB\-n\fR \fIlines\fR]
+Dump most recent log entries filtered for GhostHID from device \fIlogcat\fR.
+.TP
+.B tail
+Stream real-time GhostHID logs from phone.
+.TP
+.B filelog
+Display persistent event log written to
+\fI/sdcard/Android/data/com.poc.hiddebug/files/gateway.log\fR on phone.
+.TP
+.B install-bin \fR[\fB\-\-dir\fR \fIpath\fR]
+Symlink \fBghid\fR into \fI~/.local/bin\fR and install man page into
+\fI~/.local/share/man/man1\fR.
+.TP
+.B uninstall-bin
+Remove installed binary symlink and man page.
+.TP
+.B man
+Display this manual page using system manual viewer.
+
+.SH OPTIONS
+.TP
+.B \-h\fR, \fB\-\-help\fR
+Show help message and exit.
+.TP
+.B \-v\fR, \fB\-\-version\fR
+Show program version and exit.
+.TP
+.B \-s \fIserial\fR, \fB\-\-serial \fIserial\fR
+Specify serial number or IP:PORT of Android device to target.
+.TP
+.B \-\-json
+Emit all output formatted as structured JSON for automation and
+AI agent parsing.
+
+.SH EXIT STATUS
+.TP
+.B 0
+Success (or status is connected).
+.TP
+.B 1
+General error, target disconnected, or diagnostic issue identified.
+.TP
+.B 2
+ADB not found in system PATH or standard Android SDK directories.
+
+.SH FILES & ENVIRONMENT
+.TP
+.I ~/.config/ghid/config.json
+Configuration file holding default target Bluetooth MAC address,
+wireless ADB IP, and timing parameters. Permissions are locked to 0600.
+.TP
+.I ~/.local/bin/ghid
+Default installation symlink path.
+.TP
+.I ~/.local/share/man/man1/ghid.1
+Default installed manual page location.
+.TP
+.B ANDROID_SERIAL
+Environment variable specifying default Android device serial.
+.TP
+.B ADB_PATH
+Environment variable pointing to custom \fIadb\fR binary location.
+.TP
+.B NO_COLOR
+When set, disables ANSI color output.
+
+.SH EXAMPLES
+.IP \(bu 2
+Start interactive session:
+.RS 6
+.B ghid
+.RE
+.IP \(bu 2
+Check gateway status in JSON format (AI agent mode):
+.RS 6
+.B ghid status --json
+.RE
+.IP \(bu 2
+Run comprehensive system health check:
+.RS 6
+.B ghid doctor --json
+.RE
+.IP \(bu 2
+Unlock Windows laptop using cached Keychain credentials:
+.RS 6
+.B ghid login
+.RE
+.IP \(bu 2
+Unlock Windows laptop specifying explicit username and password:
+.RS 6
+.B ghid login -u Administrator -p SecretPass123
+.RE
+.IP \(bu 2
+Lock Windows screen immediately:
+.RS 6
+.B ghid lock
+.RE
+.IP \(bu 2
+Put Windows laptop to sleep and cleanly exit gateway:
+.RS 6
+.B ghid sleep --countdown 5
+.RE
+.IP \(bu 2
+Type arbitrary text:
+.RS 6
+.B ghid type "Hello, Windows!"
+.RE
+.IP \(bu 2
+Send shortcut combination:
+.RS 6
+.B ghid combo "win+r"
+.RE
+.IP \(bu 2
+Send raw HID keyboard report:
+.RS 6
+.B ghid raw 08000f0000000000
+.RE
+.IP \(bu 2
+Store Windows credentials in macOS Keychain:
+.RS 6
+.B ghid creds set -u Administrator -p SecretPass123
+.RE
+.IP \(bu 2
+Install ghid executable symlink and man page:
+.RS 6
+.B ghid install-bin
+.RE
+
+.SH TROUBLESHOOTING & RECOVERY
+.TP
+.B Target laptop asleep and will not connect:
+Wake-on-Bluetooth is not supported when target laptop is in low-power
+sleep states. Tap physical keyboard or power button on laptop,
+then run \fBghid\fR or select \fB[8] reconnect\fR.
+.TP
+.B No device connected:
+Ensure phone is connected via USB with USB debugging enabled, or
+connected over Wi-Fi using \fBadb connect <ip>:<port>\fR.
+.TP
+.B APK missing:
+Run \fBghid build\fR followed by \fBghid install-apk\fR.
+
+.SH SEE ALSO
+.BR adb (1),
+.BR security (1)

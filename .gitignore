@@ -18,3 +18,10 @@ debug.keystore
 # User credentials / private scripts
 login_seq.sh
 credentials.env
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Compiled Go binary
+/ghid
