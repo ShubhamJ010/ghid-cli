@@ -1,0 +1,20 @@
+# Build outputs
+build/
+bin/
+gen/
+*.apk
+*.zip
+
+# Signing keys
+debug.keystore
+*.jks
+*.keystore
+
+# Logs & temp files
+*.log
+*.tmp
+.DS_Store
+
+# User credentials / private scripts
+login_seq.sh
+credentials.env
