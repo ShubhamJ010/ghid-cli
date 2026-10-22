@@ -1,31 +1,39 @@
-# GhostHID 👻⌨️
+# GhostHID
 
-> Headless Android Bluetooth HID Keyboard Controller & Automation Gateway.
+Headless Android Bluetooth HID controller and automation gateway.
 
-GhostHID converts an Android smartphone into a hardware-recognized Bluetooth Human Interface Device (HID) keyboard and mouse capable of injecting keystrokes, shortcuts, pointer gestures, and automated authentication sequences into any paired Windows, macOS, or Linux host.
+GhostHID turns an Android phone into a physical Bluetooth Human Interface Device (HID) composite peripheral. It injects keyboard keystrokes, pointer gestures, text strings, and automated login sequences into any paired Windows, macOS, or Linux computer.
 
-It runs as a background Android Foreground Service controlled locally or remotely via ADB shell commands and the unified **`ghid`** CLI tool.
+The phone runs a background Android Foreground Service controlled locally or over Wi-Fi via ADB commands and the `ghid` command-line utility.
 
----
+```mermaid
+flowchart LR
+    Host["Host Machine (macOS / Linux)<br/><code>ghid</code> CLI / Automation Scripts"] -- ADB USB or Wi-Fi --> Phone["Android Phone (API 28+)<br/>Headless Foreground Service"]
+    Phone -- Bluetooth Classic HID<br/>(L2CAP PSM 0x11 / 0x13) --> Target["Target Computer<br/>(Windows / macOS / Linux)"]
 
-## What's New in Alpha (`ghid` CLI)
-
-The project now includes **`ghid`**, a native Go-powered CLI built with Charm (Bubble Tea & Lip Gloss) and interactive control console:
-- **Interactive TUI Session:** Run `ghid` to automatically start the phone service, verify SDP profile registration, connect Bluetooth to your laptop, and manage login, screen lock, sleep countdowns, typing, and shortcuts.
-- **Combo Studio:** Run `ghid combo` for one-screen create / send / delete of named Windows keyboard and mouse combos, with an empty-state list, a SEND button, and delete confirmation.
-- **Secure macOS Keychain Integration:** Windows credentials can be cached in the macOS Keychain (`ghost-hid` service) so you never re-type long passwords.
-- **Automated Exception Handling & Recovery:** Detects missing ADB, disconnected devices, unauthorized debugging, disabled Bluetooth, or missing APKs, with built-in interactive prompts to pair/connect over Wi-Fi or compile/install the APK.
-- **First-Class AI Agent & Scripting Support:** Every command supports `--json` flags, structured exit codes, and non-interactive arguments (`ghid status --json`, `ghid doctor --json`, `ghid login -u ... -p ...`).
-- **Full UNIX Man Page & System Symlink:** Run `ghid install-bin` to link `~/.local/bin/ghid` and install `man ghid`.
+    classDef node fill:#F4F6F7,stroke:#34495E,stroke-width:2px,color:#1C2833
+    class Host,Phone,Target node
+```
 
 ---
 
-## Quick Installation
+## Documentation Index
 
-GhostHID's CLI is ready to be linked into your `$PATH` (e.g. `~/.local/bin`, which is already loaded in `~/.zshrc`):
+- [System Architecture Specification](file:///Users/sj/Desktop/ws/ghost-hid/docs/architecture.md): Subsystem topology, Android foreground service lifecycle, dual-report HID descriptor bytecode, and security model.
+- [Execution and Lifecycle Flows](file:///Users/sj/Desktop/ws/ghost-hid/docs/flows.md): Sequence diagrams for automated login, combo execution, Bluetooth SDP handshakes, ACPI sleep teardown, and diagnostic health checks.
+- [Architecture Decision Records](file:///Users/sj/Desktop/ws/ghost-hid/docs/decisions/):
+  - [ADR-001: Headless Android Service with BroadcastReceiver IPC over ADB](file:///Users/sj/Desktop/ws/ghost-hid/docs/decisions/ADR-001-headless-android-service-adb-ipc.md)
+  - [ADR-002: Dual-Report HID Descriptor for Keyboard and Mouse](file:///Users/sj/Desktop/ws/ghost-hid/docs/decisions/ADR-002-dual-report-descriptor-for-keyboard-and-mouse.md)
+  - [ADR-003: Charm TUI with Structured JSON API and Native Credential Vault](file:///Users/sj/Desktop/ws/ghost-hid/docs/decisions/ADR-003-charm-tui-with-json-agent-api-and-keychain-vault.md)
+
+---
+
+## Quick Start
+
+### 1. Install the CLI
+Link `ghid` into your path (`~/.local/bin`) and register the UNIX manual page:
 
 ```bash
-# From within the repository
 ./ghid install-bin
 ```
 
@@ -35,46 +43,63 @@ which ghid
 # /Users/sj/.local/bin/ghid
 
 man ghid
-# or: ghid man
 ```
 
-To remove the symlink and man page:
+To remove the symlink and man page later:
 ```bash
 ghid uninstall-bin
 ```
 
+### 2. Connect Your Phone via ADB
+Enable Developer Options and USB Debugging on your Android phone. Plug it in via USB or connect over Wi-Fi:
+
+```bash
+# Connect over Wi-Fi (if wireless debugging is enabled on phone)
+adb connect 192.168.1.80:41839
+```
+
+### 3. Build and Install the Phone APK
+The build script uses Android command-line tools directly (`aapt2`, `javac`, `d8`, `zipalign`, `apksigner`) with zero Gradle overhead:
+
+```bash
+./build.sh
+ghid install-apk
+```
+
+### 4. Pair Phone to Target Computer
+Pair the phone and target computer over Bluetooth before first use. See [Bluetooth Pairing Setup](#bluetooth-pairing-setup) for the required Windows settings.
+
 ---
 
-## Hardware & Power State Note (Wake-on-Bluetooth)
+## Hardware and Power Note (Wake-on-Bluetooth)
 
-> [!NOTE]
-> **Wake-on-Bluetooth behavior during ACPI Sleep:**
-> When the target Windows laptop is in ACPI sleep (Modern Standby / S3), the host's internal Bluetooth controller is completely unpowered and cannot process incoming Bluetooth packets.
->
-> **Standard Workflow:**
-> 1. Manually wake the laptop (tap the laptop power button or physical key).
-> 2. Run `ghid`.
-> 3. The phone's Bluetooth HID gateway establishes the connection within 1–2 seconds.
-> 4. Select **`[1] login`** to unlock Windows instantly.
+During ACPI sleep states (Modern Standby, S3, or S4 hibernating), internal Bluetooth controllers on most PC laptops are powered down and cannot receive incoming Bluetooth packets.
+
+Standard operating procedure:
+1. Tap any physical key or press the power button on the target laptop to power on the Bluetooth controller.
+2. Run `ghid`.
+3. The phone connects to the laptop over Bluetooth within two seconds.
+4. Select `[1] login` or run `ghid login` to unlock the computer.
 
 ---
 
-## Interactive Mode
+## Interactive Console
 
-Simply run `ghid` from any terminal:
+Running `ghid` without arguments opens the full-screen terminal console:
 
 ```bash
 ghid
 ```
 
-### Startup & Exception Handling Loop
-1. **Device Check:** Scans USB and Wireless ADB (`192.168.1.80:41839`). If no device is detected or if debugging is unauthorized, an interactive recovery menu lets you reconnect, specify a custom IP:PORT, or enter a 6-digit wireless pairing code.
-2. **APK Check:** Checks if `com.poc.hiddebug` is installed. If missing, it offers to install the pre-built APK or build it directly from source via `build.sh`.
-3. **Bluetooth Radio Check:** If phone Bluetooth is disabled, prompts to turn it on automatically via Android settings.
-4. **Gateway & SDP:** Starts the Android foreground service and waits for SDP registration.
-5. **Auto-Connect:** Initiates Bluetooth connection with your paired laptop.
+### Startup Diagnostics
+On startup, `ghid` checks the environment:
+1. Checks for connected USB or wireless ADB devices. If disconnected, an interactive menu allows entering custom IP addresses, ports, or pairing codes.
+2. Checks whether package `com.poc.hiddebug` is installed. Offers to install pre-built APK or compile from source.
+3. Checks whether phone Bluetooth is enabled.
+4. Starts the Android foreground service and waits for SDP profile registration.
+5. Connects Bluetooth to the active target computer.
 
-### Interactive Menu
+### Main Menu Interface
 ```text
 ┌────────────────────────────────────────────────────────┐
   Phone Device:    KB2001 (192.168.1.80:41839)
@@ -96,70 +121,31 @@ Actions:
   [0] exit       - Disconnect Bluetooth & terminate phone service
 ```
 
-* **`login`**: Prompts for credentials if none are cached, securely stores them in macOS Keychain upon request, wakes the lock screen (`Ctrl+Alt+Del` $\rightarrow$ `Esc`), and injects Username $\rightarrow$ `Tab` $\rightarrow$ Password $\rightarrow$ `Enter`.
-* **`lock`**: Immediately fires `Win + L`.
-* **`sleep`**: Sends Windows sleep sequence (`Win+X` $\rightarrow$ `u` $\rightarrow$ `s`), displays a 5-second countdown, cleanly disconnects Bluetooth, and terminates the Android foreground service so zero battery is drained.
-* **`exit`**: Disconnects and terminates the background service cleanly.
+- `login`: Wakes screen (`Ctrl+Alt+Del` then `Esc`), types username and password from the Keychain vault, and presses `Enter`.
+- `lock`: Dispatches `Win + L` immediately.
+- `sleep`: Dispatches Windows sleep sequence (`Win + X`, then `u`, then `s`), counts down 5 seconds, disconnects Bluetooth, and terminates the Android foreground service.
+- `type`: Sends raw text strings as sequence of keystrokes.
+- `combo`: Opens the interactive Combo Studio.
+- `raw`: Sends explicit 8-byte raw hex reports directly to the HID driver.
+- `devices`: Manages target device list and active selection.
+- `creds`: Displays or updates credentials stored in the macOS Keychain.
+- `doctor`: Runs full diagnostic checks on ADB, APK, Bluetooth, and Keychain.
+- `exit`: Disconnects Bluetooth and terminates phone service to conserve battery.
 
 ---
 
-## Non-Interactive & AI Agent Usage
+## Command-Line Usage and Automation API
 
-All commands support direct execution with `--json` for scripts and AI agents.
-In JSON mode combos never prompt: `delete` proceeds without confirmation and
-errors are returned as `{"status":"error","error":"..."}` with exit code `1`.
+All commands support `--json` for scripts, CI jobs, and AI agents. In JSON mode, prompts are disabled, destructive actions like delete proceed without confirmation, and errors return exit code 1 with JSON error bodies.
 
-### AI Agents: Create Combos Without a TUI
-The studio is optional — agents drive the same library through flags and JSON.
-Discover the grammar instead of hard-coding it:
+### System Diagnostics (`doctor`)
+Runs a comprehensive inspection across ADB, Android package status, Bluetooth state, SDP registration, laptop connection, and Keychain storage:
 
-```bash
-# 1. Discover accepted Windows keys, mouse gestures and the text syntax
-ghid combo schema --json
-
-# 2. Validate before writing (exit 0 valid, 1 invalid)
-ghid combo validate 'win+s ->{0.7} type:rustdesk ->{0.4} enter' --json
-# {"valid":true,"keys":"...","steps":[{"type":"keyboard","value":"win+s","delay_ms":700}, ...]}
-
-# 3. Create or update by name
-ghid combo save "Open RustDesk" 'win+s ->{0.7} type:rustdesk ->{0.4} enter' --json
-# {"status":"saved","updated":false,"combo":{...}}
-
-# 4. List, send, delete (non-interactive in JSON mode)
-ghid combo list --json
-ghid combo send "Open RustDesk" --json
-ghid combo delete "Open RustDesk" --json
-```
-
-`combo save` is an upsert: saving an existing name updates it and returns
-`"updated": true`. Typed text uses `type:word` or `type:"two words"` and is
-limited to printable ASCII.
-
-### 0. Device Management & Registration (`devices`)
-Inspect registered targets, add new Windows/macOS devices, switch active targets, or unregister:
-```bash
-# List all registered devices
-ghid devices list
-ghid devices list --json
-
-# Register a new device (and optionally set as active target)
-ghid devices add --name "MacBook Pro M3" --addr "F8:FF:C2:11:22:33" --os macos --select
-
-# Switch active connection to a different target
-ghid devices select "dev-1"
-# or by address / name:
-ghid devices select "38:FC:98:E8:E3:87"
-
-# Unregister (delete) a device with confirmation (or -f to force)
-ghid devices delete "F8:FF:C2:11:22:33" -f
-```
-
-### 1. Diagnostic Health Check (`doctor`)
-Runs a comprehensive inspection of ADB, device link, APK status, Bluetooth radio, SDP registration, laptop link, and Keychain vault:
 ```bash
 ghid doctor --json
 ```
-Output:
+
+Example output:
 ```json
 {
   "version": "1.0.0",
@@ -174,154 +160,201 @@ Output:
   "gateway_connected": true,
   "target_laptop": "LP-TZD-0X114650",
   "target_address": "38:FC:98:E8:E3:87",
+  "registered_devices": 1,
   "keychain_available": true,
-  "cached_user": null,
-  "has_cached_password": false,
-  "issues": []
+  "cached_user": "Administrator",
+  "has_cached_password": true,
+  "checks": [
+    {"name": "ADB Host Binary", "pass": true, "detail": "/opt/homebrew/bin/adb"},
+    {"name": "Device Transport", "pass": true, "detail": "KB2001 (192.168.1.80:41839)"},
+    {"name": "Gateway Package", "pass": true, "detail": "com.poc.hiddebug installed"},
+    {"name": "Phone Bluetooth Radio", "pass": true, "detail": "Radio active"},
+    {"name": "HID SDP Registration", "pass": true, "detail": "SDP registered"},
+    {"name": "Host Connection", "pass": true, "detail": "Connected to LP-TZD-0X114650"},
+    {"name": "macOS Keychain Vault", "pass": true, "detail": "Vault accessible, user Administrator cached"}
+  ]
 }
 ```
 
-### 2. Query Gateway Status
+### Connection Status (`status`)
+Inspects active connection state:
+
 ```bash
 ghid status --json
 ```
-Exit code is `0` if connected, `1` if disconnected.
 
-### 3. Automated Login
-Using stored Keychain credentials:
+Returns exit code 0 if connected, 1 if disconnected.
+
+### Automated Login (`login`)
+Unlock using stored Keychain credentials:
 ```bash
 ghid login
 ```
-Specifying credentials explicitly and saving them to Keychain:
+
+Specify credentials and save them to Keychain for subsequent runs:
 ```bash
-ghid login -u "Administrator" -p "MyPassword123" --save
+ghid login -u "Administrator" -p "SecretPassword123" --save
 ```
 
-### 4. Lock Screen
+### Screen Lock and Sleep (`lock`, `sleep`)
 ```bash
+# Immediate screen lock (Win + L)
 ghid lock
-```
 
-### 5. Sleep Sequence with Clean Exit
-```bash
+# Sleep sequence with 5-second countdown and zero-battery exit
 ghid sleep --countdown 5
 ```
 
-### 6. Type Text, Combos & Mouse
+### Keystroke Typing and Mouse Gestures (`type`, `combo`)
 ```bash
-ghid type "git commit -m 'feat: update hid engine'"
-ghid combo "win+d"
+# Type arbitrary ASCII text
+ghid type "git status"
+
+# One-shot keyboard combos
+ghid combo "win+r"
 ghid combo "ctrl+shift+esc"
+
+# One-shot mouse gestures (uses HID Report ID 2)
+ghid combo mouse click-left
+ghid combo mouse click-right
+ghid combo mouse click-middle
+ghid combo mouse double-click
+ghid combo mouse scroll-up
+ghid combo mouse scroll-down
 ```
 
-`ghid combo` is one command that creates, saves, sends and deletes named
-Windows keyboard/mouse combos. With a terminal it opens the interactive
-studio; without one it lists the saved library.
+### Combo Management and Scripting API
+Combos can be validated, saved, listed, and sent via CLI or JSON without loading the TUI:
 
 ```bash
-ghid combo                      # open the Combo Studio
-ghid combo list                 # list saved combos (--json supported)
-ghid combo save "Open Run" "win+r"
-ghid combo send "Open Run"
-ghid combo delete "Open Run"    # asks for confirmation
-ghid combo "win+d"              # one-shot send, no save
-ghid combo mouse click-right    # one-shot mouse gesture
+# Inspect accepted grammar tokens and mouse actions
+ghid combo schema --json
+
+# Validate a complex chained sequence before saving
+ghid combo validate "win+s ->{0.7} type:rustdesk ->{0.4} enter" --json
+
+# Save a named combo (updates if already exists)
+ghid combo save "Open RustDesk" "win+s ->{0.7} type:rustdesk ->{0.4} enter" --json
+
+# List saved combos
+ghid combo list --json
+
+# Send a saved combo by name
+ghid combo send "Open RustDesk" --json
+
+# Delete a saved combo
+ghid combo delete "Open RustDesk" --json
 ```
 
-In the studio:
+Saved combos are stored in `~/.config/ghid/combos.json`.
 
-* `↑` / `↓` select a combo, `Enter` sends it.
-* `Tab` moves focus to the **✈ SEND**, **+ NEW** and **🗑 DELETE** buttons.
-* `n` creates a combo (name + sequence), `e` edits, `ctrl+s` saves.
-* To type words such as an app name, add a `type:` step:
-  `win+s ->{0.7} type:rustdesk ->{0.3} enter`.
-* `Delete` removes the selected combo and asks **Y / N** before deleting.
-* An empty library shows a "No combos yet" card instead of a blank list.
+### Target Device Management (`devices`)
+Manage multiple target computers (for example, switching between a work laptop and a home Mac):
 
-Combos support real Windows keys and mouse gestures:
-
-| Type | Tokens |
-|------|--------|
-| Modifiers | `win`, `ctrl`, `alt`, `shift` |
-| Keys | `a`–`z`, `0`–`9`, `f1`–`f12`, `enter`, `esc`, `tab`, `space`, `backspace`, `del`, `insert`, `home`, `end`, `pgup`, `pgdn`, `up`, `down`, `left`, `right`, `printscreen`, `capslock`, `numlock`, `scrolllock`, `pause`, `menu`, `minus`, `equal`, `comma`, `period`, `slash`, `semicolon`, `quote`, `grave`, brackets and `backslash` |
-| Mouse | `click-left`, `click-right`, `click-middle`, `double-click`, `scroll-up`, `scroll-down` |
-| Typed text | `type:rustdesk` or `type:"rust desk"` (printable ASCII) |
-| Chains | `win+s ->{0.7} type:rustdesk ->{0.3} enter` (delay in seconds) |
-
-macOS-only aliases (`cmd`, `super`, `option`) are rejected so the library
-always describes real Windows input. Combos live in
-`~/.config/ghid/combos.json`.
-
-> The mouse collection uses HID report ID 2. After updating the APK, remove the
-> old pairing on Windows and pair again so the host discovers the
-> keyboard + mouse descriptor.
-
-
-### 7. Manage Credentials
 ```bash
+# List all registered devices
+ghid devices list --json
+
+# Add a target device and set it as active
+ghid devices add --name "MacBook Pro M3" --addr "F8:FF:C2:11:22:33" --os macos --select
+
+# Switch connection to a different device by ID or address
+ghid devices select "dev-1"
+ghid devices select "38:FC:98:E8:E3:87"
+
+# Unregister a target device
+ghid devices delete "F8:FF:C2:11:22:33" -f
+```
+
+Device profiles are stored in `~/.config/ghid/config.json`.
+
+### Credential Vault (`creds`)
+Inspect or clear passwords stored in macOS Keychain (`ghost-hid` service):
+
+```bash
+# View cached user status
 ghid creds status --json
-ghid creds set -u "Administrator" -p "Secret123"
+
+# Save user and password manually
+ghid creds set -u "Administrator" -p "SecretPassword123"
+
+# Clear cached credentials
 ghid creds clear
 ```
 
-### 8. View Logs
+### Log Viewing (`logs`, `tail`, `filelog`)
 ```bash
+# View last 50 logcat messages from phone gateway
 ghid logs -n 50
+
+# Live stream logcat output
 ghid tail
+
+# Print full persistent log file from phone storage
 ghid filelog
 ```
 
 ---
 
-## Architecture
+## Combo Sequence Grammar
 
-```mermaid
-flowchart LR
-    Host["Host Machine / Mac\n('ghid' CLI / Python / Agent)"] -- ADB Wireless / USB --> Receiver["HidCommandReceiver\n(BroadcastReceiver)"]
-    Receiver --> Service["HidService\n(Android 14 Foreground Service)"]
-    Service --> Proxy["BluetoothHidDevice\n(Android Bluetooth Daemon)"]
-    Proxy -- Bluetooth Classic HID\n(L2CAP PSM 0x11 / 0x13) --> Laptop["Target Laptop\n(Windows / Mac / Linux)"]
+Chained sequences separate steps with `->` and optional delay values in curly braces (`->{seconds}`):
+
+```text
+<step> [->{delay}] <step> [->{delay}] ...
 ```
 
-- **`ghid`**: Single static Go binary built with Bubble Tea, Lip Gloss, and Bubbles supporting interactive TUI, credential vaulting, health checks, and JSON APIs.
-- **`src/com/poc/hiddebug/HidService.java`**: Android Service maintaining the `BluetoothProfile.HID_DEVICE` proxy and managing report generation.
-- **`src/com/poc/hiddebug/HidCommandReceiver.java`**: Broadcast receiver routing command intents to `HidService`.
-- **`man/ghid.1`**: Formatted UNIX manual page.
-- **`build.sh`**: Standalone build toolchain using Android CLI tools (`aapt2`, `javac`, `d8`, `zipalign`, `apksigner`) with zero Gradle overhead.
+Examples:
+- `win+r ->{0.5} type:notepad ->{0.3} enter`
+- `ctrl+alt+del ->{1.0} esc`
+- `click-right ->{0.2} down ->{0.1} enter`
+
+### Token Reference
+
+| Type | Allowed Tokens |
+|:-----|:---------------|
+| Modifiers | `win`, `gui`, `ctrl`, `control`, `alt`, `shift` |
+| Alphabet / Numbers | `a` through `z`, `0` through `9` |
+| Function Keys | `f1` through `f12` |
+| Navigation | `up`, `down`, `left`, `right`, `home`, `end`, `pgup`, `pgdn` |
+| Editing & System | `enter`, `esc`, `tab`, `space`, `backspace`, `del`, `insert`, `capslock`, `numlock`, `scrolllock`, `printscreen`, `pause`, `menu` |
+| Symbols | `minus`, `equal`, `leftbracket`, `rightbracket`, `backslash`, `semicolon`, `quote`, `grave`, `comma`, `period`, `slash` |
+| Mouse Actions | `click-left`, `click-right`, `click-middle`, `double-click`, `scroll-up`, `scroll-down` |
+| Literal Text | `type:word` or `type:"string with spaces"` |
+
+macOS-specific key aliases (`cmd`, `option`, `opt`, `super`) are rejected by the validator to prevent ambiguous keycode mappings.
 
 ---
 
-## One-Time Bluetooth Pairing Setup
+## Bluetooth Pairing Setup
 
-> [!IMPORTANT]
-> To ensure Windows installs the **Bluetooth HID Keyboard** driver rather than treating your phone as an audio phone:
+To ensure Windows binds the phone as a Bluetooth HID keyboard rather than an audio device:
 
-1. **Remove Old Pairings:**
-   - On Windows: Open **Settings $\rightarrow$ Bluetooth & devices**. Under **Other devices**, locate your phone and click **Remove**.
+1. **Clear Existing Pairings:**
+   - On Windows: Go to **Settings > Bluetooth & devices**. Under **Devices**, find the phone and select **Remove device**.
    - On Phone: Run `ghid unpair`.
-2. **Ensure HID Service is Active:**
-   - Run `ghid start` and verify `ghid status --json` reports `"registered": true`.
-3. **Enable Advanced Discovery on Windows:**
-   - In Windows **Settings $\rightarrow$ Bluetooth & devices**, scroll to **Bluetooth devices discovery** and set it to **Advanced**.
-4. **Pair from Windows:**
-   - Click **Add device $\rightarrow$ Bluetooth**.
-   - Select your phone when it appears.
-   - Confirm the pairing passkey on both screens.
-   - Once connected, Windows will display the device as **Connected** with keyboard input bound.
+2. **Start Phone HID Service:**
+   - Run `ghid start` and ensure `ghid status --json` returns `"registered": true`.
+3. **Set Discovery Mode on Windows:**
+   - In Windows **Settings > Bluetooth & devices**, scroll down to **Bluetooth devices discovery** and select **Advanced**.
+4. **Initiate Pairing from Windows:**
+   - Click **Add device > Bluetooth**.
+   - Select the phone when it appears in the device list.
+   - Confirm the numeric passkey on both Windows and the phone.
+   - Once paired, Windows binds the Bluetooth HID Keyboard and Mouse drivers.
 
 ---
 
-## Building from Source
+## Building the Android APK
 
-Requirements:
-- Android SDK command-line tools (`aapt2`, `d8`, `zipalign`, `apksigner`)
+Prerequisites:
 - OpenJDK 17
-- Android device running Android 9+ (API 28+)
+- Android SDK command-line tools (`aapt2`, `d8`, `zipalign`, `apksigner`)
+- Android target platform android-34 (`platforms/android-34/android.jar`)
 
-Compile the APK:
+Build the APK:
 ```bash
 ./build.sh
-# or: ghid build
 ```
 
 Install to connected phone:
