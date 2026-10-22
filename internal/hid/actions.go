@@ -2,6 +2,7 @@ package hid
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -104,16 +105,23 @@ func mouseActionFor(canonical string) MouseAction {
 }
 
 // ParseActionSequence parses a combo in which every step is either a Windows
-// keyboard chord or a mouse gesture. Steps are joined with "->" and may carry
-// a delay, e.g. "win+r ->{0.9} tab ->{0.2} click-left".
+// keyboard chord, a mouse gesture, a literal text type step, or a variable ($VAR).
+// Steps are joined with "->" and may carry a delay, e.g. "win+r ->{0.9} tab ->{0.2} $USERNAME".
 func ParseActionSequence(input string) ([]ComboStep, error) {
 	return parseSequence(input, parseActionSegment)
 }
 
 func parseActionSegment(segment string) (ComboStep, error) {
+	if varName, ok := parseVariableStep(segment); ok {
+		return ComboStep{Combo: segment, Variable: varName}, nil
+	}
+
 	if text, ok, err := parseTextStep(segment); ok {
 		if err != nil {
 			return ComboStep{}, err
+		}
+		if varName, ok := parseVariableStep(text); ok {
+			return ComboStep{Combo: segment, Variable: varName}, nil
 		}
 		return ComboStep{Combo: segment, Text: text}, nil
 	}
@@ -130,6 +138,28 @@ func parseActionSegment(segment string) (ComboStep, error) {
 		return ComboStep{}, err
 	}
 	return ComboStep{Combo: segment, Modifier: mod, KeyCode: code}, nil
+}
+
+// parseVariableStep recognises variable tokens like $USERNAME, ${PASSWORD}, or $api_token.
+func parseVariableStep(segment string) (string, bool) {
+	trimmed := strings.TrimSpace(segment)
+	if !strings.HasPrefix(trimmed, "$") {
+		return "", false
+	}
+	varName := strings.TrimPrefix(trimmed, "$")
+	if strings.HasPrefix(varName, "{") && strings.HasSuffix(varName, "}") {
+		varName = varName[1 : len(varName)-1]
+	}
+	varName = strings.TrimSpace(varName)
+	if varName == "" {
+		return "", false
+	}
+	for _, r := range varName {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-') {
+			return "", false
+		}
+	}
+	return varName, true
 }
 
 // parseTextStep recognises literal typing steps: type:rustdesk,
@@ -234,7 +264,7 @@ func WindowsKeyboardTokens() []string {
 
 // StepDescription is a machine-readable view of one parsed combo step.
 type StepDescription struct {
-	Type    string `json:"type"` // keyboard, mouse or text
+	Type    string `json:"type"` // keyboard, mouse, text or variable
 	Value   string `json:"value"`
 	DelayMS int64  `json:"delay_ms"`
 }
@@ -249,6 +279,9 @@ func DescribeSequence(input string) ([]StepDescription, error) {
 	for _, step := range steps {
 		desc := StepDescription{DelayMS: step.Delay.Milliseconds()}
 		switch {
+		case step.Variable != "":
+			desc.Type = "variable"
+			desc.Value = "$" + step.Variable
 		case step.Text != "":
 			desc.Type = "text"
 			desc.Value = step.Text
@@ -262,4 +295,93 @@ func DescribeSequence(input string) ([]StepDescription, error) {
 		described = append(described, desc)
 	}
 	return described, nil
+}
+
+var varRegex = regexp.MustCompile(`\$([a-zA-Z0-9_-]+)|\$\{([a-zA-Z0-9_-]+)\}`)
+
+// ExtractVariables scans a combo sequence for all referenced snippet variables.
+func ExtractVariables(input string) []string {
+	steps, err := ParseActionSequence(input)
+	if err != nil {
+		return extractVariablesFromRaw(input)
+	}
+
+	seen := make(map[string]bool)
+	var result []string
+
+	add := func(v string) {
+		clean := strings.TrimSpace(v)
+		if clean == "" {
+			return
+		}
+		key := strings.ToLower(clean)
+		if !seen[key] {
+			seen[key] = true
+			result = append(result, clean)
+		}
+	}
+
+	for _, step := range steps {
+		if step.Variable != "" {
+			add(step.Variable)
+		}
+		if step.Text != "" {
+			for _, match := range varRegex.FindAllStringSubmatch(step.Text, -1) {
+				if len(match) > 1 && match[1] != "" {
+					add(match[1])
+				} else if len(match) > 2 && match[2] != "" {
+					add(match[2])
+				}
+			}
+		}
+	}
+	return result
+}
+
+func extractVariablesFromRaw(input string) []string {
+	seen := make(map[string]bool)
+	var result []string
+	for _, match := range varRegex.FindAllStringSubmatch(input, -1) {
+		name := ""
+		if len(match) > 1 && match[1] != "" {
+			name = match[1]
+		} else if len(match) > 2 && match[2] != "" {
+			name = match[2]
+		}
+		if name != "" {
+			key := strings.ToLower(name)
+			if !seen[key] {
+				seen[key] = true
+				result = append(result, name)
+			}
+		}
+	}
+	return result
+}
+
+// VariableResolver resolves a variable name to its string value.
+type VariableResolver func(name string) (string, error)
+
+// NormalizeVariableName strips leading "$" and enclosing "{...}".
+func NormalizeVariableName(token string) string {
+	clean := strings.TrimSpace(token)
+	clean = strings.TrimPrefix(clean, "$")
+	if strings.HasPrefix(clean, "{") && strings.HasSuffix(clean, "}") {
+		clean = clean[1 : len(clean)-1]
+	}
+	return clean
+}
+
+// ExpandTextVariables replaces $VAR and ${VAR} placeholders using the provided resolver.
+func ExpandTextVariables(text string, resolver VariableResolver) string {
+	if resolver == nil || !strings.Contains(text, "$") {
+		return text
+	}
+	return varRegex.ReplaceAllStringFunc(text, func(match string) string {
+		name := NormalizeVariableName(match)
+		if val, err := resolver(name); err == nil && val != "" {
+			return val
+		}
+		return match
+	})
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -265,6 +266,7 @@ func (m *Manager) StartGateway() error {
 }
 
 func (m *Manager) StopGateway() error {
+	_, _ = m.Run("shell", "dumpsys", "deviceidle", "whitelist", "+"+PackageName)
 	_, _ = m.Run("shell", "am", "broadcast", "-n", ReceiverName, "-a", ActionCmd, "--es", "cmd", "stop")
 	_, err := m.Run("shell", "am", "stopservice", "-n", ServiceName)
 	return err
@@ -319,14 +321,54 @@ func (m *Manager) SendLock() error {
 	return err
 }
 
+var varInTextRegex = regexp.MustCompile(`\$([a-zA-Z0-9_-]+)|\$\{([a-zA-Z0-9_-]+)\}`)
+
+func expandTextVariables(text string, resolver func(string) (string, error)) string {
+	return varInTextRegex.ReplaceAllStringFunc(text, func(match string) string {
+		name := strings.TrimPrefix(match, "$")
+		if strings.HasPrefix(name, "{") && strings.HasSuffix(name, "}") {
+			name = name[1 : len(name)-1]
+		}
+		if val, err := resolver(name); err == nil && val != "" {
+			return val
+		}
+		return match
+	})
+}
+
+// SendCombo executes a sequence of key chords, mouse actions, and typed strings.
 func (m *Manager) SendCombo(keys string) error {
+	return m.SendComboWithResolver(keys, nil)
+}
+
+// SendComboWithResolver executes a combo sequence, resolving any $VARIABLE
+// references using the supplied resolver function.
+func (m *Manager) SendComboWithResolver(keys string, resolver func(string) (string, error)) error {
 	steps, err := hid.ParseActionSequence(keys)
 	if err != nil {
 		return err
 	}
 	for _, step := range steps {
-		if step.Text != "" {
-			if err := m.TypeText(step.Text); err != nil {
+		if step.Variable != "" {
+			if resolver == nil {
+				return fmt.Errorf("snippet variable $%s requires a resolver", step.Variable)
+			}
+			val, err := resolver(step.Variable)
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(val) == "" {
+				return fmt.Errorf("snippet variable $%s is empty", step.Variable)
+			}
+			if err := m.TypeText(val); err != nil {
+				return err
+			}
+		} else if step.Text != "" {
+			text := step.Text
+			if resolver != nil {
+				text = expandTextVariables(text, resolver)
+			}
+			if err := m.TypeText(text); err != nil {
 				return err
 			}
 		} else if step.Mouse != nil {

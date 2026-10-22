@@ -285,3 +285,80 @@ flowchart TD
     class FailADB,FailDev,FailAuth,FailAPK,FailBT,FailReg fail
     class WarnConn,WarnVault warn
 ```
+
+
+---
+
+## 6. Unified Quick Send Flow (Type vs. Raw HID)
+
+Quick Send provides a single unified entry point for ad-hoc keystrokes and low-level hex reports. The system defaults to string typing but switches to raw 16-hex transmission when toggled or flagged.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as Operator / Agent
+    participant Interface as TUI / CLI (`ghid quick`)
+    participant Gateway as gateway.Gateway
+    participant ADB as adb.Manager
+    participant Phone as HidCommandReceiver
+    participant Host as Target Computer
+
+    alt Default Mode: Virtual Keyboard Type
+        User->>Interface: Enter text string (e.g. "ghid quick hello world")
+        Interface->>Gateway: Type("hello world")
+        Gateway->>ADB: Broadcast ACTION_CMD (`--es cmd "type" --es text "hello world"`)
+        ADB->>Phone: Relay type intent
+        loop For each character in text
+            Phone->>Host: HID Report ID 1 (Key Down scancode)
+            Phone->>Host: HID Report ID 1 (Key Up / all zeros)
+        end
+        Interface-->>User: ✔ Typed text (11 characters)
+    else Raw HID Report Mode
+        User->>Interface: Toggle Tab in TUI or pass `--raw <16-hex>`
+        Interface->>Interface: Validate exact 16-hex characters (8 bytes)
+        alt Invalid Hex / Incorrect Length
+            Interface-->>User: ✖ Error: Must be exactly 16 hex characters
+        else Valid 16-Hex Report
+            Interface->>Gateway: Raw("08000f0000000000")
+            Gateway->>ADB: Broadcast ACTION_CMD (`--es cmd "raw" --es hex "08000f0000000000"`)
+            ADB->>Phone: Relay raw intent
+            Phone->>Host: Transmit raw 8-byte HID report
+            Interface-->>User: ✔ Dispatched raw HID report
+        end
+    end
+```
+
+---
+
+## 7. Snippet Variable Resolution & Intercept Flow
+
+When executing macros containing dynamic variable references (e.g. `$USERNAME`, `$PASSWORD`), the execution engine resolves tokens at runtime through the registered `SnippetStore`. If referenced snippets are unpopulated, the interactive dashboard prompts the user immediately instead of failing.
+
+```mermaid
+flowchart TD
+    Trigger([Trigger Combo e.g. Login Macro]) --> ExtractVars[hid.ExtractVariables: Scan for $VAR and ${VAR}]
+    ExtractVars --> CheckVars{Any variables in combo?}
+
+    CheckVars -->|No| ExecDirect[Execute Keystrokes & Gestures Directly]
+    CheckVars -->|Yes| QueryStore[Query snippets.Store for each variable]
+
+    QueryStore --> CheckValues{All variables present & non-empty?}
+
+    CheckValues -->|No (Empty Snippets)| PromptUser[Intercept: Transition to StateLoginPrompt]
+    PromptUser --> CaptureInput[User fills Username & Password in TUI]
+    CaptureInput --> SaveSnippets[Save text & store secret in Keychain]
+    SaveSnippets --> ResumeCombo[Auto-resume and re-trigger pending combo]
+
+    CheckValues -->|Yes| Interpolate[hid.SubstituteVariables: Replace tokens with values]
+    ResumeCombo --> Interpolate
+    Interpolate --> DispatchADB[adb.Manager.SendComboWithResolver]
+    DispatchADB --> SendHID[Phone injects resolved HID keystrokes into host]
+
+    classDef normal fill:#E8F8F5,stroke:#1ABC9C,stroke-width:2px,color:#0E6251
+    classDef prompt fill:#FEF9E7,stroke:#F39C12,stroke-width:2px,color:#7D6608
+    classDef exec fill:#EBF5FB,stroke:#3498DB,stroke-width:2px,color:#1B4F72
+
+    class Trigger,ExtractVars,CheckVars,QueryStore,Interpolate,DispatchADB,SendHID normal
+    class PromptUser,CaptureInput,SaveSnippets,ResumeCombo prompt
+    class ExecDirect exec
+```

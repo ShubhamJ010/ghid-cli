@@ -1,6 +1,9 @@
 package hid
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestParseActionSequence(t *testing.T) {
 	steps, err := ParseActionSequence("win+r ->{0.4} click-left ->{0.1} scroll-up")
@@ -97,5 +100,52 @@ func TestParseTextSteps(t *testing.T) {
 	}
 	if _, err := ParseActionSequence(`type:"unterminated`); err == nil {
 		t.Error("unterminated quote should fail")
+	}
+}
+
+func TestParseVariables(t *testing.T) {
+	// Variable without type: prefix
+	seq := "ctrl+alt+del ->{1.0} esc ->{0.5} $USERNAME ->{0.2} tab ->{0.2} ${PASSWORD} ->{0.2} enter"
+	steps, err := ParseActionSequence(seq)
+	if err != nil {
+		t.Fatalf("ParseActionSequence failed for variables: %v", err)
+	}
+	if len(steps) != 6 {
+		t.Fatalf("expected 6 steps, got %d", len(steps))
+	}
+	if steps[2].Variable != "USERNAME" {
+		t.Errorf("step 2 variable = %q, want USERNAME", steps[2].Variable)
+	}
+	if steps[4].Variable != "PASSWORD" {
+		t.Errorf("step 4 variable = %q, want PASSWORD", steps[4].Variable)
+	}
+
+	// Variable with type: prefix
+	typeSeq := "type:$USERNAME -> type:${PASSWORD}"
+	typeSteps, err := ParseActionSequence(typeSeq)
+	if err != nil {
+		t.Fatalf("ParseActionSequence failed for type variables: %v", err)
+	}
+	if len(typeSteps) != 2 {
+		t.Fatalf("expected 2 steps, got %d", len(typeSteps))
+	}
+	if typeSteps[0].Variable != "USERNAME" || typeSteps[1].Variable != "PASSWORD" {
+		t.Errorf("unexpected variables in type: steps: %+v", typeSteps)
+	}
+
+	// Extract variables
+	vars := ExtractVariables(seq)
+	want := []string{"USERNAME", "PASSWORD"}
+	if !reflect.DeepEqual(vars, want) {
+		t.Errorf("ExtractVariables = %v, want %v", vars, want)
+	}
+
+	// DescribeSequence
+	desc, err := DescribeSequence("$USERNAME")
+	if err != nil || len(desc) != 1 {
+		t.Fatalf("DescribeSequence failed: %v", err)
+	}
+	if desc[0].Type != "variable" || desc[0].Value != "$USERNAME" {
+		t.Errorf("unexpected description: %+v", desc[0])
 	}
 }

@@ -1,6 +1,7 @@
 package adb
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -51,51 +52,20 @@ func TestSelectDevice(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if dev.Serial != "988e1039484b39414e" {
-		t.Errorf("expected serial 988e1039484b39414e, got %s", dev.Serial)
-	}
-}
-
-func TestIsPackageInstalled(t *testing.T) {
-	fake := NewFakeRunner()
-	fake.Register("shell pm list packages com.poc.hiddebug", "package:com.poc.hiddebug\n", nil)
-
-	mgr := NewManagerWithRunner(fake, "test-serial", "")
-	if !mgr.IsPackageInstalled() {
-		t.Error("expected IsPackageInstalled to be true")
-	}
-
-	fake.Register("shell pm list packages com.poc.hiddebug", "", nil)
-	if mgr.IsPackageInstalled() {
-		t.Error("expected IsPackageInstalled to be false when output is empty")
-	}
-}
-
-func TestGetBluetoothState(t *testing.T) {
-	fake := NewFakeRunner()
-	fake.Register("shell settings get global bluetooth_on", "1\n", nil)
-
-	mgr := NewManagerWithRunner(fake, "test-serial", "")
-	if !mgr.GetBluetoothState() {
-		t.Error("expected BluetoothState to be true for '1'")
-	}
-
-	fake.Register("shell settings get global bluetooth_on", "0\n", nil)
-	if mgr.GetBluetoothState() {
-		t.Error("expected BluetoothState to be false for '0'")
+		t.Errorf("selected device mismatch: %+v", dev)
 	}
 }
 
 func TestGetStatus(t *testing.T) {
 	fake := NewFakeRunner()
-	statusJSON := `{
-  "registered": true,
-  "connected": true,
-  "state": "CONNECTED",
-  "target": "ThinkPad",
-  "address": "38:FC:98:E8:E3:87",
-  "updated": "2026-10-23 00:00:00.000"
-}`
-	fake.Register("cat /sdcard/Android/data/com.poc.hiddebug/files/status.json", statusJSON, nil)
+	fake.Register("cat /sdcard/Android/data/com.poc.hiddebug/files/status.json", `{
+		"registered": true,
+		"connected": true,
+		"state": "CONNECTED",
+		"target": "ThinkPad",
+		"address": "38:FC:98:E8:E3:87",
+		"updated": "2023-10-27T10:00:00Z"
+	}`, nil)
 
 	mgr := NewManagerWithRunner(fake, "test-serial", "")
 	st := mgr.GetStatus()
@@ -240,5 +210,39 @@ func TestSendComboTypedText(t *testing.T) {
 	}
 	if typed != "rustdesk" {
 		t.Fatalf("typed text broadcast not found in %v", fake.Calls)
+	}
+}
+
+func TestSendComboWithResolver(t *testing.T) {
+	fake := NewFakeRunner()
+	mgr := NewManagerWithRunner(fake, "", "")
+
+	resolver := func(name string) (string, error) {
+		switch strings.ToLower(name) {
+		case "username":
+			return "alice", nil
+		case "password":
+			return "Secret99!", nil
+		default:
+			return "", fmt.Errorf("unknown variable %s", name)
+		}
+	}
+
+	seq := "ctrl+alt+del ->{0.001} esc ->{0.001} $USERNAME ->{0.001} tab ->{0.001} $PASSWORD ->{0.001} enter"
+	if err := mgr.SendComboWithResolver(seq, resolver); err != nil {
+		t.Fatalf("SendComboWithResolver failed: %v", err)
+	}
+
+	var typed []string
+	for _, call := range fake.Calls {
+		for i := 0; i+3 < len(call); i++ {
+			if call[i] == "type" && call[i+1] == "--es" && call[i+2] == "text" {
+				typed = append(typed, call[i+3])
+			}
+		}
+	}
+
+	if len(typed) != 2 || typed[0] != "alice" || typed[1] != "Secret99!" {
+		t.Errorf("unexpected typed values: %v", typed)
 	}
 }

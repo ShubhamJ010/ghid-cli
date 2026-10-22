@@ -146,3 +146,56 @@ func TestMenuComboOpensStudio(t *testing.T) {
 		t.Fatalf("esc should close the studio back to the menu, state=%v", got.state)
 	}
 }
+
+func TestQuickSendToggle(t *testing.T) {
+	ti := textinput.New()
+	ti.Focus()
+	m := Model{
+		state:        StateQuickSend,
+		textInput:    ti,
+		quickSendRaw: false,
+	}
+
+	// Press Tab: toggles to Raw mode
+	m1, _ := m.updateQuickSend(tea.KeyMsg{Type: tea.KeyTab})
+	mod1 := m1.(Model)
+	if !mod1.quickSendRaw {
+		t.Fatalf("expected quickSendRaw to be true after Tab")
+	}
+	if !strings.Contains(mod1.textInput.Placeholder, "16 hex") {
+		t.Fatalf("expected raw placeholder, got %q", mod1.textInput.Placeholder)
+	}
+
+	// Press Tab again: toggles back to Type mode
+	m2, _ := mod1.updateQuickSend(tea.KeyMsg{Type: tea.KeyTab})
+	mod2 := m2.(Model)
+	if mod2.quickSendRaw {
+		t.Fatalf("expected quickSendRaw to be false after second Tab")
+	}
+
+	// Press Esc: returns to StateMenu
+	m3, _ := mod2.updateQuickSend(tea.KeyMsg{Type: tea.KeyEsc})
+	mod3 := m3.(Model)
+	if mod3.state != StateMenu {
+		t.Fatalf("expected state to be StateMenu after Esc, got %v", mod3.state)
+	}
+}
+
+func TestQuickSendHexValidation(t *testing.T) {
+	ti := textinput.New()
+	ti.SetValue("gggggggggggggggg") // 16 chars, but invalid hex
+	m := Model{
+		state:        StateQuickSend,
+		textInput:    ti,
+		quickSendRaw: true,
+	}
+
+	m1, cmd := m.updateQuickSend(tea.KeyMsg{Type: tea.KeyEnter})
+	mod1 := m1.(Model)
+	if cmd != nil {
+		t.Errorf("expected no execution command on invalid hex")
+	}
+	if !mod1.isErrorNotice || !strings.Contains(mod1.notice, "16 hexadecimal characters") {
+		t.Errorf("expected error notice about 16 hex chars, got %q (isErr=%v)", mod1.notice, mod1.isErrorNotice)
+	}
+}

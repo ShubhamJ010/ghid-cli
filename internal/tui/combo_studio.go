@@ -62,7 +62,11 @@ func NewComboStudioModel(store *combos.Store, send ComboSendFunc) ComboStudioMod
 	keys.CharLimit = 256
 	keys.Width = 42
 
-	list, err := store.Load()
+	var list []combos.Combo
+	var err error
+	if store != nil {
+		list, err = store.Load()
+	}
 
 	m := ComboStudioModel{
 		store:     store,
@@ -183,6 +187,22 @@ func (m ComboStudioModel) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "e":
 		if len(m.list) > 0 && m.index < len(m.list) {
 			return m.openCreate(m.list[m.index])
+		}
+		return m, nil
+
+	case "f":
+		if len(m.list) > 0 && m.index < len(m.list) && m.store != nil {
+			combo := m.list[m.index]
+			list, ok, err := m.store.ToggleFavorite(combo.Name)
+			if err == nil && ok {
+				m.list = list
+				status := "pinned to top of Action List with ❤️"
+				if !m.list[m.index].Favorite {
+					status = "removed from favorites"
+				}
+				m.notice = fmt.Sprintf("✔ Combo %q %s", combo.Name, status)
+				m.isError = false
+			}
 		}
 		return m, nil
 
@@ -349,7 +369,14 @@ func (m ComboStudioModel) saveCombo(andSend bool) (tea.Model, tea.Cmd) {
 		return m, textinput.Blink
 	}
 
-	saved := combos.Combo{Name: name, Keys: keys}
+	isFav := false
+	if m.editing != "" && m.store != nil {
+		if old, ok := m.store.Find(m.editing); ok {
+			isFav = old.Favorite
+		}
+	}
+
+	saved := combos.Combo{Name: name, Keys: keys, Favorite: isFav}
 	list, err := m.store.Add(saved)
 	if err != nil {
 		m.notice = fmt.Sprintf("✖ Could not save combo: %v", err)
@@ -363,21 +390,21 @@ func (m ComboStudioModel) saveCombo(andSend bool) (tea.Model, tea.Cmd) {
 			list = remaining
 		}
 	}
-	m.editing = ""
+
 	m.list = list
 	m.mode = studioList
-	m.focus = 0
+	m.editing = ""
 	m.nameInput.Blur()
 	m.keysInput.Blur()
+	m.notice = fmt.Sprintf("✔ Saved combo %q", name)
+	m.isError = false
 
-	for i := range m.list {
-		if strings.EqualFold(m.list[i].Name, name) {
+	for i, c := range m.list {
+		if strings.EqualFold(c.Name, name) {
 			m.index = i
 			break
 		}
 	}
-	m.notice = fmt.Sprintf("✔ Saved %q  ·  %s", name, keys)
-	m.isError = false
 
 	if andSend {
 		return m.sendSelected()
@@ -387,44 +414,52 @@ func (m ComboStudioModel) saveCombo(andSend bool) (tea.Model, tea.Cmd) {
 
 func (m ComboStudioModel) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "y", "Y":
-		if m.pendingDel == nil {
+	case "y", "Y", "enter":
+		if m.pendingDel != nil {
+			name := m.pendingDel.Name
+			list, deleted, err := m.store.Delete(name)
+			m.pendingDel = nil
 			m.mode = studioList
-			return m, nil
-		}
-		name := m.pendingDel.Name
-		list, deleted, err := m.store.Delete(name)
-		if err != nil {
-			m.notice = fmt.Sprintf("✖ Delete failed: %v", err)
-			m.isError = true
-		} else if deleted {
-			m.list = list
-			if m.index >= len(m.list) {
-				m.index = max(0, len(m.list)-1)
+			if err != nil {
+				m.notice = fmt.Sprintf("✖ Could not delete %q: %v", name, err)
+				m.isError = true
+			} else if deleted {
+				m.list = list
+				if m.index >= len(m.list) && len(m.list) > 0 {
+					m.index = len(m.list) - 1
+				}
+				m.notice = fmt.Sprintf("✔ Deleted combo %q", name)
+				m.isError = false
 			}
-			m.notice = fmt.Sprintf("✔ Deleted %q", name)
-			m.isError = false
 		}
-		m.pendingDel = nil
-		m.mode = studioList
 		return m, nil
 
 	case "n", "N", "esc", "q":
 		m.pendingDel = nil
 		m.mode = studioList
+		m.notice = "Deletion cancelled."
+		m.isError = false
 		return m, nil
 	}
 	return m, nil
 }
 
 func (m ComboStudioModel) View() string {
-	if m.quitting {
-		return SuccessStyle.Render("\n👋 Combo studio closed. Your combos are saved.\n")
-	}
-
 	var sb strings.Builder
-	sb.WriteString(m.renderStudioHeader())
+
+	sb.WriteString(TitleStyle.Render("🎹 COMBO STUDIO · Windows keyboard & mouse shortcuts"))
 	sb.WriteString("\n")
+	sb.WriteString(SubtitleStyle.Render("Create sequences using Windows keys (win+r, esc), mouse clicks, text typing and $VARIABLES"))
+	sb.WriteString("\n\n")
+
+	if m.notice != "" {
+		style := lipgloss.NewStyle().Foreground(ColorGreen).Bold(true)
+		if m.isError {
+			style = lipgloss.NewStyle().Foreground(ColorRed).Bold(true)
+		}
+		sb.WriteString(style.Render(m.notice))
+		sb.WriteString("\n\n")
+	}
 
 	switch m.mode {
 	case studioCreate:
@@ -435,26 +470,10 @@ func (m ComboStudioModel) View() string {
 		sb.WriteString(m.renderList())
 	}
 
-	if m.notice != "" {
-		sb.WriteString("\n")
-		if m.isError {
-			sb.WriteString(ErrorStyle.Render(m.notice))
-		} else {
-			sb.WriteString(NoticeStyle.Render(m.notice))
-		}
-	}
-
-	sb.WriteString("\n")
+	sb.WriteString("\n\n")
 	sb.WriteString(m.renderStudioFooter())
-	return sb.String()
-}
 
-func (m ComboStudioModel) renderStudioHeader() string {
-	title := TitleStyle.Render("🎹 COMBO STUDIO")
-	windows := BadgeWindows.Render()
-	count := SubtitleStyle.Render(fmt.Sprintf("%d saved", len(m.list)))
-	return fmt.Sprintf("%s  %s  %s\n%s\n", title, windows, count,
-		SubtitleStyle.Render("Named Windows keyboard + mouse shortcuts, replayed over Bluetooth HID"))
+	return FocusCardStyle.Width(76).Render(sb.String())
 }
 
 func (m ComboStudioModel) renderList() string {
@@ -483,20 +502,24 @@ func (m ComboStudioModel) renderList() string {
 
 func (m ComboStudioModel) renderComboTable() string {
 	header := lipgloss.NewStyle().Foreground(ColorFgMuted).Render(
-		fmt.Sprintf("   %-3s %-28s %s", "#", "NAME", "WINDOWS KEYS"))
+		fmt.Sprintf("    %-3s %-26s %s", "#", "NAME", "WINDOWS KEYS"))
 
 	var rows []string
 	rows = append(rows, header)
 	for i, c := range m.list {
+		favIcon := "  "
+		if c.Favorite {
+			favIcon = "❤️ "
+		}
 		name := c.Name
-		if runes := []rune(name); len(runes) > 28 {
-			name = string(runes[:27]) + "…"
+		if runes := []rune(name); len(runes) > 26 {
+			name = string(runes[:25]) + "…"
 		}
 		keys := c.Keys
-		if runes := []rune(keys); len(runes) > 38 {
-			keys = string(runes[:37]) + "…"
+		if runes := []rune(keys); len(runes) > 36 {
+			keys = string(runes[:35]) + "…"
 		}
-		line := fmt.Sprintf(" %2d  %-28s %s", i+1, name, keys)
+		line := fmt.Sprintf("%s%2d  %-26s %s", favIcon, i+1, name, keys)
 		if i == m.index {
 			prefix := "▸"
 			if m.focus == 0 {
@@ -558,23 +581,21 @@ func (m ComboStudioModel) renderCreateForm() string {
 		lipgloss.JoinHorizontal(lipgloss.Center, save, "  ", sendSave),
 	)
 
-	reference := SubtitleStyle.Render(
-		"Windows keyboard: win ctrl alt shift · a–z 0–9 · f1–f12 · enter esc tab space\n" +
-			"backspace del insert home end pgup pgdn arrows · printscreen capslock numlock menu\n" +
-			"Mouse: click-left click-right click-middle double-click scroll-up scroll-down\n" +
-			"Chain steps with ->{seconds}:  win+r ->{0.6} click-left")
-
-	return CardStyle.Width(78).Render(form) + "\n" + reference
+	help := SubtitleStyle.Render(
+		"Supported: win, ctrl, alt, shift, letters/numbers, esc, tab, enter, space, arrows.\n" +
+			"Delays: ->{0.8} or ->. Mouse: click-left, scroll-up. Text: type:rustdesk. Variables: $USERNAME, $PASSWORD")
+	return form + "\n\n" + help
 }
 
-func (m ComboStudioModel) formButton(label string, focus int) string {
+func (m ComboStudioModel) formButton(label string, focusIdx int) string {
 	style := lipgloss.NewStyle().
 		Foreground(ColorFgLight).
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(ColorFgMuted).
 		Padding(0, 2)
-	if m.formFocus == focus {
-		style = style.Bold(true).
+	if m.formFocus == focusIdx {
+		style = style.
+			Bold(true).
 			Foreground(ColorBgDark).
 			Background(ColorCyan).
 			BorderForeground(ColorCyan)
@@ -609,12 +630,12 @@ func (m ComboStudioModel) renderDeleteConfirm() string {
 
 func (m ComboStudioModel) renderStudioFooter() string {
 	if m.mode == studioCreate {
-		return HelpStyle.Render("tab next field · enter save (last button sends) · ctrl+s save · esc back")
+		return HelpStyle.Render("tab next field · enter save · ctrl+s save · esc back")
 	}
 	if m.mode == studioConfirmDelete {
 		return HelpStyle.Render("y confirm · n or esc cancel")
 	}
-	return HelpStyle.Render("↑↓ select · enter send · tab SEND / NEW / DELETE · s send · n new · e edit · delete remove · esc back")
+	return HelpStyle.Render("↑↓ select · enter send · f favorite (❤️ pin) · tab SEND/NEW/DEL · s send · n new · e edit · del remove · esc back")
 }
 
 func comboTextStyle() lipgloss.Style {

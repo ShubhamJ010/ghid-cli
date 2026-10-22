@@ -29,6 +29,7 @@ flowchart LR
   - [ADR-001: Headless Android Service with BroadcastReceiver IPC over ADB](file:///Users/sj/Desktop/ws/ghost-hid/docs/decisions/ADR-001-headless-android-service-adb-ipc.md)
   - [ADR-002: Dual-Report HID Descriptor for Keyboard and Mouse](file:///Users/sj/Desktop/ws/ghost-hid/docs/decisions/ADR-002-dual-report-descriptor-for-keyboard-and-mouse.md)
   - [ADR-003: Charm TUI with Structured JSON API and Native Credential Vault](file:///Users/sj/Desktop/ws/ghost-hid/docs/decisions/ADR-003-charm-tui-with-json-agent-api-and-keychain-vault.md)
+  - [ADR-004: Snippets Subsystem, Dynamic Combo Variables, and Unified Quick Send](file:///Users/sj/Desktop/ws/ghost-hid/docs/decisions/ADR-004-snippets-subsystem-and-quick-send.md)
 
 ---
 
@@ -209,11 +210,21 @@ ghid lock
 ghid sleep --countdown 5
 ```
 
-### Keystroke Typing and Mouse Gestures (`type`, `combo`)
-```bash
-# Type arbitrary ASCII text
-ghid type "git status"
+### Quick Send: Keystroke Typing & Raw Reports (`quick`)
+Unified entry point for ad-hoc text typing and raw HID hex reports:
 
+```bash
+# Type text through the virtual keyboard (default)
+ghid quick "git status"
+ghid quick "Administrator" --json
+
+# Transmit raw 8-byte HID report (16 hex chars)
+ghid quick --raw "08000f0000000000"
+ghid quick "raw:08000f0000000000" --json
+```
+
+### Combo Macros & Mouse Gestures (`combo`)
+```bash
 # One-shot keyboard combos
 ghid combo "win+r"
 ghid combo "ctrl+shift+esc"

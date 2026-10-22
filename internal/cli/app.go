@@ -17,6 +17,7 @@ import (
 	"github.com/ghost-hid/ghid/internal/config"
 	"github.com/ghost-hid/ghid/internal/gateway"
 	"github.com/ghost-hid/ghid/internal/hid"
+	"github.com/ghost-hid/ghid/internal/snippets"
 	"github.com/ghost-hid/ghid/internal/tui"
 	"github.com/ghost-hid/ghid/internal/vault"
 )
@@ -26,6 +27,7 @@ type App struct {
 	Version        string
 	ConfigStore    *config.Store
 	ComboStore     *combos.Store
+	SnippetStore   *snippets.Store
 	Vault          vault.Vault
 	GatewayFactory func(serial string) (gateway.Controller, error)
 	InteractiveFn  func(mgr *adb.Manager, cfg config.Config) error
@@ -38,11 +40,17 @@ type App struct {
 func NewApp(version string) *App {
 	store := config.NewStore("")
 	vlt := vault.NewKeychainVault("")
+	cStore := combos.NewStore("")
+	_, _ = cStore.EnsureDefaults()
+	sStore := snippets.NewStore("", vlt)
+	_, _ = sStore.EnsureDefaults()
+
 	return &App{
-		Version:     version,
-		ConfigStore: store,
-		ComboStore:  combos.NewStore(""),
-		Vault:       vlt,
+		Version:      version,
+		ConfigStore:  store,
+		ComboStore:   cStore,
+		SnippetStore: sStore,
+		Vault:        vlt,
 		GatewayFactory: func(serial string) (gateway.Controller, error) {
 			mgr, err := adb.NewManager(serial)
 			if err != nil {
@@ -55,7 +63,7 @@ func NewApp(version string) *App {
 			return gateway.New(mgr), nil
 		},
 		InteractiveFn: func(mgr *adb.Manager, cfg config.Config) error {
-			model := tui.NewModel(mgr, cfg)
+			model := tui.NewModelWithStores(mgr, cfg, cStore, sStore)
 			p := tea.NewProgram(model, tea.WithAltScreen())
 			_, err := p.Run()
 			return err
@@ -130,17 +138,14 @@ func (a *App) Run(args []string) int {
 	case "sleep":
 		return a.handleSleep(serial, cmdArgs, jsonOutput)
 
-	case "type":
-		return a.handleType(serial, cmdArgs, jsonOutput)
-
 	case "combo":
 		return a.handleCombo(serial, cmdArgs, jsonOutput)
 
-	case "raw":
-		return a.handleRaw(serial, cmdArgs, jsonOutput)
+	case "quick", "q":
+		return a.handleQuick(serial, cmdArgs, jsonOutput)
 
-	case "creds":
-		return a.handleCreds(cfg, cmdArgs, jsonOutput)
+	case "snippets", "snippet":
+		return a.handleSnippets(cmdArgs, jsonOutput)
 
 	case "devices", "device":
 		return a.handleDevices(cfg, serial, cmdArgs, jsonOutput)
@@ -272,6 +277,13 @@ func (a *App) handleDoctor(cfg config.Config, serial string, jsonOutput bool) in
 		return 2
 	}
 
+	snipCount := 0
+	if sStore := a.snippetStore(); sStore != nil {
+		if list, _ := sStore.List(); len(list) > 0 {
+			snipCount = len(list)
+		}
+	}
+
 	if jsonOutput {
 		reportMap := map[string]interface{}{
 			"version":             report.Version,
@@ -291,6 +303,7 @@ func (a *App) handleDoctor(cfg config.Config, serial string, jsonOutput bool) in
 			"keychain_available":  report.KeychainAvailable,
 			"cached_user":         report.CachedUser,
 			"has_cached_password": report.HasCachedPassword,
+			"snippets_count":      snipCount,
 		}
 		data, _ := json.MarshalIndent(reportMap, "", "  ")
 		fmt.Fprintln(a.Stdout, string(data))
@@ -301,6 +314,7 @@ func (a *App) handleDoctor(cfg config.Config, serial string, jsonOutput bool) in
 	for _, chk := range report.Checks {
 		a.printCheck(chk.Name, chk.Pass, chk.Detail)
 	}
+	a.printCheck("Snippets Subsystem", snipCount > 0, fmt.Sprintf("%d snippets loaded", snipCount))
 
 	if report.GatewayConnected {
 		fmt.Fprintln(a.Stdout, "\nAll systems operational! GhostHID is ready.")
@@ -322,8 +336,9 @@ func (a *App) handleLogin(cfg config.Config, serial string, args []string, jsonO
 	fs := flag.NewFlagSet("login", flag.ContinueOnError)
 	userFlag := fs.String("u", "", "Username")
 	passFlag := fs.String("p", "", "Password")
-	saveFlag := fs.Bool("save", false, "Save to Keychain")
+	saveFlag := fs.Bool("save", false, "Save credentials securely in Keychain")
 	fs.SetOutput(a.Stderr)
+
 	if err := fs.Parse(args); err != nil {
 		return 1
 	}
@@ -331,10 +346,27 @@ func (a *App) handleLogin(cfg config.Config, serial string, args []string, jsonO
 	username := *userFlag
 	password := *passFlag
 
+	// Resolve from SnippetStore first
+	sStore := a.snippetStore()
+	var userFromSnip, passFromSnip string
+	if sStore != nil {
+		if u, ok, _ := sStore.Get("username"); ok {
+			userFromSnip = u.Value
+		}
+		if p, ok, _ := sStore.Get("password"); ok {
+			passFromSnip = p.Value
+		}
+	}
+
+	if username == "" {
+		username = userFromSnip
+	}
 	if username == "" {
 		username = cfg.DefaultUser
 	}
-
+	if password == "" {
+		password = passFromSnip
+	}
 	if password == "" && username != "" && a.Vault != nil && a.Vault.IsAvailable() {
 		p, err := a.Vault.Get(username)
 		if err == nil {
@@ -343,12 +375,30 @@ func (a *App) handleLogin(cfg config.Config, serial string, args []string, jsonO
 	}
 
 	if username == "" || password == "" {
-		fmt.Fprintf(a.Stderr, "Error: Username and Password required. Provide -u and -p or save them first with 'ghid creds set'.\n")
+		if jsonOutput {
+			res, _ := json.Marshal(map[string]interface{}{
+				"status":  "error",
+				"message": "Username and password snippets are empty. Please set them using: ghid snippets set username <val> and ghid snippets set password <val> --secure",
+			})
+			fmt.Fprintln(a.Stdout, string(res))
+		} else {
+			fmt.Fprintln(a.Stderr, "✖ Error: Username and password snippets are empty.")
+			fmt.Fprintln(a.Stderr, "  Please set your snippet values:")
+			fmt.Fprintln(a.Stderr, "    ghid snippets set username <your-username>")
+			fmt.Fprintln(a.Stderr, "    ghid snippets set password <your-password> --secure")
+			fmt.Fprintln(a.Stderr, "  Or pass them directly: ghid login -u <user> -p <pass>")
+		}
 		return 1
 	}
 
-	if *saveFlag && a.Vault != nil && a.Vault.IsAvailable() {
-		_ = a.Vault.Set(username, password)
+	if *saveFlag {
+		if sStore != nil {
+			_, _ = sStore.Set("username", username, false)
+			_, _ = sStore.Set("password", password, true)
+		}
+		if a.Vault != nil && a.Vault.IsAvailable() {
+			_ = a.Vault.Set(username, password)
+		}
 		cfg.DefaultUser = username
 		_ = a.ConfigStore.Save(cfg)
 	}
@@ -467,27 +517,93 @@ func (a *App) handleSleep(serial string, args []string, jsonOutput bool) int {
 	return 0
 }
 
-func (a *App) handleType(serial string, args []string, jsonOutput bool) int {
+func (a *App) handleQuick(serial string, args []string, jsonOutput bool) int {
 	if len(args) == 0 {
-		fmt.Fprintf(a.Stderr, "Usage: ghid type <text...>\n")
+		fmt.Fprintf(a.Stderr, "Usage: ghid quick <text...> or ghid quick --raw <16-hex-chars>\n")
 		return 1
 	}
-	text := strings.Join(args, " ")
+
+	isRaw := false
+	var filtered []string
+	for _, arg := range args {
+		if arg == "--raw" || arg == "-r" {
+			isRaw = true
+		} else {
+			filtered = append(filtered, arg)
+		}
+	}
+
+	if len(filtered) == 0 {
+		fmt.Fprintf(a.Stderr, "Usage: ghid quick <text...> or ghid quick --raw <16-hex-chars>\n")
+		return 1
+	}
+
+	payload := strings.Join(filtered, " ")
+	if !isRaw && strings.HasPrefix(strings.ToLower(payload), "raw:") {
+		isRaw = true
+		payload = strings.TrimSpace(payload[4:])
+	} else if strings.HasPrefix(strings.ToLower(payload), "type:") {
+		isRaw = false
+		payload = strings.TrimSpace(payload[5:])
+	}
+
 	gw, err := a.GatewayFactory(serial)
 	if err != nil {
-		fmt.Fprintf(a.Stderr, "Error: %v\n", err)
+		if jsonOutput {
+			res, _ := json.Marshal(map[string]interface{}{"status": "error", "error": err.Error()})
+			fmt.Fprintln(a.Stdout, string(res))
+		} else {
+			fmt.Fprintf(a.Stderr, "Error: %v\n", err)
+		}
 		return 1
 	}
-	err = gw.Type(text)
+
+	if isRaw {
+		cleanHex := strings.ReplaceAll(payload, " ", "")
+		if len(cleanHex) != 16 {
+			if jsonOutput {
+				res, _ := json.Marshal(map[string]interface{}{"status": "error", "error": "raw HID report must be exactly 16 hexadecimal characters (8 bytes)"})
+				fmt.Fprintln(a.Stdout, string(res))
+			} else {
+				fmt.Fprintf(a.Stderr, "Error: Raw HID report must be exactly 16 hexadecimal characters (8 bytes), got %d: %q\n", len(cleanHex), cleanHex)
+			}
+			return 1
+		}
+		err = gw.Raw(cleanHex)
+		if err != nil {
+			if jsonOutput {
+				res, _ := json.Marshal(map[string]interface{}{"status": "error", "error": err.Error()})
+				fmt.Fprintln(a.Stdout, string(res))
+			} else {
+				fmt.Fprintf(a.Stderr, "Raw report failed: %v\n", err)
+			}
+			return 1
+		}
+		if jsonOutput {
+			res, _ := json.Marshal(map[string]interface{}{"status": "success", "mode": "raw", "raw": cleanHex})
+			fmt.Fprintln(a.Stdout, string(res))
+		} else {
+			fmt.Fprintf(a.Stdout, "✔ Dispatched raw HID report: %s\n", cleanHex)
+		}
+		return 0
+	}
+
+	// Default: Type text
+	err = gw.Type(payload)
 	if err != nil {
-		fmt.Fprintf(a.Stderr, "Type failed: %v\n", err)
+		if jsonOutput {
+			res, _ := json.Marshal(map[string]interface{}{"status": "error", "error": err.Error()})
+			fmt.Fprintln(a.Stdout, string(res))
+		} else {
+			fmt.Fprintf(a.Stderr, "Type failed: %v\n", err)
+		}
 		return 1
 	}
 	if jsonOutput {
-		res, _ := json.Marshal(map[string]interface{}{"status": "success", "typed": text})
+		res, _ := json.Marshal(map[string]interface{}{"status": "success", "mode": "type", "typed": payload})
 		fmt.Fprintln(a.Stdout, string(res))
 	} else {
-		fmt.Fprintf(a.Stdout, "✔ Typed text (%d characters)\n", len(text))
+		fmt.Fprintf(a.Stdout, "✔ Typed text (%d characters)\n", len(payload))
 	}
 	return 0
 }
@@ -514,6 +630,40 @@ func (a *App) handleCombo(serial string, args []string, jsonOutput bool) int {
 	case "list", "ls":
 		return a.listCombos(store, jsonOutput)
 
+	case "fav", "favorite":
+		if len(args) < 2 {
+			return a.comboFail(jsonOutput, "usage: ghid combo fav <name>")
+		}
+		name := strings.Join(args[1:], " ")
+		list, ok, err := store.ToggleFavorite(name)
+		if err != nil {
+			return a.comboFail(jsonOutput, "%v", err)
+		}
+		if !ok {
+			return a.comboFail(jsonOutput, "no saved combo named %q", name)
+		}
+		var c combos.Combo
+		for _, item := range list {
+			if strings.EqualFold(item.Name, strings.TrimSpace(name)) {
+				c = item
+				break
+			}
+		}
+		if jsonOutput {
+			writeJSONIndent(a.Stdout, map[string]interface{}{
+				"status":   "success",
+				"name":     c.Name,
+				"favorite": c.Favorite,
+			})
+		} else {
+			status := "unpinned"
+			if c.Favorite {
+				status = "pinned to favorites (❤️)"
+			}
+			fmt.Fprintf(a.Stdout, "✔ Combo %q is now %s\n", c.Name, status)
+		}
+		return 0
+
 	case "schema", "tokens", "capabilities":
 		return a.handleComboSchema(store, jsonOutput)
 
@@ -525,30 +675,43 @@ func (a *App) handleCombo(serial string, args []string, jsonOutput bool) int {
 
 	case "save", "add":
 		if len(args) < 3 {
-			return a.comboFail(jsonOutput, "usage: ghid combo save <name> <keys...> (example: ghid combo save \"Open Run\" \"win+r\")")
+			return a.comboFail(jsonOutput, "usage: ghid combo save <name> <keys...> [--fav]")
 		}
 		name := args[1]
-		keys := strings.Join(args[2:], " ")
+		isFav := false
+		var keyTokens []string
+		for _, arg := range args[2:] {
+			if arg == "--fav" || arg == "--favorite" {
+				isFav = true
+			} else {
+				keyTokens = append(keyTokens, arg)
+			}
+		}
+		keys := strings.Join(keyTokens, " ")
 		_, existed := store.Find(name)
-		list, err := store.Add(combos.Combo{Name: name, Keys: keys})
+		list, err := store.Add(combos.Combo{Name: name, Keys: keys, Favorite: isFav})
 		if err != nil {
 			return a.comboFail(jsonOutput, "%v", err)
 		}
 		if jsonOutput {
-			saved := combos.Combo{Name: name, Keys: keys}
+			saved := combos.Combo{Name: name, Keys: keys, Favorite: isFav}
 			for _, c := range list {
 				if strings.EqualFold(c.Name, name) {
 					saved = c
 					break
 				}
 			}
-			writeComboJSON(a.Stdout, map[string]interface{}{
+			writeJSONIndent(a.Stdout, map[string]interface{}{
 				"status":  "saved",
 				"updated": existed,
 				"combo":   saved,
 			})
 		} else {
-			fmt.Fprintf(a.Stdout, "✔ Saved combo %q (%s)\n", name, keys)
+			favMsg := ""
+			if isFav {
+				favMsg = " [pinned ❤️]"
+			}
+			fmt.Fprintf(a.Stdout, "✔ Saved combo %q (%s)%s\n", name, keys, favMsg)
 		}
 		return 0
 
@@ -624,7 +787,7 @@ func (a *App) handleCombo(serial string, args []string, jsonOutput bool) int {
 func (a *App) comboFail(jsonOutput bool, format string, args ...interface{}) int {
 	message := fmt.Sprintf(format, args...)
 	if jsonOutput {
-		writeComboJSON(a.Stdout, map[string]interface{}{
+		writeJSONIndent(a.Stdout, map[string]interface{}{
 			"status": "error",
 			"error":  message,
 		})
@@ -644,15 +807,17 @@ func (a *App) handleComboSchema(store *combos.Store, jsonOutput bool) int {
 		"step_types": []string{
 			"keyboard chord: ctrl+shift+esc",
 			"mouse gesture: click-left, scroll-up",
+			"variable injection: $USERNAME, $PASSWORD, ${PIN}",
 			"typed text: type:rustdesk or type:\"rust desk\"",
 		},
 		"keyboard":      hid.WindowsKeyboardTokens(),
 		"mouse":         hid.MouseActions(),
 		"text_prefixes": []string{"type:", "text:", "type ", "text "},
-		"example":       "win+s ->{0.7} type:rustdesk ->{0.4} enter",
+		"example":       "ctrl+alt+del ->{1.0} esc ->{0.8} $USERNAME ->{0.8} tab ->{0.8} $PASSWORD ->{0.8} enter",
 		"commands": map[string]string{
 			"list":     "ghid combo list --json",
-			"save":     "ghid combo save \"Name\" \"keys\" --json",
+			"fav":      "ghid combo fav <name> --json",
+			"save":     "ghid combo save \"Name\" \"keys\" [--fav] --json",
 			"send":     "ghid combo send \"Name\" --json",
 			"delete":   "ghid combo delete \"Name\" --json",
 			"validate": "ghid combo validate \"keys\" --json",
@@ -660,17 +825,18 @@ func (a *App) handleComboSchema(store *combos.Store, jsonOutput bool) int {
 	}
 
 	if jsonOutput {
-		writeComboJSON(a.Stdout, schema)
+		writeJSONIndent(a.Stdout, schema)
 		return 0
 	}
 
-	fmt.Fprintln(a.Stdout, "\n🎹 COMBO GRAMMAR · Windows keyboard + mouse + text")
+	fmt.Fprintln(a.Stdout, "\n🎹 COMBO GRAMMAR · Windows keyboard + mouse + text + variables")
 	fmt.Fprintf(a.Stdout, "  Storage: %s\n", store.Path)
 	fmt.Fprintln(a.Stdout, "  Chain:   step ->{seconds} step")
 	fmt.Fprintf(a.Stdout, "  Example: %s\n\n", schema["example"])
-	fmt.Fprintln(a.Stdout, "  Keyboard:", strings.Join(hid.WindowsKeyboardTokens(), " "))
-	fmt.Fprintln(a.Stdout, "  Mouse:   ", strings.Join(hid.MouseActions(), " "))
-	fmt.Fprintln(a.Stdout, "  Text:     type:rustdesk  or  type:\"rust desk\"")
+	fmt.Fprintln(a.Stdout, "  Variables: $USERNAME, $PASSWORD (or ${NAME})")
+	fmt.Fprintln(a.Stdout, "  Keyboard: ", strings.Join(hid.WindowsKeyboardTokens(), " "))
+	fmt.Fprintln(a.Stdout, "  Mouse:    ", strings.Join(hid.MouseActions(), " "))
+	fmt.Fprintln(a.Stdout, "  Text:      type:rustdesk  or  type:\"rust desk\"")
 	return 0
 }
 
@@ -678,7 +844,7 @@ func (a *App) handleComboValidate(keys string, jsonOutput bool) int {
 	steps, err := hid.DescribeSequence(keys)
 	if err != nil {
 		if jsonOutput {
-			writeComboJSON(a.Stdout, map[string]interface{}{
+			writeJSONIndent(a.Stdout, map[string]interface{}{
 				"valid": false,
 				"keys":  keys,
 				"error": err.Error(),
@@ -692,7 +858,7 @@ func (a *App) handleComboValidate(keys string, jsonOutput bool) int {
 	// Apply the same Windows-only and ASCII rules used when saving.
 	if err := combos.Validate(keys); err != nil {
 		if jsonOutput {
-			writeComboJSON(a.Stdout, map[string]interface{}{
+			writeJSONIndent(a.Stdout, map[string]interface{}{
 				"valid": false,
 				"keys":  keys,
 				"error": err.Error(),
@@ -704,7 +870,7 @@ func (a *App) handleComboValidate(keys string, jsonOutput bool) int {
 	}
 
 	if jsonOutput {
-		writeComboJSON(a.Stdout, map[string]interface{}{
+		writeJSONIndent(a.Stdout, map[string]interface{}{
 			"valid": true,
 			"keys":  keys,
 			"steps": steps,
@@ -727,6 +893,22 @@ func (a *App) comboStore() *combos.Store {
 	return combos.NewStore(filepath.Join(dir, "combos.json"))
 }
 
+// snippetStore returns the configured snippet store or defaults one.
+func (a *App) snippetStore() *snippets.Store {
+	if a.SnippetStore != nil {
+		return a.SnippetStore
+	}
+	dir := filepath.Dir(config.GetConfigPath())
+	if a.ConfigStore != nil && a.ConfigStore.Path != "" {
+		dir = filepath.Dir(a.ConfigStore.Path)
+	}
+	return snippets.NewStore(filepath.Join(dir, "snippets.json"), a.Vault)
+}
+
+func (a *App) snippetResolver() hid.VariableResolver {
+	return a.snippetStore().Resolver()
+}
+
 func stdinIsTerminal() bool {
 	info, err := os.Stdin.Stat()
 	if err != nil {
@@ -744,7 +926,7 @@ func (a *App) openComboStudio(store *combos.Store, serial string) int {
 		if err != nil {
 			return err
 		}
-		return gw.Combo(combo.Keys)
+		return gw.ComboWithResolver(combo.Keys, a.snippetResolver())
 	}
 	if err := a.ComboStudioFn(store, send); err != nil {
 		fmt.Fprintf(a.Stderr, "Combo studio error: %v\n", err)
@@ -760,11 +942,11 @@ func (a *App) listCombos(store *combos.Store, jsonOutput bool) int {
 		return 1
 	}
 	if jsonOutput {
-		writeComboJSON(a.Stdout, list)
+		writeJSONIndent(a.Stdout, list)
 		return 0
 	}
 
-	fmt.Fprintln(a.Stdout, "\n🎹 COMBO STUDIO · Windows keyboard + mouse")
+	fmt.Fprintln(a.Stdout, "\n🎹 COMBO STUDIO · Windows keyboard + mouse + variables")
 	if len(list) == 0 {
 		fmt.Fprintln(a.Stdout, "  No combos saved yet.")
 		fmt.Fprintln(a.Stdout, "  Create one with 'ghid combo' (interactive) or:")
@@ -773,14 +955,140 @@ func (a *App) listCombos(store *combos.Store, jsonOutput bool) int {
 		return 0
 	}
 	for i, c := range list {
-		fmt.Fprintf(a.Stdout, "  %2d. %-28s %s\n", i+1, c.Name, c.Keys)
+		favIcon := "  "
+		if c.Favorite {
+			favIcon = "❤️ "
+		}
+		fmt.Fprintf(a.Stdout, "  %2d. %s%-26s %s\n", i+1, favIcon, c.Name, c.Keys)
 	}
-	fmt.Fprintf(a.Stdout, "\n  Send one with 'ghid combo send <name>' or open the studio: ghid combo\n\n")
+	fmt.Fprintf(a.Stdout, "\n  Send one with 'ghid combo send <name>' or toggle favorite with 'ghid combo fav <name>'\n\n")
 	return 0
 }
 
+func (a *App) handleSnippets(args []string, jsonOutput bool) int {
+	store := a.snippetStore()
+	if len(args) == 0 {
+		args = []string{"list"}
+	}
+
+	subcmd := args[0]
+	switch subcmd {
+	case "list", "ls":
+		list, err := store.List()
+		if err != nil {
+			fmt.Fprintf(a.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		if jsonOutput {
+			writeJSONIndent(a.Stdout, list)
+			return 0
+		}
+		fmt.Fprintln(a.Stdout, "\n📋 SNIPPETS LIBRARY · Variables & Texts")
+		if len(list) == 0 {
+			fmt.Fprintln(a.Stdout, "  No snippets found.")
+			return 0
+		}
+		fmt.Fprintf(a.Stdout, "  %-3s %-20s %-26s %s\n", "#", "VARIABLE", "VALUE", "SECURITY")
+		for i, s := range list {
+			varName := "$" + strings.ToUpper(s.Name)
+			displayVal := s.MaskedValue()
+			sec := "[PLAIN]"
+			if s.Secure {
+				sec = "[KEYCHAIN 🔒]"
+			}
+			fmt.Fprintf(a.Stdout, "  %2d. %-20s %-26s %s\n", i+1, varName, displayVal, sec)
+		}
+		fmt.Fprintln(a.Stdout)
+		return 0
+
+	case "get":
+		if len(args) < 2 {
+			fmt.Fprintf(a.Stderr, "Usage: ghid snippets get <name>\n")
+			return 1
+		}
+		name := args[1]
+		sn, ok, err := store.Get(name)
+		if err != nil {
+			fmt.Fprintf(a.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		if !ok {
+			fmt.Fprintf(a.Stderr, "Snippet %q not found.\n", name)
+			return 1
+		}
+		if jsonOutput {
+			writeJSONIndent(a.Stdout, sn)
+		} else {
+			fmt.Fprintf(a.Stdout, "%s\n", sn.Value)
+		}
+		return 0
+
+	case "set":
+		if len(args) < 3 {
+			fmt.Fprintf(a.Stderr, "Usage: ghid snippets set <name> <value> [--secure]\n")
+			return 1
+		}
+		name := args[1]
+		secure := false
+		var valParts []string
+		for _, arg := range args[2:] {
+			if arg == "--secure" || arg == "-s" {
+				secure = true
+			} else {
+				valParts = append(valParts, arg)
+			}
+		}
+		val := strings.Join(valParts, " ")
+		sn, err := store.Set(name, val, secure)
+		if err != nil {
+			fmt.Fprintf(a.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		if jsonOutput {
+			writeJSONIndent(a.Stdout, sn)
+		} else {
+			status := "plain text"
+			if secure {
+				status = "secure (stored in Keychain)"
+			}
+			fmt.Fprintf(a.Stdout, "✔ Snippet $%s saved (%s)\n", strings.ToUpper(sn.Name), status)
+		}
+		return 0
+
+	case "delete", "rm":
+		if len(args) < 2 {
+			fmt.Fprintf(a.Stderr, "Usage: ghid snippets delete <name>\n")
+			return 1
+		}
+		name := args[1]
+		if strings.EqualFold(name, "username") || strings.EqualFold(name, "password") {
+			fmt.Fprintf(a.Stderr, "Error: Default snippet %q cannot be deleted (clear value using 'ghid snippets set %s \"\"' instead)\n", name, name)
+			return 1
+		}
+		_, deleted, err := store.Delete(name)
+		if err != nil {
+			fmt.Fprintf(a.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		if !deleted {
+			fmt.Fprintf(a.Stderr, "Snippet %q not found.\n", name)
+			return 1
+		}
+		if jsonOutput {
+			writeJSONIndent(a.Stdout, map[string]interface{}{"status": "deleted", "name": name})
+		} else {
+			fmt.Fprintf(a.Stdout, "✔ Deleted snippet %q\n", name)
+		}
+		return 0
+
+	default:
+		fmt.Fprintf(a.Stderr, "Unknown snippets subcommand %q. Usage: ghid snippets [list|get|set|delete]\n", subcmd)
+		return 1
+	}
+}
+
 // writeComboJSON keeps "->" readable instead of escaping it to -\u003e.
-func writeComboJSON(w io.Writer, value interface{}) {
+func writeJSONIndent(w io.Writer, value interface{}) {
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
 	enc.SetIndent("", "  ")
@@ -809,7 +1117,7 @@ func (a *App) dispatchCombo(serial, name, keys string, jsonOutput bool) int {
 	if err != nil {
 		return a.comboFail(jsonOutput, "%v", err)
 	}
-	err = gw.Combo(keys)
+	err = gw.ComboWithResolver(keys, a.snippetResolver())
 	if err != nil {
 		return a.comboFail(jsonOutput, "combo failed: %v", err)
 	}
@@ -826,96 +1134,6 @@ func (a *App) dispatchCombo(serial, name, keys string, jsonOutput bool) int {
 		fmt.Fprintf(a.Stdout, "✔ Dispatched combo: %s\n", keys)
 	}
 	return 0
-}
-
-func (a *App) handleRaw(serial string, args []string, jsonOutput bool) int {
-	if len(args) == 0 {
-		fmt.Fprintf(a.Stderr, "Usage: ghid raw <16-hex-chars>\n")
-		return 1
-	}
-	hexStr := args[0]
-	gw, err := a.GatewayFactory(serial)
-	if err != nil {
-		fmt.Fprintf(a.Stderr, "Error: %v\n", err)
-		return 1
-	}
-	err = gw.Raw(hexStr)
-	if err != nil {
-		fmt.Fprintf(a.Stderr, "Raw report failed: %v\n", err)
-		return 1
-	}
-	if jsonOutput {
-		res, _ := json.Marshal(map[string]interface{}{"status": "success", "raw": hexStr})
-		fmt.Fprintln(a.Stdout, string(res))
-	} else {
-		fmt.Fprintf(a.Stdout, "✔ Dispatched raw HID report: %s\n", hexStr)
-	}
-	return 0
-}
-
-func (a *App) handleCreds(cfg config.Config, args []string, jsonOutput bool) int {
-	if len(args) == 0 {
-		args = []string{"status"}
-	}
-	action := args[0]
-
-	switch action {
-	case "status":
-		hasPass := false
-		if cfg.DefaultUser != "" && a.Vault != nil && a.Vault.IsAvailable() {
-			if _, err := a.Vault.Get(cfg.DefaultUser); err == nil {
-				hasPass = true
-			}
-		}
-		if jsonOutput {
-			res, _ := json.Marshal(map[string]interface{}{
-				"default_user":          cfg.DefaultUser,
-				"has_keychain_password": hasPass,
-			})
-			fmt.Fprintln(a.Stdout, string(res))
-		} else {
-			user := cfg.DefaultUser
-			if user == "" {
-				user = "(none)"
-			}
-			fmt.Fprintf(a.Stdout, "Stored User: %s\nKeychain Password: %v\n", user, hasPass)
-		}
-		return 0
-
-	case "set":
-		fs := flag.NewFlagSet("creds set", flag.ContinueOnError)
-		user := fs.String("u", "", "Username")
-		pass := fs.String("p", "", "Password")
-		fs.SetOutput(a.Stderr)
-		if err := fs.Parse(args[1:]); err != nil {
-			return 1
-		}
-
-		if *user == "" || *pass == "" {
-			fmt.Fprintf(a.Stderr, "Usage: ghid creds set -u <user> -p <pass>\n")
-			return 1
-		}
-		if a.Vault != nil && a.Vault.IsAvailable() {
-			_ = a.Vault.Set(*user, *pass)
-		}
-		cfg.DefaultUser = *user
-		_ = a.ConfigStore.Save(cfg)
-		fmt.Fprintf(a.Stdout, "✔ Credentials saved for '%s'.\n", *user)
-		return 0
-
-	case "clear":
-		if cfg.DefaultUser != "" && a.Vault != nil && a.Vault.IsAvailable() {
-			_ = a.Vault.Delete(cfg.DefaultUser)
-		}
-		cfg.DefaultUser = ""
-		_ = a.ConfigStore.Save(cfg)
-		fmt.Fprintln(a.Stdout, "✔ Cleared stored credentials.")
-		return 0
-
-	default:
-		fmt.Fprintf(a.Stderr, "Unknown creds action: %s\n", action)
-		return 1
-	}
 }
 
 func (a *App) handleDevices(cfg config.Config, serial string, args []string, jsonOutput bool) int {
@@ -936,11 +1154,11 @@ func (a *App) handleDevices(cfg config.Config, serial string, args []string, jso
 			for _, d := range cfg.Devices {
 				sel := " "
 				if d.Selected {
-					sel = "● [ACTIVE]"
+					sel = "[SELECTED]"
 				}
 				osIcon := "🪟"
 				if d.Platform == "macos" {
-					osIcon = "🍎"
+					osIcon = "🍏"
 				}
 				fmt.Fprintf(a.Stdout, "  %s %-10s %-20s %-20s %s\n", osIcon, fmt.Sprintf("[%s]", d.Platform), d.Name, d.Address, sel)
 			}
@@ -1134,33 +1352,46 @@ func (a *App) handleFileLog(serial string) int {
 }
 
 func (a *App) handleBuild() int {
-	gw, err := a.GatewayFactory("")
-	if err != nil {
-		fmt.Fprintf(a.Stderr, "Error: %v\n", err)
-		return 1
-	}
-	fmt.Fprintln(a.Stdout, "🔨 Compiling GhostHID APK from source...")
-	err = gw.BuildApk()
+	fmt.Fprintln(a.Stdout, "Building GhostHID APK (./gradlew assembleDebug)...")
+	cmd := exec.Command("./gradlew", "assembleDebug")
+	cmd.Stdout = a.Stdout
+	cmd.Stderr = a.Stderr
+	err := cmd.Run()
 	if err != nil {
 		fmt.Fprintf(a.Stderr, "Build failed: %v\n", err)
 		return 1
 	}
-	fmt.Fprintln(a.Stdout, "✔ Build complete! APK generated at build/ghost-hid.apk")
+	fmt.Fprintln(a.Stdout, "✔ Build successful: app/build/outputs/apk/debug/app-debug.apk")
 	return 0
 }
 
 func (a *App) handleInstallApk(serial string, args []string) int {
-	var apkPath string
+	apkPath := ""
 	if len(args) > 0 {
 		apkPath = args[0]
+	} else {
+		candidates := []string{
+			"build/ghost-hid.apk",
+			"ghost-hid.apk",
+			"app/build/outputs/apk/debug/app-debug.apk",
+		}
+		for _, cand := range candidates {
+			if _, err := os.Stat(cand); err == nil {
+				apkPath = cand
+				break
+			}
+		}
+		if apkPath == "" {
+			apkPath = "build/ghost-hid.apk"
+		}
 	}
-	gw, err := a.GatewayFactory(serial)
+	mgr, err := adb.NewManager(serial)
 	if err != nil {
 		fmt.Fprintf(a.Stderr, "Error: %v\n", err)
 		return 1
 	}
-	fmt.Fprintln(a.Stdout, "📲 Installing GhostHID APK onto device...")
-	err = gw.InstallApk(apkPath)
+	fmt.Fprintf(a.Stdout, "Installing %s onto Android device...\n", apkPath)
+	err = mgr.InstallApk(apkPath)
 	if err != nil {
 		fmt.Fprintf(a.Stderr, "Install failed: %v\n", err)
 		return 1
@@ -1170,13 +1401,23 @@ func (a *App) handleInstallApk(serial string, args []string) int {
 }
 
 func (a *App) handleInstallBin() int {
-	home, _ := os.UserHomeDir()
-	binDir := filepath.Join(home, ".local", "bin")
-	_ = os.MkdirAll(binDir, 0755)
-
 	exePath, err := os.Executable()
 	if err != nil {
-		exePath, _ = filepath.Abs(os.Args[0])
+		fmt.Fprintf(a.Stderr, "Failed to resolve current binary path: %v\n", err)
+		return 1
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(a.Stderr, "Failed to resolve home dir: %v\n", err)
+		return 1
+	}
+
+	binDir := filepath.Join(home, ".local", "bin")
+	err = os.MkdirAll(binDir, 0755)
+	if err != nil {
+		fmt.Fprintf(a.Stderr, "Failed to create ~/.local/bin: %v\n", err)
+		return 1
 	}
 
 	symlinkPath := filepath.Join(binDir, "ghid")
@@ -1233,38 +1474,42 @@ Commands:
   status            Query gateway & Bluetooth connection status (--json supported)
   doctor            Comprehensive hardware & network diagnostic health check
   devices           Manage registered target devices (list, add, select, delete)
+  snippets          Manage text & secret variables ($USERNAME, $PASSWORD, custom)
+  snippets list     List all snippets with masked values (--json supported)
+  snippets get <name> Get snippet value
+  snippets set <name> <value> [--secure] Save or update snippet
+  snippets delete <name> Delete a snippet
   login             Automated Windows unlock & credential injection
   lock              Instant Windows lock screen (Win + L)
   sleep             Windows sleep sequence + countdown exit
-  type <text...>    Type text string through virtual keyboard
   combo [keys]      Interactive Windows combo studio (create, send, delete)
   combo list        List saved combos (--json supported)
+  combo fav <name>  Toggle favorite (pin with ❤️ to top of dashboard action list)
   combo schema      Grammar + every accepted token (JSON for AI agents)
   combo validate <keys>  Validate without saving or sending
-  combo save <name> <keys...>   Save a named combo (keyboard + mouse + text)
+  combo save <name> <keys...> [--fav]   Save a named combo (keyboard + mouse + text + $VAR)
   combo send <name> Send a saved combo
   combo delete <name> [-f]      Delete a combo (--json skips confirmation)
   combo <keys>      Send a one-shot shortcut (e.g. 'win+d', 'ctrl+alt+del')
   combo mouse       Send a mouse gesture (click-left, scroll-up, double-click)
-  raw <hex16>       Transmit raw 8-byte HID keyboard report
-  creds             Manage stored credentials in macOS Keychain (status, set, clear)
-  connect [addr]    Connect Bluetooth HID to target laptop
+  quick <text...>   Quick send keystrokes (default: type; use --raw for 16-hex HID report)
+  connect [addr]    Connect Bluetooth to target laptop MAC
   disconnect        Disconnect Bluetooth HID
-  unpair            Unpair Bluetooth bonding
-  start             Start Android foreground service
-  stop              Stop Android foreground service
-  restart           Restart Android foreground service
-  logs              View recent Logcat diagnostic logs
-  filelog           Read persistent gateway.log from device
-  build             Compile APK from source
-  install-apk       Install APK onto connected phone
-  install-bin       Symlink ghid into ~/.local/bin and install man page
-  uninstall-bin     Remove ghid symlink and man page
-  man               Display formatted manual page
+  unpair            Unpair phone Bluetooth bond
+  start             Start Android background service
+  stop              Stop Android service
+  restart           Restart Android service
+  logs              Live stream Android Logcat
+  filelog           Dump persisted file log
+  build             Assemble Android debug APK
+  install-apk       Install APK via adb
+  install-bin       Install ghid binary into ~/.local/bin and manpage
+  uninstall-bin     Uninstall ghid binary and manpage
+  man               Open manual page
+  version (-v)      Print version
 
-Options:
-  -s, --serial      Target specific Android device serial or IP:PORT
-  --json            Output machine-readable JSON format
-  -v, --version     Show version number
-  -h, --help        Show this help message`)
+Global Flags:
+  -s, --serial <id> Explicit Android target ADB serial
+  --json            Structured JSON output for scripts & AI agents
+  -h, --help        Show this help text`)
 }

@@ -271,6 +271,7 @@ type ComboStep struct {
 	KeyCode  byte          // Resolved primary keycode
 	Mouse    *MouseAction  // Non-nil when this step is a mouse gesture
 	Text     string        // Non-empty when this step types a literal string
+	Variable string        // Non-empty when this step references a snippet variable, e.g. "USERNAME"
 	Delay    time.Duration // Pause duration after transmitting this step
 }
 

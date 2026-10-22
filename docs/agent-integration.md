@@ -133,16 +133,122 @@ Returns all saved combos in the local library (`~/.config/ghid/combos.json`).
 ```json
 [
   {
-    "name": "Open Terminal",
-    "keys": "win+x ->{0.3} i",
+    "name": "Login",
+    "keys": "ctrl+alt+del ->{1.0} esc ->{0.8} $USERNAME ->{0.8} tab ->{0.8} $PASSWORD ->{0.8} enter",
+    "favorite": true,
     "created_at": "2026-10-23T01:00:00Z"
   },
   {
-    "name": "Refresh Page",
-    "keys": "ctrl+f5",
+    "name": "Open Terminal",
+    "keys": "win+x ->{0.3} i",
+    "favorite": false,
     "created_at": "2026-10-23T01:05:00Z"
   }
 ]
+```
+
+---
+
+### `ghid combo fav <name> --json`
+Toggles the pinned favorite status (`❤️`) of a combo.
+
+#### Response
+```json
+{
+  "status": "success",
+  "name": "Open Terminal",
+  "favorite": true
+}
+```
+
+---
+
+### `ghid quick <text...> [--raw] --json`
+Unified ad-hoc transmission. Types text strings through the virtual keyboard by default, or transmits raw 8-byte HID reports when `--raw` is specified.
+
+> **Note:** Replaces legacy root `ghid type` and `ghid raw` commands (which have been removed without backward-compatibility aliases).
+
+#### Default Type Mode
+```bash
+ghid quick "Hello World" --json
+```
+```json
+{
+  "status": "success",
+  "mode": "type",
+  "typed": "Hello World"
+}
+```
+
+#### Raw 16-Hex HID Report Mode
+```bash
+ghid quick --raw "08000f0000000000" --json
+```
+```json
+{
+  "status": "success",
+  "mode": "raw",
+  "raw": "08000f0000000000"
+}
+```
+
+---
+
+### `ghid snippets <action> --json`
+Inspects and manages text variables and encrypted secrets stored in `~/.config/ghid/snippets.json` (and macOS Keychain).
+
+#### List Snippets
+```bash
+ghid snippets list --json
+```
+```json
+[
+  {
+    "name": "username",
+    "value": "Administrator",
+    "is_secure": false
+  },
+  {
+    "name": "password",
+    "value": "••••••••",
+    "is_secure": true
+  }
+]
+```
+
+#### Get Snippet
+```bash
+ghid snippets get username --json
+```
+```json
+{
+  "name": "username",
+  "value": "Administrator",
+  "is_secure": false
+}
+```
+
+#### Set Snippet
+```bash
+ghid snippets set api_token "secret_abc123" --secure --json
+```
+```json
+{
+  "status": "success",
+  "name": "api_token",
+  "is_secure": true
+}
+```
+
+#### Delete Snippet
+```bash
+ghid snippets delete api_token --json
+```
+```json
+{
+  "status": "success",
+  "deleted": "api_token"
+}
 ```
 
 ---

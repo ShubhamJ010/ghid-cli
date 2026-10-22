@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/ghost-hid/ghid/internal/keychain"
 )
 
 func (m Model) View() string {
@@ -15,6 +14,10 @@ func (m Model) View() string {
 
 	if m.state == StateComboStudio && m.comboStudio != nil {
 		return m.comboStudio.View()
+	}
+
+	if m.state == StateSnippetStudio && m.snippetStudio != nil {
+		return m.snippetStudio.View()
 	}
 
 	var sb strings.Builder
@@ -38,14 +41,10 @@ func (m Model) View() string {
 		sb.WriteString(m.renderLoginExecuting())
 	case StateSleepCountdown:
 		sb.WriteString(m.renderSleepCountdown())
-	case StateTextInput:
-		sb.WriteString(m.renderTextInput("⌨️ Virtual Keyboard: Type Text"))
+	case StateQuickSend:
+		sb.WriteString(m.renderQuickSend())
 	case StateComboInput:
 		sb.WriteString(m.renderComboInput())
-	case StateRawInput:
-		sb.WriteString(m.renderTextInput("⚙️ Raw 8-Byte HID Report (16 Hex Characters)"))
-	case StateCredsMenu:
-		sb.WriteString(m.renderCredsMenu())
 	case StateDoctorView:
 		sb.WriteString(m.renderDoctorView())
 	case StateDeviceRecovery:
@@ -114,17 +113,25 @@ func (m Model) renderTelemetryCard() string {
 		targetText = fmt.Sprintf("%s [%s]", m.status.Target, m.status.Address)
 	}
 
-	credText := "None (Enter credentials at login)"
-	if m.cfg.DefaultUser != "" {
-		if keychain.IsAvailable() {
-			if _, err := keychain.GetPassword(m.cfg.DefaultUser); err == nil {
-				credText = fmt.Sprintf("%s (Keychain 🔒)", m.cfg.DefaultUser)
-			} else {
-				credText = m.cfg.DefaultUser
+	snipText := "username, password (default)"
+	if m.snippetsStore != nil {
+		u, _, _ := m.snippetsStore.Get("username")
+		p, _, _ := m.snippetsStore.Get("password")
+		if u.Value != "" || p.Value != "" {
+			uVal := u.Value
+			if uVal == "" {
+				uVal = "(unset)"
 			}
+			pVal := "(unset)"
+			if p.Value != "" {
+				pVal = "•••••• (🔒 Keychain)"
+			}
+			snipText = fmt.Sprintf("%s / %s", uVal, pVal)
 		} else {
-			credText = m.cfg.DefaultUser
+			snipText = "username, password (empty • prompt on run)"
 		}
+	} else if m.cfg.DefaultUser != "" {
+		snipText = m.cfg.DefaultUser
 	}
 
 	labelStyle := lipgloss.NewStyle().Foreground(ColorFgMuted).Width(16)
@@ -135,7 +142,7 @@ func (m Model) renderTelemetryCard() string {
 		labelStyle.Render("Phone Device:"), valStyle.Render(devText),
 		labelStyle.Render("Gateway SDP:"), sdpBadge,
 		labelStyle.Render("Target Laptop:"), valStyle.Render(targetText), connBadge,
-		labelStyle.Render("Credentials:"), valStyle.Render(credText),
+		labelStyle.Render("Snippets:"), valStyle.Render(snipText),
 	)
 
 	return CardStyle.Width(64).Render(cardContent)
@@ -149,12 +156,12 @@ func (m Model) renderMenu() string {
 	for i, item := range m.menuItems {
 		var line string
 		keyStr := KeyBadgeStyle.Render(fmt.Sprintf("[%s]", item.Key))
-		titleStr := lipgloss.NewStyle().Bold(true).Width(12).Render(item.Title)
+		titleStr := lipgloss.NewStyle().Bold(true).Width(14).Render(item.Title)
 		descStr := SubtitleStyle.Render(item.Description)
 
 		if i == m.menuIndex {
 			prefix := lipgloss.NewStyle().Foreground(ColorCyan).Bold(true).Render("▶ ")
-			line = MenuSelectedStyle.Width(62).Render(fmt.Sprintf("%s%s %s %s - %s", prefix, keyStr, item.Icon, titleStr, descStr))
+			line = MenuSelectedStyle.Width(64).Render(fmt.Sprintf("%s%s %s %s - %s", prefix, keyStr, item.Icon, titleStr, descStr))
 		} else {
 			prefix := "  "
 			line = MenuItemStyle.Render(fmt.Sprintf("%s%s %s %s - %s", prefix, keyStr, item.Icon, titleStr, descStr))
@@ -174,69 +181,17 @@ func (m Model) renderFooter() string {
 		} else {
 			noticeBox = SuccessStyle.Render(m.notice)
 		}
-		return fmt.Sprintf("\n%s\n\n%s", noticeBox, HelpStyle.Render("↑/↓ or [1-0/d]: Select action • [Enter]: Execute • [q]: Exit"))
+		return fmt.Sprintf("\n%s\n\n%s", noticeBox, HelpStyle.Render("↑/↓ or key: Select action • [Enter]: Execute • [q]: Exit"))
 	}
-	return HelpStyle.Render("↑/↓ or [1-0/d]: Select action • [Enter]: Execute • [q]: Exit")
-}
-
-func (m Model) renderDevicesList() string {
-	var sb strings.Builder
-	title := TitleStyle.Render("💻 Registered Bluetooth Target Devices")
-	sb.WriteString(title)
-	sb.WriteString("\n\n")
-
-	if len(m.cfg.Devices) == 0 {
-		sb.WriteString(SubtitleStyle.Render("  No devices registered yet.\n\n"))
-	} else {
-		for i, dev := range m.cfg.Devices {
-			var osBadge string
-			if dev.Platform == "macos" {
-				osBadge = BadgeMacOS.Render()
-			} else {
-				osBadge = BadgeWindows.Render()
-			}
-
-			nameStr := lipgloss.NewStyle().Bold(true).Width(20).Render(dev.Name)
-			addrStr := lipgloss.NewStyle().Foreground(ColorFgMuted).Width(20).Render(dev.Address)
-
-			var activeBadge string
-			if dev.Selected {
-				activeBadge = " " + BadgeActiveTarget.Render()
-			}
-
-			rowContent := fmt.Sprintf("%s  %s %s%s", osBadge, nameStr, addrStr, activeBadge)
-
-			if i == m.devicesIndex {
-				prefix := lipgloss.NewStyle().Foreground(ColorCyan).Bold(true).Render("▶ ")
-				sb.WriteString(MenuSelectedStyle.Width(64).Render(prefix + rowContent))
-			} else {
-				sb.WriteString("  " + rowContent)
-			}
-			sb.WriteString("\n")
-		}
-	}
-
-	sb.WriteString("\n")
-	if m.notice != "" {
-		if m.isErrorNotice {
-			sb.WriteString(ErrorStyle.Render(m.notice) + "\n\n")
-		} else {
-			sb.WriteString(SuccessStyle.Render(m.notice) + "\n\n")
-		}
-	}
-
-	helper := HelpStyle.Render("[↑/↓]: Navigate • [s/Enter]: Select & Connect • [a]: Add New • [d]: Unregister • [Esc]: Back")
-	sb.WriteString(helper)
-
-	return CardStyle.Width(68).Render(sb.String())
+	return HelpStyle.Render("↑/↓ or key: Select action • [Enter]: Execute • [q]: Exit")
 }
 
 func (m Model) renderRegisterPlatform() string {
 	var sb strings.Builder
-	sb.WriteString(TitleStyle.Render("✨ Register New Device - Step 1 of 3: Choose Operating System"))
+	sb.WriteString(TitleStyle.Render("💻 Target Host Operating System (Step 1 of 3)"))
 	sb.WriteString("\n\n")
 
-	infoText := lipgloss.NewStyle().Foreground(ColorFgLight).Render(
+	infoText := SubtitleStyle.Render(
 		"GhostHID advertises your smartphone as a hardware-level Bluetooth HID Peripheral keyboard\n" +
 			"(using standard L2CAP PSM channels). Windows and macOS require slightly different pairing flows.",
 	)
@@ -299,7 +254,7 @@ func (m Model) renderRegisterGuide() string {
 			KeyBadgeStyle.Render("✦ STEP-BY-STEP PAIRING:"),
 			lipgloss.NewStyle().Bold(true).Render("Settings"),
 			lipgloss.NewStyle().Bold(true).Render("Bluetooth & devices"),
-			lipgloss.NewStyle().Bold(true).Foreground(ColorYellow).Render("Advanced"),
+			lipgloss.NewStyle().Bold(true).Foreground(ColorCyan).Render("Advanced"),
 			lipgloss.NewStyle().Bold(true).Foreground(ColorRed).Render("Remove device"),
 			lipgloss.NewStyle().Bold(true).Render("Add device"),
 			lipgloss.NewStyle().Bold(true).Render("Bluetooth"),
@@ -309,8 +264,7 @@ func (m Model) renderRegisterGuide() string {
 	}
 
 	sb.WriteString("\n\n")
-	sb.WriteString(HelpStyle.Render("[Enter / c]: Continue to Device Details • [Esc / b]: Back"))
-
+	sb.WriteString(HelpStyle.Render("Press [Enter] or [Space] when paired ➔ Next step • [Esc]: Cancel"))
 	return FocusCardStyle.Width(68).Render(sb.String())
 }
 
@@ -319,41 +273,78 @@ func (m Model) renderRegisterInput() string {
 	sb.WriteString(TitleStyle.Render("📝 Register Device Details (Step 3 of 3)"))
 	sb.WriteString("\n\n")
 
-	var osBadge string
-	if m.regPlatform == "macos" {
-		osBadge = BadgeMacOS.Render()
-	} else {
-		osBadge = BadgeWindows.Render()
-	}
-	sb.WriteString(fmt.Sprintf("Target OS: %s\n\n", osBadge))
+	nameLabel := "Target Name:"
+	addrLabel := "Bluetooth MAC Address:"
 
-	var nameLabel, addrLabel string
 	if m.regActiveIn == 0 {
-		nameLabel = lipgloss.NewStyle().Foreground(ColorCyan).Bold(true).Render("▶ Device Friendly Name:")
+		nameLabel = lipgloss.NewStyle().Foreground(ColorCyan).Bold(true).Render("▶ Target Name:")
 		addrLabel = lipgloss.NewStyle().Foreground(ColorFgMuted).Render("  Bluetooth MAC Address:")
 	} else {
-		nameLabel = lipgloss.NewStyle().Foreground(ColorFgMuted).Render("  Device Friendly Name:")
+		nameLabel = lipgloss.NewStyle().Foreground(ColorFgMuted).Render("  Target Name:")
 		addrLabel = lipgloss.NewStyle().Foreground(ColorCyan).Bold(true).Render("▶ Bluetooth MAC Address:")
 	}
 
-	sb.WriteString(fmt.Sprintf("%s\n%s\n\n%s\n%s\n\n", nameLabel, m.devNameInput.View(), addrLabel, m.devAddrInput.View()))
+	sb.WriteString(nameLabel + "\n")
+	sb.WriteString(m.devNameInput.View() + "\n\n")
+	sb.WriteString(addrLabel + "\n")
+	sb.WriteString(m.devAddrInput.View() + "\n\n")
 
-	if m.notice != "" && m.isErrorNotice {
-		sb.WriteString(ErrorStyle.Render(m.notice) + "\n\n")
+	sb.WriteString(HelpStyle.Render("[Tab/↓]: Switch Field • [Enter]: Save Device • [Esc]: Cancel"))
+	return FocusCardStyle.Width(64).Render(sb.String())
+}
+
+func (m Model) renderDevicesList() string {
+	var sb strings.Builder
+	sb.WriteString(TitleStyle.Render("💻 Registered Target Devices"))
+	sb.WriteString("\n")
+	sb.WriteString(SubtitleStyle.Render("Select a machine to immediately connect GhostHID via Bluetooth"))
+	sb.WriteString("\n\n")
+
+	if len(m.cfg.Devices) == 0 {
+		emptyMsg := lipgloss.NewStyle().Foreground(ColorYellow).Render("No devices registered yet.\nPress [a] to add your Windows PC or Mac.")
+		sb.WriteString(emptyMsg)
+		sb.WriteString("\n\n")
+	} else {
+		for i, dev := range m.cfg.Devices {
+			var line string
+			var icon string
+			if dev.Platform == "macos" {
+				icon = "🍏"
+			} else {
+				icon = "🪟"
+			}
+
+			activeBadge := ""
+			if dev.Address == m.cfg.TargetAddress {
+				activeBadge = BadgeConnected.Render()
+			}
+
+			nameStr := lipgloss.NewStyle().Bold(true).Width(20).Render(dev.Name)
+			addrStr := lipgloss.NewStyle().Foreground(ColorFgMuted).Width(20).Render(dev.Address)
+
+			if i == m.devicesIndex {
+				prefix := lipgloss.NewStyle().Foreground(ColorCyan).Bold(true).Render("▶ ")
+				line = MenuSelectedStyle.Width(62).Render(fmt.Sprintf("%s%s %s %s %s", prefix, icon, nameStr, addrStr, activeBadge))
+			} else {
+				prefix := "  "
+				line = MenuItemStyle.Render(fmt.Sprintf("%s%s %s %s %s", prefix, icon, nameStr, addrStr, activeBadge))
+			}
+			sb.WriteString(line + "\n")
+		}
+		sb.WriteString("\n")
 	}
 
-	sb.WriteString(HelpStyle.Render("[Tab/↓]: Switch Field • [Enter]: Save & Auto-Connect • [Esc]: Back"))
-	return FocusCardStyle.Width(60).Render(sb.String())
+	sb.WriteString(HelpStyle.Render("[Enter/s]: Connect • [a]: Add New • [d]: Delete • [u]: Unpair • [Esc]: Back"))
+	return CardStyle.Width(68).Render(sb.String())
 }
 
 func (m Model) renderDeleteConfirm() string {
 	var sb strings.Builder
-	title := lipgloss.NewStyle().Bold(true).Foreground(ColorRed).Render("⚠️ UNREGISTER DEVICE CONFIRMATION")
-	sb.WriteString(title)
+	sb.WriteString(ErrorStyle.Render("⚠ Confirm Target Removal"))
 	sb.WriteString("\n\n")
 
 	devName := "Unknown"
-	devAddr := "Unknown"
+	devAddr := ""
 	if m.deviceToDelete != nil {
 		devName = m.deviceToDelete.Name
 		devAddr = m.deviceToDelete.Address
@@ -375,27 +366,32 @@ func (m Model) renderDeleteConfirm() string {
 }
 
 func (m Model) renderLoginPrompt() string {
-	userLabel := "Username:"
-	passLabel := "Password:"
+	userLabel := "Username ($USERNAME):"
+	passLabel := "Password ($PASSWORD):"
 	if m.loginActiveIn == 0 {
-		userLabel = lipgloss.NewStyle().Foreground(ColorCyan).Bold(true).Render("▶ Username:")
-		passLabel = lipgloss.NewStyle().Foreground(ColorFgMuted).Render("  Password:")
+		userLabel = lipgloss.NewStyle().Foreground(ColorCyan).Bold(true).Render("▶ Username ($USERNAME):")
+		passLabel = lipgloss.NewStyle().Foreground(ColorFgMuted).Render("  Password ($PASSWORD):")
 	} else {
-		userLabel = lipgloss.NewStyle().Foreground(ColorFgMuted).Render("  Username:")
-		passLabel = lipgloss.NewStyle().Foreground(ColorCyan).Bold(true).Render("▶ Password:")
+		userLabel = lipgloss.NewStyle().Foreground(ColorFgMuted).Render("  Username ($USERNAME):")
+		passLabel = lipgloss.NewStyle().Foreground(ColorCyan).Bold(true).Render("▶ Password ($PASSWORD):")
+	}
+
+	title := "Set Snippet Values"
+	if m.pendingCombo != nil {
+		title = fmt.Sprintf("Run %q · Missing Snippets", m.pendingCombo.Name)
 	}
 
 	content := fmt.Sprintf(
-		"🔐 %s\n\n%s\n%s\n\n%s\n%s\n\n%s",
-		TitleStyle.Render("Windows Automated Login"),
+		"🔑 %s\n\n%s\n%s\n\n%s\n%s\n\n%s",
+		TitleStyle.Render(title),
 		userLabel,
 		m.userInput.View(),
 		passLabel,
 		m.passInput.View(),
-		SubtitleStyle.Render("[Tab/↓]: Switch Field • [Enter]: Save & Unlock • [Esc]: Cancel"),
+		SubtitleStyle.Render("[Tab/↓]: Switch Field • [Enter]: Save & Run • [Esc]: Cancel"),
 	)
 
-	return FocusCardStyle.Width(50).Render(content)
+	return FocusCardStyle.Width(56).Render(content)
 }
 
 func (m Model) renderLoginExecuting() string {
@@ -409,61 +405,58 @@ func (m Model) renderLoginExecuting() string {
 }
 
 func (m Model) renderSleepCountdown() string {
-	percent := float64(m.sleepTotal-m.sleepSeconds) / float64(m.sleepTotal)
-	bar := m.progress.ViewAs(percent)
+	pct := float64(m.sleepTotal-m.sleepSeconds) / float64(m.sleepTotal)
+	if pct < 0 {
+		pct = 0
+	}
+	if pct > 1 {
+		pct = 1
+	}
 
 	content := fmt.Sprintf(
-		"🌙 %s\n\nWindows sleep sequence (Esc ➔ Esc ➔ Win+X ➔ u ➔ s) dispatched!\nTerminating gateway to prevent phone battery drain in:\n\n  %s %s\n\n%s",
-		TitleStyle.Render("Windows Host Sleep"),
-		lipgloss.NewStyle().Bold(true).Foreground(ColorYellow).Render(fmt.Sprintf("%d SECONDS", m.sleepSeconds)),
-		m.spinner.View(),
-		bar,
+		"🌙 %s\n\nWindows sleep sequence dispatched (Win+X ➔ U ➔ S)\nDisconnecting Bluetooth in %d seconds...\n\n%s",
+		TitleStyle.Render("Putting Host to Sleep"),
+		m.sleepSeconds,
+		m.progress.ViewAs(pct),
 	)
-	return CardStyle.Width(54).Render(content)
+	return CardStyle.Width(50).Render(content)
 }
 
 func (m Model) renderComboInput() string {
 	content := fmt.Sprintf(
-		"%s\n\n%s\n\n%s",
-		TitleStyle.Render("🎹 Key Combination & Sequence Recorder"),
+		"%s\n\n%s\n\n%s\n\n%s",
+		TitleStyle.Render("🎹 Custom Keyboard Chord & Gesture Sequence"),
 		m.textInput.View(),
-		SubtitleStyle.Render("[Enter]: Transmit • Shortcuts (Ctrl+L, Alt+P, Esc) auto-record • Delays: -> (1.0s) or ->{1.5} • [Ctrl+D / Esc on empty]: Cancel"),
+		SubtitleStyle.Render("Examples: super+l  •  ctrl+alt+del -> esc -> $USERNAME  •  click-left ->{0.5} win+d"),
+		SubtitleStyle.Render("[Enter]: Transmit • Shortcuts auto-record • Delays: -> (1.0s) or ->{1.5} • [Esc]: Cancel"),
 	)
 	return FocusCardStyle.Width(72).Render(content)
 }
 
-func (m Model) renderTextInput(title string) string {
+func (m Model) renderQuickSend() string {
+	modeType := lipgloss.NewStyle().Foreground(ColorFgMuted).Render("[ ] Type Text")
+	modeRaw := lipgloss.NewStyle().Foreground(ColorFgMuted).Render("[ ] Raw 16-Hex HID")
+
+	var desc string
+	if m.quickSendRaw {
+		modeRaw = lipgloss.NewStyle().Foreground(ColorCyan).Bold(true).Render("[✔] Raw 16-Hex HID")
+		desc = "Transmit raw 8-byte HID keyboard report (16 hex chars e.g. 0000040000000000)"
+	} else {
+		modeType = lipgloss.NewStyle().Foreground(ColorGreen).Bold(true).Render("[✔] Type Text")
+		desc = "Type text directly into active target window via virtual HID keyboard"
+	}
+
+	tabs := lipgloss.JoinHorizontal(lipgloss.Left, modeType, "    ", modeRaw)
+
 	content := fmt.Sprintf(
-		"%s\n\n%s\n\n%s",
-		TitleStyle.Render(title),
+		"%s\n\nMode: %s\n\n%s\n\n%s\n\n%s",
+		TitleStyle.Render("⚡ QUICK SEND · Instant Keyboard & Raw HID"),
+		tabs,
+		SubtitleStyle.Render(desc),
 		m.textInput.View(),
-		SubtitleStyle.Render("[Enter]: Transmit to Host • [Esc]: Cancel"),
+		SubtitleStyle.Render("[Tab]: Toggle Type/Raw • [Enter]: Transmit • [Esc]: Cancel"),
 	)
-	return FocusCardStyle.Width(52).Render(content)
-}
-
-func (m Model) renderCredsMenu() string {
-	user := m.cfg.DefaultUser
-	if user == "" {
-		user = "None configured"
-	}
-	hasPass := "No"
-	if keychain.IsAvailable() && m.cfg.DefaultUser != "" {
-		if _, err := keychain.GetPassword(m.cfg.DefaultUser); err == nil {
-			hasPass = "Yes (Encrypted in Keychain)"
-		}
-	}
-
-	content := fmt.Sprintf(
-		"🔑 %s\n\nDefault User: %s\nKeychain Pass: %s\n\n%s\n%s\n%s",
-		TitleStyle.Render("Credential Vault"),
-		lipgloss.NewStyle().Foreground(ColorCyan).Bold(true).Render(user),
-		lipgloss.NewStyle().Foreground(ColorGreen).Bold(true).Render(hasPass),
-		lipgloss.NewStyle().Foreground(ColorYellow).Render("[u] Update credentials"),
-		lipgloss.NewStyle().Foreground(ColorRed).Render("[c] Clear stored credentials"),
-		SubtitleStyle.Render("[Esc]: Return to menu"),
-	)
-	return CardStyle.Width(50).Render(content)
+	return FocusCardStyle.Width(68).Render(content)
 }
 
 func (m Model) renderDoctorView() string {
@@ -478,25 +471,18 @@ func (m Model) renderDoctorView() string {
 		} else {
 			icon = lipgloss.NewStyle().Foreground(ColorRed).Bold(true).Render("✖")
 		}
-		title := lipgloss.NewStyle().Bold(true).Width(24).Render(check.Title)
-		info := SubtitleStyle.Render(check.Info)
-		sb.WriteString(fmt.Sprintf("  %s %s %s\n", icon, title, info))
+		sb.WriteString(fmt.Sprintf("%s %-30s %s\n", icon, check.Title, lipgloss.NewStyle().Foreground(ColorFgMuted).Render(check.Info)))
 	}
 
 	sb.WriteString("\n")
-	sb.WriteString(SubtitleStyle.Render("[Enter/Esc]: Return to main menu"))
-	return CardStyle.Width(62).Render(sb.String())
+	sb.WriteString(HelpStyle.Render("Press [Enter] or [Esc] to return to menu"))
+	return CardStyle.Width(64).Render(sb.String())
 }
 
 func (m Model) renderRecoveryView() string {
-	content := fmt.Sprintf(
-		"⚠️ %s\n\n%s\n\n%s\n%s\n%s\n\n%s",
-		lipgloss.NewStyle().Foreground(ColorYellow).Bold(true).Render("Device Recovery Mode"),
-		lipgloss.NewStyle().Foreground(ColorRed).Render(m.notice),
-		"1. Connect phone via USB with USB Debugging enabled, OR",
-		fmt.Sprintf("2. Connect Wireless ADB: 'adb connect %s'", m.cfg.WirelessADBAddress),
-		"3. Check phone screen for 'Allow USB Debugging' authorization prompt.",
-		SubtitleStyle.Render("[Enter/Esc]: Retry discovery"),
-	)
-	return CardStyle.Width(60).Render(content)
+	var sb strings.Builder
+	sb.WriteString(TitleStyle.Render("🔧 Connection Recovery Options"))
+	sb.WriteString("\n\n")
+	sb.WriteString(HelpStyle.Render("Press [Enter] or [Esc] to return to menu"))
+	return CardStyle.Width(64).Render(sb.String())
 }

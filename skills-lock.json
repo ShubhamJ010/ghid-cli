@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "skills": {
+    "design-doc-mermaid": {
+      "source": "spillwavesolutions/design-doc-mermaid",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "379bb1b77bba960f4629114254cd68ca84618044de61c4c4f363801f2c6f0fe1"
+    },
+    "documentation-and-adrs": {
+      "source": "addyosmani/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/documentation-and-adrs/SKILL.md",
+      "computedHash": "f1bd038e74194364c1dcdb3dd0a72194ffd3ca9d3a103c125ca1a62e801a0cc4"
+    },
+    "unslop": {
+      "source": "cursor/plugins",
+      "sourceType": "github",
+      "skillPath": "harness/pstack/claude-code/skills/unslop/SKILL.md",
+      "computedHash": "eca0ad9fa3a3867c83f3aaf3a058e247a569c8976a68ca423a569b93eb86de5d"
+    }
+  }
+}

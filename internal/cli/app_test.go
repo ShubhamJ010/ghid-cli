@@ -122,38 +122,33 @@ test-serial     device model:Pixel7 transport_id:1
 	}
 }
 
-func TestAppCreds(t *testing.T) {
-	app, _, vlt, store, stdout, _ := setupTestApp(t)
+func TestAppCredsRemovedAndSnippetsUsed(t *testing.T) {
+	app, _, _, _, stdout, stderr := setupTestApp(t)
 
-	// Set credentials
-	code := app.Run([]string{"creds", "set", "-u", "bob", "-p", "hunter2"})
+	// Verify creds command is removed and returns code 1
+	code := app.Run([]string{"creds"})
+	if code != 1 {
+		t.Fatalf("expected creds to return exit code 1 as removed command, got %d", code)
+	}
+
+	// Set username and secure password via snippets
+	code = app.Run([]string{"snippets", "set", "username", "bob"})
 	if code != 0 {
-		t.Fatalf("creds set failed with code %d", code)
+		t.Fatalf("snippets set username failed with code %d", code)
+	}
+	code = app.Run([]string{"snippets", "set", "password", "hunter2", "--secure"})
+	if code != 0 {
+		t.Fatalf("snippets set password failed with code %d", code)
 	}
 
-	// Verify in vault and config
-	cfg := store.Load()
-	if cfg.DefaultUser != "bob" {
-		t.Errorf("expected default user bob, got %q", cfg.DefaultUser)
-	}
-	pass, err := vlt.Get("bob")
-	if err != nil || pass != "hunter2" {
-		t.Errorf("vault get failed: pass=%q, err=%v", pass, err)
-	}
-
-	// Clear credentials
+	// Verify snippets get
 	stdout.Reset()
-	code = app.Run([]string{"creds", "clear"})
+	code = app.Run([]string{"snippets", "get", "username", "--json"})
 	if code != 0 {
-		t.Fatalf("creds clear failed with code %d", code)
+		t.Fatalf("snippets get username failed with code %d: %s", code, stderr.String())
 	}
-
-	cfg = store.Load()
-	if cfg.DefaultUser != "" {
-		t.Errorf("expected default user to be cleared, got %q", cfg.DefaultUser)
-	}
-	if _, err := vlt.Get("bob"); err == nil {
-		t.Errorf("expected password for bob to be deleted from vault")
+	if !strings.Contains(stdout.String(), `"value": "bob"`) {
+		t.Errorf("expected username bob in json, got %s", stdout.String())
 	}
 }
 
@@ -247,15 +242,43 @@ func TestAppCommands(t *testing.T) {
 		t.Errorf("unexpected sleep json: %s", stdout.String())
 	}
 
-	// Raw report command
+	// Quick send command (default type)
 	stdout.Reset()
-	code = app.Run([]string{"raw", "08000f0000000000", "--json"})
+	code = app.Run([]string{"quick", "hello", "world", "--json"})
 	if code != 0 {
-		t.Fatalf("raw failed with code %d", code)
+		t.Fatalf("quick type failed with code %d: %s", code, stderr.String())
+	}
+	var quickTypeRes map[string]interface{}
+	if err := json.Unmarshal(stdout.Bytes(), &quickTypeRes); err != nil || quickTypeRes["typed"] != "hello world" {
+		t.Errorf("unexpected quick type json: %s", stdout.String())
+	}
+
+	// Quick send command (--raw flag)
+	stdout.Reset()
+	code = app.Run([]string{"quick", "--raw", "08000f0000000000", "--json"})
+	if code != 0 {
+		t.Fatalf("quick raw failed with code %d", code)
 	}
 	var rawRes map[string]interface{}
 	if err := json.Unmarshal(stdout.Bytes(), &rawRes); err != nil || rawRes["raw"] != "08000f0000000000" {
 		t.Errorf("unexpected raw json: %s", stdout.String())
+	}
+
+	// Quick send with raw: prefix
+	stdout.Reset()
+	code = app.Run([]string{"quick", "raw:08000f0000000000", "--json"})
+	if code != 0 {
+		t.Fatalf("quick raw: prefix failed with code %d", code)
+	}
+
+	// Root type and raw should now be unknown commands (no backward compatibility)
+	stderr.Reset()
+	if code = app.Run([]string{"type", "foo"}); code != 1 {
+		t.Errorf("expected exit code 1 for removed type command, got %d", code)
+	}
+	stderr.Reset()
+	if code = app.Run([]string{"raw", "08000f0000000000"}); code != 1 {
+		t.Errorf("expected exit code 1 for removed raw command, got %d", code)
 	}
 
 	// Unknown command

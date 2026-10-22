@@ -17,6 +17,8 @@ func TestValidate(t *testing.T) {
 		"scroll-down",
 		"win+s ->{0.7} type:rustdesk ->{0.3} enter",
 		`type:"rust desk"`,
+		"ctrl+alt+del ->{1.0} esc ->{0.5} $USERNAME ->{0.2} tab ->{0.2} $PASSWORD ->{0.2} enter",
+		"type:$USERNAME -> type:${PASSWORD}",
 	}
 	for _, keys := range valid {
 		if err := Validate(keys); err != nil {
@@ -96,5 +98,48 @@ func TestStoreLoadMissingFile(t *testing.T) {
 	}
 	if len(list) != 0 {
 		t.Fatalf("expected empty list, got %+v", list)
+	}
+}
+
+func TestStoreEnsureDefaultsAndFavorites(t *testing.T) {
+	store := NewStore(filepath.Join(t.TempDir(), "combos.json"))
+
+	list, err := store.EnsureDefaults()
+	if err != nil {
+		t.Fatalf("EnsureDefaults failed: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("expected 1 default combo, got %d", len(list))
+	}
+	if list[0].Name != "Login" || !list[0].Favorite {
+		t.Errorf("expected Login favorite combo, got %+v", list[0])
+	}
+	if list[0].Keys != DefaultLoginKeys {
+		t.Errorf("expected DefaultLoginKeys, got %q", list[0].Keys)
+	}
+
+	favs, err := store.Favorites()
+	if err != nil || len(favs) != 1 || favs[0].Name != "Login" {
+		t.Errorf("Favorites failed: %+v", favs)
+	}
+
+	// Toggle favorite
+	_, ok, err := store.ToggleFavorite("Login")
+	if err != nil || !ok {
+		t.Fatalf("ToggleFavorite failed: ok=%v err=%v", ok, err)
+	}
+	updated, _ := store.Find("Login")
+	if updated.Favorite {
+		t.Errorf("expected Login to no longer be favorite")
+	}
+
+	// Toggle back
+	_, ok, err = store.ToggleFavorite("Login")
+	if err != nil || !ok {
+		t.Fatalf("ToggleFavorite failed: ok=%v err=%v", ok, err)
+	}
+	updated, _ = store.Find("Login")
+	if !updated.Favorite {
+		t.Errorf("expected Login to be favorite again")
 	}
 }

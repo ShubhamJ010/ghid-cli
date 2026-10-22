@@ -190,17 +190,20 @@ flowchart TD
     subgraph UI_Layer["Presentation Layer"]
         CLIHandler["cli.App (Command Router)"]
         InteractiveTUI["tui.Model (Bubble Tea / Lip Gloss)"]
-        Studio["tui.ComboStudio (Interactive Editor)"]
+        ComboStudio["tui.ComboStudio (Interactive Macro Editor)"]
+        SnippetStudio["tui.SnippetStudio (Variable & Secret Vault)"]
+        QuickSendView["tui.QuickSend (Type / Raw Modal)"]
         JSONFormatter["JSON Output Serializer"]
     end
 
     subgraph Core_Logic["Core Gateway & Domain Layer"]
         GatewayCtrl["gateway.Controller Interface"]
         GatewayImpl["gateway.Gateway"]
-        HIDEngine["hid.Actions & hid.Parser"]
+        HIDEngine["hid.Actions & AST Parser (Variable Interpolation)"]
         ComboStore["combos.Store (~/.config/ghid/combos.json)"]
+        SnippetStore["snippets.Store (~/.config/ghid/snippets.json)"]
         ConfigStore["config.Store (~/.config/ghid/config.json)"]
-        Vault["vault.Vault (Keychain / In-Memory)"]
+        Vault["vault.Vault (macOS Keychain / In-Memory)"]
     end
 
     subgraph Transport_Layer["Transport & System Execution Layer"]
@@ -211,12 +214,18 @@ flowchart TD
     end
 
     CLIHandler --> InteractiveTUI
-    CLIHandler --> Studio
+    CLIHandler --> ComboStudio
+    CLIHandler --> SnippetStudio
     CLIHandler --> JSONFormatter
+
+    InteractiveTUI --> ComboStudio
+    InteractiveTUI --> SnippetStudio
+    InteractiveTUI --> QuickSendView
 
     CLIHandler --> GatewayCtrl
     InteractiveTUI --> GatewayCtrl
-    Studio --> ComboStore
+    ComboStudio --> ComboStore
+    SnippetStudio --> SnippetStore
 
     GatewayCtrl <|-- GatewayImpl
     GatewayImpl --> HIDEngine
@@ -224,6 +233,8 @@ flowchart TD
     GatewayImpl --> Vault
 
     ComboStore --> HIDEngine
+    SnippetStore --> Vault
+    HIDEngine ..> SnippetStore : "Resolves $VAR tokens"
     ConfigStore --> GatewayImpl
 
     ADBManager --> Runner
@@ -235,21 +246,22 @@ flowchart TD
     classDef domain fill:#E0F2F1,stroke:#009688,stroke-width:2px,color:#004D40
     classDef transport fill:#FFF3E0,stroke:#FB8C00,stroke-width:2px,color:#E65100
 
-    class CLIHandler,InteractiveTUI,Studio,JSONFormatter ui
-    class GatewayCtrl,GatewayImpl,HIDEngine,ComboStore,ConfigStore,Vault domain
+    class CLIHandler,InteractiveTUI,ComboStudio,SnippetStudio,QuickSendView,JSONFormatter ui
+    class GatewayCtrl,GatewayImpl,HIDEngine,ComboStore,SnippetStore,ConfigStore,Vault domain
     class ADBManager,Runner,NativeKeychain,SubprocessOS transport
 ```
 
 ### Module Responsibilities
 
-1. **`internal/adb`:** Manages detection of USB and Wi-Fi devices, shell command execution through an abstract `Runner` interface, APK installation, log tailing, and status file retrieval.
-2. **`internal/gateway`:** Orchestrates multi-step operations such as automated Windows login, system health diagnostics (`Doctor`), ACPI sleep countdowns, and connection lifecycle management.
-3. **`internal/hid`:** Implements keycode mapping tables for printable US ASCII characters, parses keyboard combo strings, validates Windows key tokens, and serializes mouse actions.
-4. **`internal/combos`:** Handles disk storage for named macros in `~/.config/ghid/combos.json`. Validates sequence grammar and provides machine-readable step schemas.
-5. **`internal/config`:** Manages configuration parameters in `~/.config/ghid/config.json`, including registered target devices, active target device selection, and login delay timings.
-6. **`internal/vault`:** Abstracts credential storage. Uses `/usr/bin/security` on macOS with service name `ghost-hid` to save, fetch, and purge passwords.
-7. **`internal/tui`:** Renders full-screen interactive consoles and combo management interfaces using Bubble Tea, Bubbles text inputs, and Lip Gloss styling.
-8. **`internal/cli`:** Command line argument parser supporting dual execution modes: interactive TUI when no arguments are provided, and direct non-interactive CLI commands with `--json` output.
+1. **`internal/adb`:** Manages detection of USB and Wi-Fi devices, shell command execution through an abstract `Runner` interface, APK installation, log tailing, and status file retrieval. Provides `SendComboWithResolver` to evaluate dynamic variables on the fly.
+2. **`internal/gateway`:** Orchestrates multi-step operations such as system health diagnostics (`Doctor`), ACPI sleep countdowns, and connection lifecycle management.
+3. **`internal/hid`:** Implements keycode mapping tables for printable US ASCII characters, parses keyboard combo strings into AST steps, extracts variable references (`$NAME` / `${NAME}`), and serializes mouse actions.
+4. **`internal/combos`:** Handles disk persistence for named macros in `~/.config/ghid/combos.json`. Supports favorite toggling (`Favorite bool`), step sequence grammar validation, and seeds default macros such as `Login`.
+5. **`internal/snippets`:** Manages user text variables and secure secrets in `~/.config/ghid/snippets.json`. Automatically bridges sensitive variables (`password`) into `internal/vault` with macOS Keychain encryption. Seeds default `username` and `password` variables.
+6. **`internal/vault`:** Abstracts credential storage. Uses `/usr/bin/security` on macOS with service name `ghost-hid` to save, fetch, and purge passwords securely.
+7. **`internal/config`:** Manages configuration parameters in `~/.config/ghid/config.json`, including registered target devices, active target device selection, and delay timings.
+8. **`internal/tui`:** Renders full-screen interactive consoles, full-screen **Combo Studio**, full-screen **Snippet Studio**, and the unified **Quick Send** modal using Bubble Tea, Bubbles text inputs, and Lip Gloss styling. Pins favorite combos at the top of the action list with heart badges (`❤️`).
+9. **`internal/cli`:** Command-line argument parser supporting dual execution modes: interactive TUI when invoked without arguments, and direct CLI subcommands (`quick`, `combo`, `snippets`, `doctor`, etc.) with comprehensive `--json` output. Root `type` and `raw` commands are cleanly superseded by `quick`.
 
 ---
 

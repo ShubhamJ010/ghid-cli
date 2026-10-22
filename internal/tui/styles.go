@@ -4,19 +4,19 @@ import "github.com/charmbracelet/lipgloss"
 
 var (
 	// 24-bit Truecolor Palette
-	ColorPurple    = lipgloss.Color("#7D56F4")
-	ColorMagenta   = lipgloss.Color("#D946EF")
-	ColorCyan      = lipgloss.Color("#00F5D4")
-	ColorBlue      = lipgloss.Color("#00BBF9")
-	ColorGreen     = lipgloss.Color("#04B575")
-	ColorYellow    = lipgloss.Color("#FEE440")
-	ColorPink      = lipgloss.Color("#FF007F")
-	ColorRed       = lipgloss.Color("#FF5555")
-	ColorBgDark    = lipgloss.Color("#181825")
-	ColorBgCard    = lipgloss.Color("#1E1E2E")
-	ColorFgMuted   = lipgloss.Color("#6C7086")
-	ColorFgLight   = lipgloss.Color("#CDD6F4")
-	ColorFgBright  = lipgloss.Color("#FFFFFF")
+	ColorPurple   = lipgloss.Color("#7D56F4")
+	ColorMagenta  = lipgloss.Color("#D946EF")
+	ColorCyan     = lipgloss.Color("#00F5D4")
+	ColorBlue     = lipgloss.Color("#00BBF9")
+	ColorGreen    = lipgloss.Color("#04B575")
+	ColorYellow   = lipgloss.Color("#FEE440")
+	ColorPink     = lipgloss.Color("#FF007F")
+	ColorRed      = lipgloss.Color("#FF5555")
+	ColorBgDark   = lipgloss.Color("#181825")
+	ColorBgCard   = lipgloss.Color("#1E1E2E")
+	ColorFgMuted  = lipgloss.Color("#6C7086")
+	ColorFgLight  = lipgloss.Color("#CDD6F4")
+	ColorFgBright = lipgloss.Color("#FFFFFF")
 
 	// Base Typography
 	TitleStyle = lipgloss.NewStyle().
@@ -54,11 +54,11 @@ var (
 			SetString("CONNECTED")
 
 	BadgeDisconnected = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(ColorFgBright).
-			Background(ColorRed).
-			Padding(0, 1).
-			SetString("DISCONNECTED")
+				Bold(true).
+				Foreground(ColorFgBright).
+				Background(ColorRed).
+				Padding(0, 1).
+				SetString("DISCONNECTED")
 
 	BadgeReady = lipgloss.NewStyle().
 			Bold(true).

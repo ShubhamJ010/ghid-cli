@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
@@ -14,7 +15,10 @@ import (
 	"github.com/ghost-hid/ghid/internal/adb"
 	"github.com/ghost-hid/ghid/internal/combos"
 	"github.com/ghost-hid/ghid/internal/config"
+	"github.com/ghost-hid/ghid/internal/hid"
 	"github.com/ghost-hid/ghid/internal/keychain"
+	"github.com/ghost-hid/ghid/internal/snippets"
+	"github.com/ghost-hid/ghid/internal/vault"
 )
 
 type AppState int
@@ -25,10 +29,9 @@ const (
 	StateLoginPrompt
 	StateLoginExecuting
 	StateSleepCountdown
-	StateTextInput
+	StateQuickSend
 	StateComboInput
-	StateRawInput
-	StateCredsMenu
+	StateSnippetStudio
 	StateDoctorView
 	StateLogsView
 	StateDeviceRecovery
@@ -56,6 +59,8 @@ type DoctorCheck struct {
 type Model struct {
 	manager        *adb.Manager
 	cfg            config.Config
+	combosStore    *combos.Store
+	snippetsStore  *snippets.Store
 	state          AppState
 	status         adb.GatewayStatus
 	device         *adb.Device
@@ -87,6 +92,9 @@ type Model struct {
 	regActiveIn    int // 0: name, 1: addr
 	deviceToDelete *config.TargetDevice
 	comboStudio    *ComboStudioModel
+	snippetStudio  *SnippetStudioModel
+	pendingCombo   *combos.Combo
+	quickSendRaw   bool
 }
 
 type statusTickMsg time.Time
@@ -102,6 +110,14 @@ type actionDoneMsg struct {
 }
 
 func NewModel(mgr *adb.Manager, cfg config.Config) Model {
+	cStore := combos.NewStore("")
+	_, _ = cStore.EnsureDefaults()
+	sStore := snippets.NewStore("", vault.NewKeychainVault(""))
+	_, _ = sStore.EnsureDefaults()
+	return NewModelWithStores(mgr, cfg, cStore, sStore)
+}
+
+func NewModelWithStores(mgr *adb.Manager, cfg config.Config, cStore *combos.Store, sStore *snippets.Store) Model {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(ColorCyan)
@@ -118,12 +134,12 @@ func NewModel(mgr *adb.Manager, cfg config.Config) Model {
 	ti.Width = 40
 
 	ui := textinput.New()
-	ui.Placeholder = "Windows Username"
+	ui.Placeholder = "Username / $USERNAME"
 	ui.CharLimit = 64
 	ui.Width = 32
 
 	pi := textinput.New()
-	pi.Placeholder = "Windows Password"
+	pi.Placeholder = "Password / $PASSWORD"
 	pi.EchoMode = textinput.EchoPassword
 	pi.EchoCharacter = '•'
 	pi.CharLimit = 64
@@ -139,35 +155,81 @@ func NewModel(mgr *adb.Manager, cfg config.Config) Model {
 	dai.CharLimit = 17
 	dai.Width = 36
 
-	items := []MenuItem{
-		{Key: "1", Title: "login", Description: "Automated Windows unlock & credential injection", Icon: "⚡"},
-		{Key: "2", Title: "lock", Description: "Instant Windows lock screen (Win + L)", Icon: "🔒"},
-		{Key: "3", Title: "sleep", Description: "Windows sleep sequence + countdown clean exit", Icon: "🌙"},
-		{Key: "4", Title: "type", Description: "Type text string through virtual keyboard", Icon: "⌨️"},
-		{Key: "5", Title: "combo", Description: "Create, send & delete Windows combos", Icon: "🎹"},
-		{Key: "6", Title: "raw", Description: "Transmit raw 16-hex character HID report", Icon: "⚙️"},
-		{Key: "7", Title: "creds", Description: "Inspect / update macOS Keychain credentials", Icon: "🔑"},
-		{Key: "d", Title: "devices", Description: "Registered target devices & add new Windows/Mac", Icon: "💻"},
-		{Key: "8", Title: "reconnect", Description: "Re-trigger Bluetooth HID connection", Icon: "🔄"},
-		{Key: "9", Title: "doctor", Description: "Run full hardware & gateway diagnostic check", Icon: "🩺"},
-		{Key: "0", Title: "exit", Description: "Disconnect Bluetooth & terminate phone service", Icon: "🚪"},
+	m := Model{
+		manager:       mgr,
+		cfg:           cfg,
+		combosStore:   cStore,
+		snippetsStore: sStore,
+		state:         StateInit,
+		spinner:       s,
+		progress:      p,
+		textInput:     ti,
+		userInput:     ui,
+		passInput:     pi,
+		devNameInput:  dni,
+		devAddrInput:  dai,
+		sleepTotal:    5,
+		sleepSeconds:  5,
 	}
 
-	return Model{
-		manager:      mgr,
-		cfg:          cfg,
-		state:        StateInit,
-		menuItems:    items,
-		spinner:      s,
-		progress:     p,
-		textInput:    ti,
-		userInput:    ui,
-		passInput:    pi,
-		devNameInput: dni,
-		devAddrInput: dai,
-		sleepTotal:   5,
-		sleepSeconds: 5,
+	m.refreshMenuItems()
+	return m
+}
+
+func (m *Model) refreshMenuItems() {
+	var items []MenuItem
+	idx := 1
+
+	// Pinned favorite combos at the top with heart icon!
+	if m.combosStore != nil {
+		favs, _ := m.combosStore.Favorites()
+		for _, f := range favs {
+			items = append(items, MenuItem{
+				Key:         fmt.Sprintf("%d", idx),
+				Title:       f.Name,
+				Description: f.Keys,
+				Icon:        "❤️",
+			})
+			idx++
+		}
 	}
+
+	// Standard action items
+	items = append(items,
+		MenuItem{Key: fmt.Sprintf("%d", idx), Title: "lock", Description: "Instant Windows lock screen (Win + L)", Icon: "🔒"},
+	)
+	idx++
+	items = append(items,
+		MenuItem{Key: fmt.Sprintf("%d", idx), Title: "sleep", Description: "Windows sleep sequence + countdown clean exit", Icon: "🌙"},
+	)
+	idx++
+	items = append(items,
+		MenuItem{Key: fmt.Sprintf("%d", idx), Title: "combo", Description: "Create, send & edit Windows combos", Icon: "🎹"},
+	)
+	idx++
+	items = append(items,
+		MenuItem{Key: fmt.Sprintf("%d", idx), Title: "quick", Description: "Quick send keystrokes or raw HID report (default: Type)", Icon: "⚡"},
+	)
+	idx++
+	items = append(items,
+		MenuItem{Key: fmt.Sprintf("%d", idx), Title: "snippets", Description: "Manage text & secret snippets ($NAME)", Icon: "📋"},
+	)
+	idx++
+	items = append(items,
+		MenuItem{Key: "d", Title: "devices", Description: "Registered target devices & add new Windows/Mac", Icon: "💻"},
+	)
+	items = append(items,
+		MenuItem{Key: fmt.Sprintf("%d", idx), Title: "reconnect", Description: "Re-trigger Bluetooth HID connection", Icon: "🔄"},
+	)
+	idx++
+	items = append(items,
+		MenuItem{Key: fmt.Sprintf("%d", idx), Title: "doctor", Description: "Run full hardware & gateway diagnostic check", Icon: "🩺"},
+	)
+	items = append(items,
+		MenuItem{Key: "0", Title: "exit", Description: "Disconnect Bluetooth & terminate phone service", Icon: "🚪"},
+	)
+
+	m.menuItems = items
 }
 
 func (m Model) Init() tea.Cmd {
@@ -219,8 +281,7 @@ func (m Model) sleepTick() tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	// The Combo Studio runs inside the main dashboard so menu key [5] feels
-	// native: it renders full screen and returns here on esc.
+	// Full screen Combo Studio
 	if m.state == StateComboStudio && m.comboStudio != nil {
 		if key, ok := msg.(tea.KeyMsg); ok && key.String() == "ctrl+c" {
 			m.quitting = true
@@ -242,6 +303,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if studio.quitting {
 			m.comboStudio = nil
 			m.state = StateMenu
+			m.refreshMenuItems()
+			return m, nil
+		}
+		return m, cmd
+	}
+
+	// Full screen Snippet Studio
+	if m.state == StateSnippetStudio && m.snippetStudio != nil {
+		if key, ok := msg.(tea.KeyMsg); ok && key.String() == "ctrl+c" {
+			m.quitting = true
+			return m, tea.Quit
+		}
+		switch msg := msg.(type) {
+		case tea.WindowSizeMsg:
+			m.width = msg.Width
+			m.height = msg.Height
+		case statusTickMsg:
+			m.lastPing = time.Time(msg)
+			m.status = m.manager.GetStatus()
+			return m, m.statusTick()
+		}
+
+		updated, cmd := m.snippetStudio.Update(msg)
+		studio := updated.(SnippetStudioModel)
+		m.snippetStudio = &studio
+		if studio.quitting {
+			m.snippetStudio = nil
+			m.state = StateMenu
+			m.refreshMenuItems()
 			return m, nil
 		}
 		return m, cmd
@@ -355,14 +445,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch m.state {
 		case StateMenu:
 			return m.updateMenu(msg)
-		case StateTextInput, StateRawInput:
-			return m.updateInput(msg)
+		case StateQuickSend:
+			return m.updateQuickSend(msg)
 		case StateComboInput:
 			return m.updateComboInput(msg)
 		case StateLoginPrompt:
 			return m.updateLoginPrompt(msg)
-		case StateCredsMenu:
-			return m.updateCredsMenu(msg)
 		case StateDevicesList:
 			return m.updateDevicesList(msg)
 		case StateDeviceRegisterPlatform:
@@ -388,73 +476,52 @@ func (m Model) updateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "up", "k":
 		if m.menuIndex > 0 {
 			m.menuIndex--
-		} else {
+		} else if len(m.menuItems) > 0 {
 			m.menuIndex = len(m.menuItems) - 1
 		}
+		return m, nil
+
 	case "down", "j":
 		if m.menuIndex < len(m.menuItems)-1 {
 			m.menuIndex++
 		} else {
 			m.menuIndex = 0
 		}
-	case "1":
-		return m.triggerAction("login")
-	case "2":
-		return m.triggerAction("lock")
-	case "3":
-		return m.triggerAction("sleep")
-	case "4":
-		return m.triggerAction("type")
-	case "5":
-		return m.triggerAction("combo")
-	case "6":
-		return m.triggerAction("raw")
-	case "7":
-		return m.triggerAction("creds")
-	case "d", "D":
-		return m.triggerAction("devices")
-	case "8":
-		return m.triggerAction("reconnect")
-	case "9":
-		return m.triggerAction("doctor")
-	case "0", "q":
-		return m.triggerAction("exit")
+		return m, nil
+
 	case "enter":
-		selected := m.menuItems[m.menuIndex]
-		return m.triggerAction(selected.Title)
+		if len(m.menuItems) > 0 && m.menuIndex < len(m.menuItems) {
+			selected := m.menuItems[m.menuIndex]
+			return m.triggerAction(selected.Title)
+		}
+		return m, nil
+
+	case "q":
+		return m.triggerAction("exit")
+
+	default:
+		keyStr := msg.String()
+		for i, item := range m.menuItems {
+			if strings.EqualFold(item.Key, keyStr) {
+				m.menuIndex = i
+				return m.triggerAction(item.Title)
+			}
+		}
 	}
 	return m, nil
 }
 
 func (m Model) triggerAction(action string) (tea.Model, tea.Cmd) {
 	m.notice = ""
-	switch action {
-	case "login":
-		if !m.status.Connected {
-			m.notice = "✖ Target laptop is not connected via Bluetooth. Run [8] reconnect or [9] doctor."
-			m.isErrorNotice = true
-			return m, nil
-		}
-		user := m.cfg.DefaultUser
-		var pass string
-		if user != "" && keychain.IsAvailable() {
-			p, err := keychain.GetPassword(user)
-			if err == nil {
-				pass = p
-			}
-		}
-		if user != "" && pass != "" {
-			m.state = StateLoginExecuting
-			m.loginStep = 0
-			return m, m.startLoginCmd(user, pass)
-		}
-		m.state = StateLoginPrompt
-		m.loginActiveIn = 0
-		m.userInput.SetValue(user)
-		m.passInput.SetValue("")
-		m.userInput.Focus()
-		return m, textinput.Blink
 
+	// Check if action matches a combo (such as favorite Login combo)
+	if m.combosStore != nil {
+		if combo, ok := m.combosStore.Find(action); ok {
+			return m.executeCombo(combo)
+		}
+	}
+
+	switch action {
 	case "lock":
 		return m, func() tea.Msg {
 			err := m.manager.SendLock()
@@ -476,35 +543,30 @@ func (m Model) triggerAction(action string) (tea.Model, tea.Cmd) {
 			},
 		)
 
-	case "type":
-		m.state = StateTextInput
-		m.textInput.Placeholder = "Enter text to type..."
-		m.textInput.SetValue("")
-		m.textInput.Focus()
-		return m, textinput.Blink
-
 	case "combo":
-		store := combos.NewStore("")
-		studio := NewComboStudioModel(store, func(combo combos.Combo) error {
+		studio := NewComboStudioModel(m.combosStore, func(combo combos.Combo) error {
 			if m.manager == nil {
 				return fmt.Errorf("adb manager not initialized")
 			}
-			return m.manager.SendCombo(combo.Keys)
+			return m.manager.SendComboWithResolver(combo.Keys, m.snippetsStore.Resolver())
 		})
 		m.comboStudio = &studio
 		m.state = StateComboStudio
 		return m, studio.Init()
 
-	case "raw":
-		m.state = StateRawInput
-		m.textInput.Placeholder = "16 hex chars e.g. 08000f0000000000"
+	case "quick":
+		m.state = StateQuickSend
+		m.quickSendRaw = false
+		m.textInput.Placeholder = "Type text to send (or press Tab for Raw mode)"
 		m.textInput.SetValue("")
 		m.textInput.Focus()
 		return m, textinput.Blink
 
-	case "creds":
-		m.state = StateCredsMenu
-		return m, nil
+	case "snippets":
+		studio := NewSnippetStudioModel(m.snippetsStore)
+		m.snippetStudio = &studio
+		m.state = StateSnippetStudio
+		return m, studio.Init()
 
 	case "devices":
 		m.state = StateDevicesList
@@ -519,8 +581,7 @@ func (m Model) triggerAction(action string) (tea.Model, tea.Cmd) {
 			if err != nil {
 				return actionDoneMsg{notice: fmt.Sprintf("Reconnect failed: %v", err), isError: true}
 			}
-			time.Sleep(1 * time.Second)
-			return actionDoneMsg{notice: "✔ Bluetooth connection signal sent.", isError: false}
+			return actionDoneMsg{notice: "✔ Reconnect broadcast dispatched!", isError: false}
 		}
 
 	case "doctor":
@@ -535,6 +596,71 @@ func (m Model) triggerAction(action string) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	return m, nil
+}
+
+func (m Model) executeCombo(combo combos.Combo) (tea.Model, tea.Cmd) {
+	if !m.status.Connected {
+		m.notice = "✖ Target laptop is not connected via Bluetooth. Run [reconnect] or [doctor]."
+		m.isErrorNotice = true
+		return m, nil
+	}
+
+	vars := hid.ExtractVariables(combo.Keys)
+	missing := false
+	if m.snippetsStore != nil {
+		for _, v := range vars {
+			snip, ok, _ := m.snippetsStore.Get(v)
+			if !ok || snip.Value == "" {
+				missing = true
+				break
+			}
+		}
+	}
+
+	if missing {
+		m.pendingCombo = &combo
+		m.state = StateLoginPrompt
+		m.loginActiveIn = 0
+		var uVal, pVal string
+		if m.snippetsStore != nil {
+			if u, ok, _ := m.snippetsStore.Get("username"); ok {
+				uVal = u.Value
+			}
+			if p, ok, _ := m.snippetsStore.Get("password"); ok {
+				pVal = p.Value
+			}
+		}
+		if uVal == "" {
+			uVal = m.cfg.DefaultUser
+		}
+		m.userInput.SetValue(uVal)
+		m.passInput.SetValue(pVal)
+		m.userInput.Focus()
+		m.passInput.Blur()
+		m.notice = fmt.Sprintf("Combo %q references empty snippet(s). Please set required values:", combo.Name)
+		m.isErrorNotice = false
+		return m, textinput.Blink
+	}
+
+	m.notice = fmt.Sprintf("Dispatching %q...", combo.Name)
+	m.isErrorNotice = false
+	return m, func() tea.Msg {
+		resolver := func(name string) (string, error) {
+			if m.snippetsStore == nil {
+				return "", fmt.Errorf("snippets store unavailable")
+			}
+			s, ok, _ := m.snippetsStore.Get(name)
+			if !ok {
+				return "", fmt.Errorf("snippet %q not found", name)
+			}
+			return s.Value, nil
+		}
+		err := m.manager.SendComboWithResolver(combo.Keys, resolver)
+		if err != nil {
+			return actionDoneMsg{notice: fmt.Sprintf("Combo failed: %v", err), isError: true}
+		}
+		return actionDoneMsg{notice: fmt.Sprintf("✔ Executed %q (%s)", combo.Name, combo.Keys), isError: false}
+	}
 }
 
 func (m Model) updateDevicesList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -589,46 +715,30 @@ func (m Model) updateDevicesList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) updateRegisterPlatform(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "1", "w", "W":
+	case "1":
 		m.regPlatform = "windows"
 		m.state = StateDeviceRegisterGuide
-		return m, nil
-	case "2", "m", "M":
+	case "2":
 		m.regPlatform = "macos"
 		m.state = StateDeviceRegisterGuide
-		return m, nil
-	case "esc", "b":
+	case "esc":
 		m.state = StateDevicesList
-		return m, nil
 	}
 	return m, nil
 }
 
 func (m Model) updateRegisterGuide(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "enter", "c", "C":
+	case "enter", " ":
 		m.state = StateDeviceRegisterInput
 		m.regActiveIn = 0
 		m.devNameInput.SetValue("")
-		if m.regPlatform == "macos" {
-			m.devNameInput.SetValue("MacBook")
-		} else {
-			m.devNameInput.SetValue("Windows PC")
-		}
-
-		// Prefill current detected target address if available
-		st := m.manager.GetStatus()
-		if st.Address != "" && st.Address != "none" {
-			m.devAddrInput.SetValue(st.Address)
-		} else {
-			m.devAddrInput.SetValue("")
-		}
-
+		m.devAddrInput.SetValue("")
 		m.devNameInput.Focus()
+		m.devAddrInput.Blur()
 		return m, textinput.Blink
-	case "esc", "b":
+	case "esc":
 		m.state = StateDeviceRegisterPlatform
-		return m, nil
 	}
 	return m, nil
 }
@@ -640,44 +750,54 @@ func (m Model) updateRegisterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.regActiveIn = 1
 			m.devNameInput.Blur()
 			m.devAddrInput.Focus()
-			return m, textinput.Blink
 		} else {
 			m.regActiveIn = 0
 			m.devAddrInput.Blur()
 			m.devNameInput.Focus()
-			return m, textinput.Blink
 		}
-	case "up":
+		return m, textinput.Blink
+	case "shift+tab", "up":
 		if m.regActiveIn == 1 {
 			m.regActiveIn = 0
 			m.devAddrInput.Blur()
 			m.devNameInput.Focus()
-			return m, textinput.Blink
+		} else {
+			m.regActiveIn = 1
+			m.devNameInput.Blur()
+			m.devAddrInput.Focus()
 		}
+		return m, textinput.Blink
 	case "enter":
 		name := strings.TrimSpace(m.devNameInput.Value())
 		addr := strings.ToUpper(strings.TrimSpace(m.devAddrInput.Value()))
+
 		if name == "" {
-			name = "New Device"
+			m.notice = "Device name cannot be empty."
+			m.isErrorNotice = true
+			return m, nil
 		}
-		if addr == "" {
-			m.notice = "Bluetooth MAC address is required."
+		if !isValidMAC(addr) {
+			m.notice = "Invalid Bluetooth MAC address (e.g. 38:FC:98:E8:E3:87)."
 			m.isErrorNotice = true
 			return m, nil
 		}
 
-		newDev := m.cfg.AddDevice(name, addr, m.regPlatform, true)
+		dev := m.cfg.AddDevice(name, addr, m.regPlatform, true)
+		_ = config.SaveConfig(m.cfg)
+
 		m.state = StateDevicesList
+		m.devicesIndex = len(m.cfg.Devices) - 1
+
 		return m, func() tea.Msg {
 			_ = m.manager.StartGateway()
-			time.Sleep(500 * time.Millisecond)
-			_ = m.manager.ConnectTarget(newDev.Address)
+			time.Sleep(300 * time.Millisecond)
+			_ = m.manager.ConnectTarget(dev.Address)
 			return actionDoneMsg{
-				notice:  fmt.Sprintf("✔ Registered and selected '%s' [%s]!", newDev.Name, newDev.Address),
+				notice:  fmt.Sprintf("✔ Registered & connecting to '%s' (%s) [%s]", dev.Name, dev.Platform, dev.Address),
 				isError: false,
 			}
 		}
-	case "esc", "b":
+	case "esc":
 		m.state = StateDeviceRegisterGuide
 		return m, nil
 	}
@@ -689,6 +809,24 @@ func (m Model) updateRegisterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.devAddrInput, cmd = m.devAddrInput.Update(msg)
 	}
 	return m, cmd
+}
+
+func isValidMAC(mac string) bool {
+	parts := strings.Split(mac, ":")
+	if len(parts) != 6 {
+		return false
+	}
+	for _, p := range parts {
+		if len(p) != 2 {
+			return false
+		}
+		for _, c := range p {
+			if !((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f')) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (m Model) updateDeleteConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -721,6 +859,12 @@ func (m Model) updateDeleteConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) runDoctorChecks() {
+	snipCount := 0
+	if m.snippetsStore != nil {
+		list, _ := m.snippetsStore.List()
+		snipCount = len(list)
+	}
+
 	m.doctorChecks = []DoctorCheck{
 		{Title: "ADB Executable", Pass: m.manager.AdbPath != "", Info: m.manager.AdbPath},
 		{Title: "Android Device", Pass: m.device != nil, Info: fmt.Sprintf("%s [%s]", m.deviceModel, m.manager.Serial)},
@@ -729,54 +873,68 @@ func (m *Model) runDoctorChecks() {
 		{Title: "Bluetooth HID (SDP)", Pass: m.status.Registered, Info: "Profile Active"},
 		{Title: "Target Laptop Link", Pass: m.status.Connected, Info: fmt.Sprintf("%s [%s]", m.status.Target, m.status.Address)},
 		{Title: "macOS Keychain Vault", Pass: keychain.IsAvailable(), Info: "Service 'ghost-hid'"},
+		{Title: "Snippets Subsystem", Pass: snipCount > 0, Info: fmt.Sprintf("%d snippets loaded", snipCount)},
 	}
 }
 
-func (m Model) startLoginCmd(user, pass string) tea.Cmd {
-	return func() tea.Msg {
-		delays := map[string]float64{
-			"wake":    m.cfg.Delays.Wake,
-			"overlay": m.cfg.Delays.Overlay,
-			"user":    m.cfg.Delays.User,
-			"tab":     m.cfg.Delays.Tab,
-			"pass":    m.cfg.Delays.Pass,
-			"submit":  m.cfg.Delays.Submit,
-		}
-		err := m.manager.ExecuteLogin(user, pass, delays, nil)
-		return loginDoneMsg(err)
-	}
-}
-
-func (m Model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) updateQuickSend(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
+	case "esc":
+		m.state = StateMenu
+		return m, nil
+
+	case "tab", "ctrl+r", "ctrl+t":
+		m.quickSendRaw = !m.quickSendRaw
+		if m.quickSendRaw {
+			m.textInput.Placeholder = "16 hex chars e.g. 0000040000000000"
+		} else {
+			m.textInput.Placeholder = "Type text to send (or press Tab for Raw mode)"
+		}
+		return m, nil
+
 	case "enter":
 		val := strings.TrimSpace(m.textInput.Value())
 		if val == "" {
 			m.state = StateMenu
 			return m, nil
 		}
-		currentState := m.state
+
+		isRaw := m.quickSendRaw
+		if strings.HasPrefix(strings.ToLower(val), "raw:") {
+			isRaw = true
+			val = strings.TrimSpace(val[4:])
+		} else if strings.HasPrefix(strings.ToLower(val), "type:") {
+			isRaw = false
+			val = strings.TrimSpace(val[5:])
+		}
+
 		m.state = StateMenu
+
+		if isRaw {
+			cleanHex := strings.ReplaceAll(val, " ", "")
+			if _, err := hex.DecodeString(cleanHex); err != nil || len(cleanHex) != 16 {
+				m.notice = "Raw HID report must be exactly 16 hexadecimal characters (8 bytes)."
+				m.isErrorNotice = true
+				return m, nil
+			}
+			return m, func() tea.Msg {
+				err := m.manager.SendRaw(cleanHex)
+				if err != nil {
+					return actionDoneMsg{notice: fmt.Sprintf("Error sending raw report: %v", err), isError: true}
+				}
+				return actionDoneMsg{notice: fmt.Sprintf("✔ Dispatched raw HID report: %s", cleanHex), isError: false}
+			}
+		}
+
 		return m, func() tea.Msg {
-			var err error
-			var successMsg string
-			switch currentState {
-			case StateTextInput:
-				err = m.manager.TypeText(val)
-				successMsg = fmt.Sprintf("✔ Typed: %s", val)
-			case StateComboInput:
-				err = m.manager.SendCombo(val)
-				successMsg = fmt.Sprintf("✔ Key combo dispatched: %s", val)
-			case StateRawInput:
-				err = m.manager.SendRaw(val)
-				successMsg = fmt.Sprintf("✔ Raw report sent: %s", val)
-			}
+			err := m.manager.TypeText(val)
 			if err != nil {
-				return actionDoneMsg{notice: fmt.Sprintf("Error: %v", err), isError: true}
+				return actionDoneMsg{notice: fmt.Sprintf("Error sending text: %v", err), isError: true}
 			}
-			return actionDoneMsg{notice: successMsg, isError: false}
+			return actionDoneMsg{notice: fmt.Sprintf("✔ Typed text (%d characters)", len(val)), isError: false}
 		}
 	}
+
 	var cmd tea.Cmd
 	m.textInput, cmd = m.textInput.Update(msg)
 	return m, cmd
@@ -798,6 +956,7 @@ func appendComboKey(current string, keyName string) string {
 
 func (m Model) updateComboInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	keyStr := msg.String()
+
 	switch keyStr {
 	case "enter":
 		val := strings.TrimSpace(m.textInput.Value())
@@ -807,16 +966,12 @@ func (m Model) updateComboInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.state = StateMenu
 		return m, func() tea.Msg {
-			err := m.manager.SendCombo(val)
+			err := m.manager.SendComboWithResolver(val, m.snippetsStore.Resolver())
 			if err != nil {
 				return actionDoneMsg{notice: fmt.Sprintf("Error: %v", err), isError: true}
 			}
 			return actionDoneMsg{notice: fmt.Sprintf("✔ Key combo sequence dispatched: %s", val), isError: false}
 		}
-
-	case "ctrl+d", "ctrl+q", "ctrl+g":
-		m.state = StateMenu
-		return m, nil
 
 	case "esc":
 		current := strings.TrimSpace(m.textInput.Value())
@@ -864,7 +1019,6 @@ func (m Model) updateComboInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Standard text editing for typing characters: "->", "->{1.5}", "super+l", etc.
 	var cmd tea.Cmd
 	m.textInput, cmd = m.textInput.Update(msg)
 	return m, cmd
@@ -872,6 +1026,11 @@ func (m Model) updateComboInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) updateLoginPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
+	case "esc":
+		m.pendingCombo = nil
+		m.state = StateMenu
+		return m, nil
+
 	case "tab", "down":
 		if m.loginActiveIn == 0 {
 			m.loginActiveIn = 1
@@ -884,24 +1043,36 @@ func (m Model) updateLoginPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.userInput.Focus()
 			return m, textinput.Blink
 		}
+
 	case "enter":
 		user := strings.TrimSpace(m.userInput.Value())
 		pass := strings.TrimSpace(m.passInput.Value())
 		if user == "" || pass == "" {
-			m.notice = "Username and password are required."
+			m.notice = "Username and password cannot be empty."
 			m.isErrorNotice = true
 			return m, nil
 		}
 
+		if m.snippetsStore != nil {
+			_, _ = m.snippetsStore.Set("username", user, false)
+			_, _ = m.snippetsStore.Set("password", pass, true)
+		}
 		if keychain.IsAvailable() {
 			_ = keychain.SetPassword(user, pass)
 		}
 		m.cfg.DefaultUser = user
 		_ = config.SaveConfig(m.cfg)
 
-		m.state = StateLoginExecuting
-		m.loginStep = 0
-		return m, m.startLoginCmd(user, pass)
+		m.state = StateMenu
+		if m.pendingCombo != nil {
+			combo := *m.pendingCombo
+			m.pendingCombo = nil
+			return m.executeCombo(combo)
+		}
+		m.notice = "✔ Snippets updated."
+		m.isErrorNotice = false
+		m.refreshMenuItems()
+		return m, nil
 	}
 
 	var cmd tea.Cmd
@@ -911,25 +1082,4 @@ func (m Model) updateLoginPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.passInput, cmd = m.passInput.Update(msg)
 	}
 	return m, cmd
-}
-
-func (m Model) updateCredsMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "c":
-		if m.cfg.DefaultUser != "" {
-			_ = keychain.DeletePassword(m.cfg.DefaultUser)
-		}
-		m.cfg.DefaultUser = ""
-		_ = config.SaveConfig(m.cfg)
-		m.notice = "✔ Cleared Keychain credentials."
-		m.isErrorNotice = false
-		m.state = StateMenu
-	case "u":
-		m.state = StateLoginPrompt
-		m.userInput.SetValue(m.cfg.DefaultUser)
-		m.passInput.SetValue("")
-		m.userInput.Focus()
-		return m, textinput.Blink
-	}
-	return m, nil
 }
