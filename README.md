@@ -4,7 +4,7 @@
 
 GhostHID turns an Android smartphone into a hardware-recognized Bluetooth Human Interface Device (HID) keyboard capable of injecting keystrokes, shortcuts, and automated authentication sequences into any paired Windows, macOS, or Linux host.
 
-It runs as a persistent background Android Foreground Service controlled entirely via ADB shell commands or host-side scripts—no interactive phone UI tapping required.
+It runs as an unkillable background Android Foreground Service controlled entirely via ADB shell commands or host-side scripts—no interactive phone UI tapping required.
 
 ---
 
@@ -17,8 +17,8 @@ Most third-party "Bluetooth Keyboard & Mouse" apps fail when attempting to conne
 
 GhostHID solves this by:
 * Broadcasting compliant 8-byte HID keyboard report descriptors directly to the Bluetooth daemon.
-* Running inside an unkillable Android 14 `connectedDevice` Foreground Service.
-* Exposing a zero-latency IPC broadcast interface to trigger key sequences (`Win + L`, `Ctrl + Alt + Del`, ASCII typing, shortcuts) headlessly from an ADB connection.
+* Running inside an Android 14 `connectedDevice` Foreground Service.
+* Exposing a zero-latency IPC broadcast interface to trigger key sequences (`Win + L`, `Ctrl + Alt + Del`, ASCII typing, shortcuts, and Windows Sleep) headlessly from an ADB connection.
 
 ---
 
@@ -34,7 +34,8 @@ flowchart LR
 
 * **`HidService.java`**: Android Service maintaining the `BluetoothProfile.HID_DEVICE` proxy and managing report generation and pacing.
 * **`HidCommandReceiver.java`**: Manifest-registered broadcast receiver responding to `com.poc.hiddebug.ACTION_LOCK` and `ACTION_CMD`.
-* **`cli.sh`**: Lightweight host script providing single-line commands to control keystrokes, type text, or inspect connection state.
+* **`cli.sh`**: Lightweight host script providing single-line commands to control keystrokes, type text, put to sleep, or inspect connection state.
+* **`login.sh`**: Automated Windows wake-up, credential injection, and login submission script.
 * **`build.sh`**: Standalone build toolchain using Android CLI tools (`aapt2`, `javac`, `d8`, `zipalign`, `apksigner`) with zero Gradle overhead.
 
 ---
@@ -84,6 +85,12 @@ Output:
 ./cli.sh lock
 ```
 
+### Instant Sleep (Win + X $\rightarrow$ u $\rightarrow$ s)
+Puts the Windows laptop to sleep natively without requiring administrative privileges:
+```bash
+./cli.sh sleep
+```
+
 ### Type Text
 Inject ASCII strings at human-like keypress intervals:
 ```bash
@@ -123,6 +130,17 @@ Or run interactively (with secure hidden password entry):
 ```bash
 ./login.sh
 ```
+
+---
+
+## Power State Behavior Notes
+
+* **Lock State (`Win + L`):**
+  * The Windows display powers down after the configured timeout, but the Bluetooth controller remains powered in low-power idle.
+  * GhostHID can wake the screen, inject credentials, and unlock the machine remotely at any time.
+* **Sleep State (ACPI S3 / Modern Standby D3cold):**
+  * Corporate Windows laptops cut standby power rails to the internal Bluetooth radio chip to prevent battery drain.
+  * Once the laptop's physical power button or a key is tapped, GhostHID auto-reconnects within 1–2 seconds and can immediately inject the login sequence.
 
 ---
 
