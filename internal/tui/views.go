@@ -37,10 +37,8 @@ func (m Model) View() string {
 		sb.WriteString(m.renderFooter())
 	case StateLoginPrompt:
 		sb.WriteString(m.renderLoginPrompt())
-	case StateLoginExecuting:
-		sb.WriteString(m.renderLoginExecuting())
-	case StateSleepCountdown:
-		sb.WriteString(m.renderSleepCountdown())
+	case StateComboExecuting, StateLoginExecuting, StateSleepCountdown:
+		sb.WriteString(m.renderComboCountdown())
 	case StateQuickSend:
 		sb.WriteString(m.renderQuickSend())
 	case StateComboInput:
@@ -394,32 +392,63 @@ func (m Model) renderLoginPrompt() string {
 	return FocusCardStyle.Width(56).Render(content)
 }
 
-func (m Model) renderLoginExecuting() string {
-	content := fmt.Sprintf(
-		"⚡ %s\n\n%s Transmitting automated authentication sequence...\n\n%s",
-		TitleStyle.Render("Unlocking Windows"),
-		m.spinner.View(),
-		SubtitleStyle.Render("Ctrl+Alt+Del ➔ Esc ➔ Username ➔ Tab ➔ Password ➔ Enter"),
-	)
-	return CardStyle.Width(50).Render(content)
-}
-
-func (m Model) renderSleepCountdown() string {
-	pct := float64(m.sleepTotal-m.sleepSeconds) / float64(m.sleepTotal)
-	if pct < 0 {
-		pct = 0
-	}
-	if pct > 1 {
-		pct = 1
+func (m Model) renderComboCountdown() string {
+	pct := 0.0
+	if m.execTotalDuration > 0 {
+		elapsed := m.execTotalDuration - m.execRemaining
+		pct = float64(elapsed) / float64(m.execTotalDuration)
+		if pct < 0 {
+			pct = 0
+		}
+		if pct > 1 {
+			pct = 1
+		}
 	}
 
+	emoji := "⚡"
+	name := "Combo Sequence"
+	desc := ""
+	if m.execCombo != nil {
+		if m.execCombo.Emoji != "" {
+			emoji = m.execCombo.Emoji
+		}
+		if m.execCombo.Name != "" {
+			name = m.execCombo.Name
+		}
+		if m.execCombo.Description != "" {
+			desc = m.execCombo.Description
+		} else {
+			desc = m.execCombo.Keys
+		}
+	}
+
+	remainingSec := m.execRemaining.Seconds()
+	if remainingSec < 0 {
+		remainingSec = 0
+	}
+
+	stepNum := m.execStepIdx + 1
+	totalSteps := len(m.execSteps)
+	if totalSteps == 0 {
+		totalSteps = 1
+	}
+	if stepNum > totalSteps {
+		stepNum = totalSteps
+	}
+
+	stepInfo := fmt.Sprintf("Step %d of %d: %s", stepNum, totalSteps, m.execStepDesc)
+
 	content := fmt.Sprintf(
-		"🌙 %s\n\nWindows sleep sequence dispatched (Win+X ➔ U ➔ S)\nDisconnecting Bluetooth in %d seconds...\n\n%s",
-		TitleStyle.Render("Putting Host to Sleep"),
-		m.sleepSeconds,
+		"%s %s\n\n%s\n\n%s\n\n%s\nRemaining: %.1fs\n\n%s",
+		emoji,
+		TitleStyle.Render(name),
+		SubtitleStyle.Render(desc),
+		lipgloss.NewStyle().Foreground(ColorCyan).Bold(true).Render(stepInfo),
 		m.progress.ViewAs(pct),
+		remainingSec,
+		HelpStyle.Render("[Esc] or [q]: Cancel Sequence"),
 	)
-	return CardStyle.Width(50).Render(content)
+	return CardStyle.Width(52).Render(content)
 }
 
 func (m Model) renderComboInput() string {

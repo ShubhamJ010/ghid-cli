@@ -266,13 +266,14 @@ func NormalizeComboForAndroid(combo string) string {
 
 // ComboStep represents a single action in a chained combo sequence.
 type ComboStep struct {
-	Combo    string        // Human-readable combo for this step, e.g. "super+l"
-	Modifier byte          // Resolved modifier bitmask
-	KeyCode  byte          // Resolved primary keycode
-	Mouse    *MouseAction  // Non-nil when this step is a mouse gesture
-	Text     string        // Non-empty when this step types a literal string
-	Variable string        // Non-empty when this step references a snippet variable, e.g. "USERNAME"
-	Delay    time.Duration // Pause duration after transmitting this step
+	Combo     string        // Human-readable combo for this step, e.g. "super+l"
+	Modifier  byte          // Resolved modifier bitmask
+	KeyCode   byte          // Resolved primary keycode
+	Mouse     *MouseAction  // Non-nil when this step is a mouse gesture
+	Text      string        // Non-empty when this step types a literal string
+	Variable  string        // Non-empty when this step references a snippet variable, e.g. "USERNAME"
+	Directive string        // Non-empty when this step is an event directive, e.g. "!EXIT", "!DISCONNECT"
+	Delay     time.Duration // Pause duration after transmitting this step
 }
 
 // Delimiter regex matching "->{0.9}", ">{0.9}.", "-> 1.0", "->{0.9)", "->", etc.

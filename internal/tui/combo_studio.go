@@ -502,7 +502,7 @@ func (m ComboStudioModel) renderList() string {
 
 func (m ComboStudioModel) renderComboTable() string {
 	header := lipgloss.NewStyle().Foreground(ColorFgMuted).Render(
-		fmt.Sprintf("    %-3s %-26s %s", "#", "NAME", "WINDOWS KEYS"))
+		fmt.Sprintf("    %-3s %-24s %-28s %s", "#", "NAME", "KEYS", "DESCRIPTION"))
 
 	var rows []string
 	rows = append(rows, header)
@@ -511,15 +511,23 @@ func (m ComboStudioModel) renderComboTable() string {
 		if c.Favorite {
 			favIcon = "❤️ "
 		}
-		name := c.Name
-		if runes := []rune(name); len(runes) > 26 {
-			name = string(runes[:25]) + "…"
+		emojiStr := ""
+		if c.Emoji != "" {
+			emojiStr = c.Emoji + " "
+		}
+		name := emojiStr + c.Name
+		if runes := []rune(name); len(runes) > 24 {
+			name = string(runes[:23]) + "…"
 		}
 		keys := c.Keys
-		if runes := []rune(keys); len(runes) > 36 {
-			keys = string(runes[:35]) + "…"
+		if runes := []rune(keys); len(runes) > 28 {
+			keys = string(runes[:27]) + "…"
 		}
-		line := fmt.Sprintf("%s%2d  %-26s %s", favIcon, i+1, name, keys)
+		desc := c.Description
+		if runes := []rune(desc); len(runes) > 30 {
+			desc = string(runes[:29]) + "…"
+		}
+		line := fmt.Sprintf("%s%2d  %-24s %-28s %s", favIcon, i+1, name, keys, desc)
 		if i == m.index {
 			prefix := "▸"
 			if m.focus == 0 {

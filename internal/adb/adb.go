@@ -38,11 +38,21 @@ type GatewayStatus struct {
 	Updated    string `json:"updated"`
 }
 
+// DirectiveHandler is invoked when a combo encounters a !DIRECTIVE step.
+// If handled is true, the directive was processed.
+type DirectiveHandler func(directive string) (bool, error)
+
 type Manager struct {
-	AdbPath string
-	Serial  string
-	Root    string
-	runner  Runner
+	AdbPath          string
+	Serial           string
+	Root             string
+	runner           Runner
+	DirectiveHandler DirectiveHandler
+}
+
+// SetDirectiveHandler registers a custom handler for directives like !COMBO:SEND:<name>.
+func (m *Manager) SetDirectiveHandler(h DirectiveHandler) {
+	m.DirectiveHandler = h
 }
 
 func NewManager(serial string) (*Manager, error) {
@@ -349,7 +359,23 @@ func (m *Manager) SendComboWithResolver(keys string, resolver func(string) (stri
 		return err
 	}
 	for _, step := range steps {
-		if step.Variable != "" {
+		if step.Directive != "" {
+			if m.DirectiveHandler != nil {
+				handled, err := m.DirectiveHandler(step.Directive)
+				if handled {
+					if err != nil {
+						return err
+					}
+					if step.Delay > 0 {
+						time.Sleep(step.Delay)
+					}
+					continue
+				}
+			}
+			if err := m.ExecuteBuiltinDirective(step.Directive); err != nil {
+				return err
+			}
+		} else if step.Variable != "" {
 			if resolver == nil {
 				return fmt.Errorf("snippet variable $%s requires a resolver", step.Variable)
 			}
@@ -386,6 +412,41 @@ func (m *Manager) SendComboWithResolver(keys string, resolver func(string) (stri
 		}
 	}
 	return nil
+}
+
+// ExecuteBuiltinDirective executes standard lifecycle directives:
+// !EXIT, !DISCONNECT, !CONNECT, !RECONNECT, !START, !STOP, !RESTART, !UNPAIR.
+func (m *Manager) ExecuteBuiltinDirective(directive string) error {
+	upper := strings.ToUpper(strings.TrimSpace(directive))
+	switch {
+	case upper == "!EXIT":
+		return hid.ErrExitRequested
+	case upper == "!DISCONNECT":
+		return m.DisconnectTarget()
+	case upper == "!CONNECT":
+		return m.ConnectTarget("")
+	case strings.HasPrefix(upper, "!CONNECT:"):
+		target := strings.TrimPrefix(directive, "!CONNECT:")
+		return m.ConnectTarget(strings.TrimSpace(target))
+	case upper == "!RECONNECT":
+		_ = m.DisconnectTarget()
+		time.Sleep(500 * time.Millisecond)
+		return m.ConnectTarget("")
+	case upper == "!START":
+		return m.StartGateway()
+	case upper == "!STOP":
+		return m.StopGateway()
+	case upper == "!RESTART":
+		_ = m.StopGateway()
+		time.Sleep(500 * time.Millisecond)
+		return m.StartGateway()
+	case upper == "!UNPAIR":
+		return m.UnpairTarget()
+	case strings.HasPrefix(upper, "!COMBO:SEND:"):
+		return fmt.Errorf("directive %s requires combo store context", directive)
+	default:
+		return fmt.Errorf("unsupported directive %q", directive)
+	}
 }
 
 // SendMouse dispatches a single Windows mouse gesture through the phone.

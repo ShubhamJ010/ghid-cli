@@ -108,19 +108,26 @@ func TestStoreEnsureDefaultsAndFavorites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnsureDefaults failed: %v", err)
 	}
-	if len(list) != 1 {
-		t.Fatalf("expected 1 default combo, got %d", len(list))
+	if len(list) != 3 {
+		t.Fatalf("expected 3 default combos (Login, Lock, Sleep), got %d", len(list))
 	}
-	if list[0].Name != "Login" || !list[0].Favorite {
-		t.Errorf("expected Login favorite combo, got %+v", list[0])
+	names := map[string]Combo{}
+	for _, c := range list {
+		names[c.Name] = c
 	}
-	if list[0].Keys != DefaultLoginKeys {
-		t.Errorf("expected DefaultLoginKeys, got %q", list[0].Keys)
+	if c, ok := names["Login"]; !ok || !c.Favorite || c.Emoji != "🔑" || c.Description == "" {
+		t.Errorf("expected Login built-in with emoji and description, got %+v", c)
+	}
+	if c, ok := names["Lock"]; !ok || !c.Favorite || c.Emoji != "🔒" || c.Description == "" {
+		t.Errorf("expected Lock built-in with emoji and description, got %+v", c)
+	}
+	if c, ok := names["Sleep"]; !ok || !c.Favorite || c.Emoji != "🌙" || c.Description == "" {
+		t.Errorf("expected Sleep built-in with emoji and description, got %+v", c)
 	}
 
 	favs, err := store.Favorites()
-	if err != nil || len(favs) != 1 || favs[0].Name != "Login" {
-		t.Errorf("Favorites failed: %+v", favs)
+	if err != nil || len(favs) != 3 {
+		t.Errorf("expected 3 favorites, got %d: %+v", len(favs), favs)
 	}
 
 	// Toggle favorite

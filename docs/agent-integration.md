@@ -87,11 +87,27 @@ Returns the complete list of valid key tokens, modifier names, and mouse actions
 #### Response
 ```json
 {
-  "syntax": "<step> [->{delay}] <step> ...",
-  "modifiers": ["win", "gui", "ctrl", "control", "alt", "shift"],
-  "keys": ["enter", "esc", "tab", "space", "backspace", "del", "insert", "up", "down", "left", "right", "home", "end", "pgup", "pgdn", "a", "b", "c", "..."],
-  "mouse_actions": ["click-left", "click-right", "click-middle", "double-click", "scroll-up", "scroll-down"],
-  "text_prefix": "type:<text> or type:\"<text with spaces>\""
+  "grammar": "step ->{seconds} step ->{seconds} step",
+  "step_types": [
+    "keyboard chord: ctrl+shift+esc",
+    "mouse gesture: click-left, scroll-up",
+    "variable injection: $USERNAME, $PASSWORD, ${PIN}",
+    "typed text: type:rustdesk or type:\"rust desk\"",
+    "event directive: !EXIT, !DISCONNECT, !CONNECT, !RECONNECT, !START, !STOP, !RESTART, !UNPAIR, !COMBO:SEND:lock"
+  ],
+  "directives": [
+    "!EXIT",
+    "!CONNECT",
+    "!DISCONNECT",
+    "!RECONNECT",
+    "!START",
+    "!STOP",
+    "!RESTART",
+    "!UNPAIR",
+    "!COMBO:SEND:<name>"
+  ],
+  "keyboard": ["win", "ctrl", "alt", "shift", "enter", "esc", "tab", "space", "..."],
+  "mouse": ["click-left", "click-right", "click-middle", "double-click", "scroll-up", "scroll-down"]
 }
 ```
 
@@ -135,14 +151,26 @@ Returns all saved combos in the local library (`~/.config/ghid/combos.json`).
   {
     "name": "Login",
     "keys": "ctrl+alt+del ->{1.0} esc ->{0.8} $USERNAME ->{0.8} tab ->{0.8} $PASSWORD ->{0.8} enter",
+    "emoji": "🔑",
+    "description": "Windows unlock & credential injection",
     "favorite": true,
     "created_at": "2026-10-23T01:00:00Z"
   },
   {
-    "name": "Open Terminal",
-    "keys": "win+x ->{0.3} i",
-    "favorite": false,
-    "created_at": "2026-10-23T01:05:00Z"
+    "name": "Lock",
+    "keys": "win+l",
+    "emoji": "🔒",
+    "description": "Instant Windows lock screen (Win + L)",
+    "favorite": true,
+    "created_at": "2026-10-23T01:00:00Z"
+  },
+  {
+    "name": "Sleep",
+    "keys": "win+x ->{0.5} u ->{0.3} s ->{5.0} !DISCONNECT ->{0.5} !EXIT",
+    "emoji": "🌙",
+    "description": "Windows sleep sequence + countdown exit",
+    "favorite": true,
+    "created_at": "2026-10-23T01:00:00Z"
   }
 ]
 ```

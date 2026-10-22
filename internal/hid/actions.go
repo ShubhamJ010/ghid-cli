@@ -1,6 +1,7 @@
 package hid
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -104,6 +105,96 @@ func mouseActionFor(canonical string) MouseAction {
 	}
 }
 
+
+// Control and lifecycle directives recognized by the GhostHID sequence runner.
+const (
+	DirectiveExit       = "!EXIT"
+	DirectiveConnect    = "!CONNECT"
+	DirectiveDisconnect = "!DISCONNECT"
+	DirectiveReconnect  = "!RECONNECT"
+	DirectiveStart      = "!START"
+	DirectiveStop       = "!STOP"
+	DirectiveRestart    = "!RESTART"
+	DirectiveUnpair     = "!UNPAIR"
+	DirectiveComboSend  = "!COMBO:SEND:"
+)
+
+// ErrExitRequested is returned when an !EXIT directive executes successfully.
+var ErrExitRequested = errors.New("exit requested")
+
+// Directives lists every control directive accepted by the combo grammar.
+func Directives() []string {
+	return []string{
+		"!EXIT",
+		"!CONNECT",
+		"!DISCONNECT",
+		"!RECONNECT",
+		"!START",
+		"!STOP",
+		"!RESTART",
+		"!UNPAIR",
+		"!COMBO:SEND:<name>",
+	}
+}
+
+// parseDirectiveStep parses event/lifecycle directives prefixed with "!", e.g.:
+//   - "!EXIT"
+//   - "!DISCONNECT"
+//   - "!CONNECT" (or "!CONNECT:38:FC:98:E8:E3:87")
+//   - "!RECONNECT"
+//   - "!START"
+//   - "!STOP"
+//   - "!RESTART"
+//   - "!UNPAIR"
+//   - "!COMBO:SEND:lock" (or "!COMBO:lock")
+func parseDirectiveStep(segment string) (string, bool, error) {
+	trimmed := strings.TrimSpace(segment)
+	if !strings.HasPrefix(trimmed, "!") {
+		return "", false, nil
+	}
+	parts := strings.Split(trimmed, ":")
+	verb := strings.ToUpper(strings.TrimSpace(parts[0]))
+	switch verb {
+	case "!EXIT":
+		return DirectiveExit, true, nil
+	case "!DISCONNECT":
+		return DirectiveDisconnect, true, nil
+	case "!RECONNECT":
+		return DirectiveReconnect, true, nil
+	case "!START":
+		return DirectiveStart, true, nil
+	case "!STOP":
+		return DirectiveStop, true, nil
+	case "!RESTART":
+		return DirectiveRestart, true, nil
+	case "!UNPAIR":
+		return DirectiveUnpair, true, nil
+	case "!CONNECT":
+		if len(parts) > 1 {
+			target := strings.TrimSpace(strings.Join(parts[1:], ":"))
+			if target != "" {
+				return DirectiveConnect + ":" + target, true, nil
+			}
+		}
+		return DirectiveConnect, true, nil
+	case "!COMBO":
+		sub := parts[1:]
+		if len(sub) == 0 {
+			return "", true, errors.New("directive !COMBO requires a target name, e.g. !COMBO:SEND:lock")
+		}
+		if strings.EqualFold(strings.TrimSpace(sub[0]), "SEND") {
+			sub = sub[1:]
+		}
+		name := strings.TrimSpace(strings.Join(sub, ":"))
+		if name == "" {
+			return "", true, errors.New("directive !COMBO requires a target name, e.g. !COMBO:SEND:lock")
+		}
+		return DirectiveComboSend + name, true, nil
+	default:
+		return "", true, fmt.Errorf("unknown directive %q (supported: %s)", trimmed, strings.Join(Directives(), ", "))
+	}
+}
+
 // ParseActionSequence parses a combo in which every step is either a Windows
 // keyboard chord, a mouse gesture, a literal text type step, or a variable ($VAR).
 // Steps are joined with "->" and may carry a delay, e.g. "win+r ->{0.9} tab ->{0.2} $USERNAME".
@@ -112,6 +203,13 @@ func ParseActionSequence(input string) ([]ComboStep, error) {
 }
 
 func parseActionSegment(segment string) (ComboStep, error) {
+	if dir, ok, err := parseDirectiveStep(segment); ok {
+		if err != nil {
+			return ComboStep{}, err
+		}
+		return ComboStep{Combo: dir, Directive: dir}, nil
+	}
+
 	if varName, ok := parseVariableStep(segment); ok {
 		return ComboStep{Combo: segment, Variable: varName}, nil
 	}
@@ -279,6 +377,9 @@ func DescribeSequence(input string) ([]StepDescription, error) {
 	for _, step := range steps {
 		desc := StepDescription{DelayMS: step.Delay.Milliseconds()}
 		switch {
+		case step.Directive != "":
+			desc.Type = "directive"
+			desc.Value = step.Directive
 		case step.Variable != "":
 			desc.Type = "variable"
 			desc.Value = "$" + step.Variable

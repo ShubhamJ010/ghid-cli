@@ -14,17 +14,48 @@ import (
 	"github.com/ghost-hid/ghid/internal/hid"
 )
 
-// DefaultLoginKeys is the standard Windows unlock sequence shipped with the app.
-const DefaultLoginKeys = "ctrl+alt+del ->{1.0} esc ->{0.8} $USERNAME ->{0.8} tab ->{0.8} $PASSWORD ->{0.8} enter"
+// Default combo keys shipped with the application.
+const (
+	DefaultLoginKeys = "ctrl+alt+del ->{1.0} esc ->{0.8} $USERNAME ->{0.8} tab ->{0.8} $PASSWORD ->{0.8} enter"
+	DefaultLockKeys  = "win+l"
+	DefaultSleepKeys = "win+x ->{0.5} u ->{0.3} s ->{5.0} !DISCONNECT ->{0.5} !EXIT"
+)
 
 // Combo is a named, replayable sequence of Windows keyboard chords, mouse
-// gestures and typed text. Keys uses the ghid sequence grammar, e.g.
+// gestures, typed text and directives. Keys uses the ghid sequence grammar, e.g.
 // "win+r ->{0.6} type:rustdesk ->{0.3} enter".
 type Combo struct {
-	Name      string    `json:"name"`
-	Keys      string    `json:"keys"`
-	Favorite  bool      `json:"favorite,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	Name        string    `json:"name"`
+	Keys        string    `json:"keys"`
+	Emoji       string    `json:"emoji,omitempty"`
+	Description string    `json:"description,omitempty"`
+	Favorite    bool      `json:"favorite,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+// DefaultCombos defines the built-in system combos with their emojis and descriptions.
+var DefaultCombos = []Combo{
+	{
+		Name:        "Login",
+		Keys:        DefaultLoginKeys,
+		Emoji:       "🔑",
+		Description: "Windows unlock & credential injection",
+		Favorite:    true,
+	},
+	{
+		Name:        "Lock",
+		Keys:        DefaultLockKeys,
+		Emoji:       "🔒",
+		Description: "Instant Windows lock screen (Win + L)",
+		Favorite:    true,
+	},
+	{
+		Name:        "Sleep",
+		Keys:        DefaultSleepKeys,
+		Emoji:       "🌙",
+		Description: "Windows sleep sequence + countdown exit",
+		Favorite:    true,
+	},
 }
 
 // Store reads and writes the combo library on disk.
@@ -85,21 +116,53 @@ func (s *Store) save(list []Combo) error {
 	return os.WriteFile(s.Path, data, 0600)
 }
 
-// EnsureDefaults seeds the default Login favorite combo if the store is empty
-// on first launch.
+// EnsureDefaults seeds the default built-in combos (Login, Lock, Sleep) if empty,
+// and ensures existing built-ins have their emoji and description populated.
 func (s *Store) EnsureDefaults() ([]Combo, error) {
 	list, err := s.Load()
 	if err != nil {
 		return nil, err
 	}
 	if len(list) == 0 {
-		loginCombo := Combo{
-			Name:      "Login",
-			Keys:      DefaultLoginKeys,
-			Favorite:  true,
-			CreatedAt: time.Now().UTC(),
+		now := time.Now().UTC()
+		var seeded []Combo
+		for _, def := range DefaultCombos {
+			def.CreatedAt = now
+			seeded = append(seeded, def)
 		}
-		return s.Add(loginCombo)
+		if err := s.save(seeded); err != nil {
+			return nil, err
+		}
+		return seeded, nil
+	}
+
+	modified := false
+	for _, def := range DefaultCombos {
+		found := false
+		for i := range list {
+			if strings.EqualFold(list[i].Name, def.Name) {
+				found = true
+				if list[i].Emoji == "" && def.Emoji != "" {
+					list[i].Emoji = def.Emoji
+					modified = true
+				}
+				if list[i].Description == "" && def.Description != "" {
+					list[i].Description = def.Description
+					modified = true
+				}
+				break
+			}
+		}
+		if !found {
+			def.CreatedAt = time.Now().UTC()
+			list = append(list, def)
+			modified = true
+		}
+	}
+	if modified {
+		if err := s.save(list); err != nil {
+			return nil, err
+		}
 	}
 	return list, nil
 }
@@ -166,6 +229,9 @@ func Validate(keys string) error {
 	}
 
 	for _, step := range steps {
+		if step.Directive != "" {
+			continue
+		}
 		if step.Variable != "" {
 			continue
 		}
@@ -227,6 +293,15 @@ func (s *Store) Add(c Combo) ([]Combo, error) {
 	replaced := false
 	for i := range list {
 		if strings.EqualFold(list[i].Name, name) {
+			if !c.Favorite && list[i].Favorite {
+				c.Favorite = true
+			}
+			if c.Emoji == "" && list[i].Emoji != "" {
+				c.Emoji = list[i].Emoji
+			}
+			if c.Description == "" && list[i].Description != "" {
+				c.Description = list[i].Description
+			}
 			list[i] = c
 			replaced = true
 			break
@@ -265,14 +340,19 @@ func (s *Store) Delete(name string) ([]Combo, bool, error) {
 }
 
 // Find returns the combo with the given name (case-insensitive).
+// Falls back to built-in system combos (Login, Lock, Sleep) if not in the stored list.
 func (s *Store) Find(name string) (Combo, bool) {
 	list, err := s.Load()
-	if err != nil {
-		return Combo{}, false
+	if err == nil {
+		for _, c := range list {
+			if strings.EqualFold(c.Name, strings.TrimSpace(name)) {
+				return c, true
+			}
+		}
 	}
-	for _, c := range list {
-		if strings.EqualFold(c.Name, strings.TrimSpace(name)) {
-			return c, true
+	for _, def := range DefaultCombos {
+		if strings.EqualFold(def.Name, strings.TrimSpace(name)) {
+			return def, true
 		}
 	}
 	return Combo{}, false

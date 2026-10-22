@@ -9,7 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
+	"errors"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ghost-hid/ghid/internal/adb"
@@ -461,60 +461,19 @@ func (a *App) handleLogin(cfg config.Config, serial string, args []string, jsonO
 }
 
 func (a *App) handleLock(serial string, jsonOutput bool) int {
-	gw, err := a.GatewayFactory(serial)
-	if err != nil {
-		fmt.Fprintf(a.Stderr, "Error: %v\n", err)
-		return 1
+	lockKeys := combos.DefaultLockKeys
+	if c, ok := a.comboStore().Find("Lock"); ok && c.Keys != "" {
+		lockKeys = c.Keys
 	}
-	err = gw.Lock()
-	if err != nil {
-		fmt.Fprintf(a.Stderr, "Lock failed: %v\n", err)
-		return 1
-	}
-	if jsonOutput {
-		fmt.Fprintln(a.Stdout, `{"status": "success", "action": "lock"}`)
-	} else {
-		fmt.Fprintln(a.Stdout, "✔ Windows lock command dispatched (Win + L)")
-	}
-	return 0
+	return a.dispatchCombo(serial, "Lock", lockKeys, jsonOutput)
 }
 
 func (a *App) handleSleep(serial string, args []string, jsonOutput bool) int {
-	countdown := 5
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--countdown" && i+1 < len(args) {
-			_, _ = fmt.Sscanf(args[i+1], "%d", &countdown)
-			i++
-		}
+	sleepKeys := combos.DefaultSleepKeys
+	if c, ok := a.comboStore().Find("Sleep"); ok && c.Keys != "" {
+		sleepKeys = c.Keys
 	}
-
-	gw, err := a.GatewayFactory(serial)
-	if err != nil {
-		fmt.Fprintf(a.Stderr, "Error: %v\n", err)
-		return 1
-	}
-
-	if !jsonOutput {
-		fmt.Fprintln(a.Stdout, "🌙 Sending Windows sleep sequence (Esc -> Esc -> Win+X -> u -> s)...")
-	}
-	_ = gw.SleepSequence()
-
-	if !jsonOutput {
-		fmt.Fprintf(a.Stdout, "Clean exit in %d seconds (disconnecting Bluetooth & stopping service)...\n", countdown)
-		for c := countdown; c > 0; c-- {
-			fmt.Fprintf(a.Stdout, "\r  Stopping in %d... ", c)
-			time.Sleep(1 * time.Second)
-		}
-		fmt.Fprintln(a.Stdout, "\r✔ Gateway stopped cleanly. Zero background battery drain.")
-	}
-
-	_ = gw.Disconnect()
-	_ = gw.StopService()
-
-	if jsonOutput {
-		fmt.Fprintln(a.Stdout, `{"status": "success", "action": "sleep"}`)
-	}
-	return 0
+	return a.dispatchCombo(serial, "Sleep", sleepKeys, jsonOutput)
 }
 
 func (a *App) handleQuick(serial string, args []string, jsonOutput bool) int {
@@ -675,26 +634,41 @@ func (a *App) handleCombo(serial string, args []string, jsonOutput bool) int {
 
 	case "save", "add":
 		if len(args) < 3 {
-			return a.comboFail(jsonOutput, "usage: ghid combo save <name> <keys...> [--fav]")
+			return a.comboFail(jsonOutput, "usage: ghid combo save <name> <keys...> [--fav] [--emoji <e>] [--desc <d>]")
 		}
 		name := args[1]
 		isFav := false
+		emoji := ""
+		description := ""
 		var keyTokens []string
-		for _, arg := range args[2:] {
+		for i := 2; i < len(args); i++ {
+			arg := args[i]
 			if arg == "--fav" || arg == "--favorite" {
 				isFav = true
+			} else if arg == "--emoji" && i+1 < len(args) {
+				emoji = args[i+1]
+				i++
+			} else if (arg == "--desc" || arg == "--description") && i+1 < len(args) {
+				description = args[i+1]
+				i++
 			} else {
 				keyTokens = append(keyTokens, arg)
 			}
 		}
 		keys := strings.Join(keyTokens, " ")
 		_, existed := store.Find(name)
-		list, err := store.Add(combos.Combo{Name: name, Keys: keys, Favorite: isFav})
+		list, err := store.Add(combos.Combo{
+			Name:        name,
+			Keys:        keys,
+			Emoji:       emoji,
+			Description: description,
+			Favorite:    isFav,
+		})
 		if err != nil {
 			return a.comboFail(jsonOutput, "%v", err)
 		}
 		if jsonOutput {
-			saved := combos.Combo{Name: name, Keys: keys, Favorite: isFav}
+			saved := combos.Combo{Name: name, Keys: keys, Emoji: emoji, Description: description, Favorite: isFav}
 			for _, c := range list {
 				if strings.EqualFold(c.Name, name) {
 					saved = c
@@ -711,7 +685,11 @@ func (a *App) handleCombo(serial string, args []string, jsonOutput bool) int {
 			if isFav {
 				favMsg = " [pinned ❤️]"
 			}
-			fmt.Fprintf(a.Stdout, "✔ Saved combo %q (%s)%s\n", name, keys, favMsg)
+			emojiMsg := ""
+			if emoji != "" {
+				emojiMsg = emoji + " "
+			}
+			fmt.Fprintf(a.Stdout, "✔ Saved combo %s%q (%s)%s\n", emojiMsg, name, keys, favMsg)
 		}
 		return 0
 
@@ -809,9 +787,11 @@ func (a *App) handleComboSchema(store *combos.Store, jsonOutput bool) int {
 			"mouse gesture: click-left, scroll-up",
 			"variable injection: $USERNAME, $PASSWORD, ${PIN}",
 			"typed text: type:rustdesk or type:\"rust desk\"",
+			"event directive: !EXIT, !DISCONNECT, !CONNECT, !RECONNECT, !START, !STOP, !RESTART, !UNPAIR, !COMBO:SEND:lock",
 		},
 		"keyboard":      hid.WindowsKeyboardTokens(),
 		"mouse":         hid.MouseActions(),
+		"directives":    hid.Directives(),
 		"text_prefixes": []string{"type:", "text:", "type ", "text "},
 		"example":       "ctrl+alt+del ->{1.0} esc ->{0.8} $USERNAME ->{0.8} tab ->{0.8} $PASSWORD ->{0.8} enter",
 		"commands": map[string]string{
@@ -959,7 +939,15 @@ func (a *App) listCombos(store *combos.Store, jsonOutput bool) int {
 		if c.Favorite {
 			favIcon = "❤️ "
 		}
-		fmt.Fprintf(a.Stdout, "  %2d. %s%-26s %s\n", i+1, favIcon, c.Name, c.Keys)
+		emojiStr := ""
+		if c.Emoji != "" {
+			emojiStr = c.Emoji + " "
+		}
+		descStr := ""
+		if c.Description != "" {
+			descStr = fmt.Sprintf(" (%s)", c.Description)
+		}
+		fmt.Fprintf(a.Stdout, "  %2d. %s%s%-24s %s%s\n", i+1, favIcon, emojiStr, c.Name, c.Keys, descStr)
 	}
 	fmt.Fprintf(a.Stdout, "\n  Send one with 'ghid combo send <name>' or toggle favorite with 'ghid combo fav <name>'\n\n")
 	return 0
@@ -1117,17 +1105,68 @@ func (a *App) dispatchCombo(serial, name, keys string, jsonOutput bool) int {
 	if err != nil {
 		return a.comboFail(jsonOutput, "%v", err)
 	}
+
+	depth := 0
+	var handleDirective func(directive string) (bool, error)
+	handleDirective = func(directive string) (bool, error) {
+		upper := strings.ToUpper(strings.TrimSpace(directive))
+		if strings.HasPrefix(upper, "!COMBO:SEND:") {
+			targetName := strings.TrimSpace(directive[len("!COMBO:SEND:"):])
+			if depth >= 5 {
+				return true, fmt.Errorf("maximum combo nesting depth exceeded at %q", targetName)
+			}
+			targetCombo, found := a.comboStore().Find(targetName)
+			if !found {
+				return true, fmt.Errorf("nested combo %q not found", targetName)
+			}
+			depth++
+			defer func() { depth-- }()
+			return true, gw.ComboWithResolver(targetCombo.Keys, a.snippetResolver())
+		}
+		return false, nil
+	}
+	gw.SetDirectiveHandler(handleDirective)
+
 	err = gw.ComboWithResolver(keys, a.snippetResolver())
 	if err != nil {
+		if errors.Is(err, hid.ErrExitRequested) {
+			if jsonOutput {
+				payload := map[string]interface{}{"status": "success", "exit": true, "combo": keys}
+				if name != "" {
+					payload["name"] = name
+					if strings.EqualFold(name, "Lock") {
+						payload["action"] = "lock"
+					} else if strings.EqualFold(name, "Sleep") {
+						payload["action"] = "sleep"
+					}
+				}
+				res, _ := json.Marshal(payload)
+				fmt.Fprintln(a.Stdout, string(res))
+			} else if strings.EqualFold(name, "Sleep") {
+				fmt.Fprintln(a.Stdout, "✔ Windows host put to sleep. Android gateway stopped.")
+			} else {
+				fmt.Fprintln(a.Stdout, "✔ Sequence completed and terminated via !EXIT")
+			}
+			return 0
+		}
 		return a.comboFail(jsonOutput, "combo failed: %v", err)
 	}
 	if jsonOutput {
 		payload := map[string]interface{}{"status": "success", "combo": keys}
 		if name != "" {
 			payload["name"] = name
+			if strings.EqualFold(name, "Lock") {
+				payload["action"] = "lock"
+			} else if strings.EqualFold(name, "Sleep") {
+				payload["action"] = "sleep"
+			}
 		}
 		res, _ := json.Marshal(payload)
 		fmt.Fprintln(a.Stdout, string(res))
+	} else if strings.EqualFold(name, "Lock") {
+		fmt.Fprintln(a.Stdout, "✔ Windows lock command dispatched (Win + L)")
+	} else if strings.EqualFold(name, "Sleep") {
+		fmt.Fprintln(a.Stdout, "✔ Windows host put to sleep. Android gateway stopped.")
 	} else if name != "" {
 		fmt.Fprintf(a.Stdout, "✔ Dispatched %q: %s\n", name, keys)
 	} else {

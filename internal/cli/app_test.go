@@ -288,3 +288,42 @@ func TestAppCommands(t *testing.T) {
 		t.Errorf("expected exit code 1 for unknown command, got %d", code)
 	}
 }
+
+func TestComboMetadataAndDirectives(t *testing.T) {
+	app, _, _, store, stdout, stderr := setupTestApp(t)
+
+	// Save combo with --emoji and --desc
+	stdout.Reset()
+	code := app.Run([]string{"combo", "save", "MyLock", "!COMBO:SEND:lock", "--emoji", "🔒", "--desc", "Chained lock combo", "--json"})
+	if code != 0 {
+		t.Fatalf("combo save failed: code %d, stderr: %s", code, stderr.String())
+	}
+	var saveRes map[string]interface{}
+	if err := json.Unmarshal(stdout.Bytes(), &saveRes); err != nil {
+		t.Fatalf("parse save response: %v", err)
+	}
+	comboObj := saveRes["combo"].(map[string]interface{})
+	if comboObj["emoji"] != "🔒" || comboObj["description"] != "Chained lock combo" {
+		t.Errorf("unexpected combo metadata: %+v", comboObj)
+	}
+
+	// Dispatch combo with directive chaining !COMBO:SEND:lock
+	stdout.Reset()
+	code = app.Run([]string{"combo", "send", "MyLock", "--json"})
+	if code != 0 {
+		t.Fatalf("combo send failed: code %d, stdout: %s, stderr: %s", code, stdout.String(), stderr.String())
+	}
+
+	// Execute combo with !EXIT directive
+	stdout.Reset()
+	code = app.Run([]string{"combo", "!EXIT", "--json"})
+	if code != 0 {
+		t.Fatalf("combo !EXIT failed: code %d, stderr: %s", code, stderr.String())
+	}
+	var exitRes map[string]interface{}
+	if err := json.Unmarshal(stdout.Bytes(), &exitRes); err != nil || exitRes["exit"] != true {
+		t.Errorf("unexpected exit response: %s", stdout.String())
+	}
+
+	_ = store
+}

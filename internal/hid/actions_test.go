@@ -149,3 +149,50 @@ func TestParseVariables(t *testing.T) {
 		t.Errorf("unexpected description: %+v", desc[0])
 	}
 }
+
+func TestDirectivesSequence(t *testing.T) {
+	seq := "win+x ->{0.5} u ->{0.3} s ->{5.0} !DISCONNECT ->{0.5} !EXIT"
+	steps, err := ParseActionSequence(seq)
+	if err != nil {
+		t.Fatalf("ParseActionSequence failed: %v", err)
+	}
+	if len(steps) != 5 {
+		t.Fatalf("expected 5 steps, got %d", len(steps))
+	}
+	if steps[3].Directive != "!DISCONNECT" {
+		t.Errorf("expected !DISCONNECT, got %q", steps[3].Directive)
+	}
+	if steps[4].Directive != "!EXIT" {
+		t.Errorf("expected !EXIT, got %q", steps[4].Directive)
+	}
+
+	// DescribeSequence
+	desc, err := DescribeSequence(seq)
+	if err != nil {
+		t.Fatalf("DescribeSequence failed: %v", err)
+	}
+	if desc[3].Type != "directive" || desc[3].Value != "!DISCONNECT" {
+		t.Errorf("unexpected desc[3]: %+v", desc[3])
+	}
+	if desc[4].Type != "directive" || desc[4].Value != "!EXIT" {
+		t.Errorf("unexpected desc[4]: %+v", desc[4])
+	}
+
+	// Directives with target
+	connSeq := "!CONNECT:38:FC:98:E8:E3:87 ->{1.0} !COMBO:SEND:lock"
+	connSteps, err := ParseActionSequence(connSeq)
+	if err != nil {
+		t.Fatalf("ParseActionSequence connSeq failed: %v", err)
+	}
+	if connSteps[0].Directive != "!CONNECT:38:FC:98:E8:E3:87" {
+		t.Errorf("expected !CONNECT:38:FC:98:E8:E3:87, got %q", connSteps[0].Directive)
+	}
+	if connSteps[1].Directive != "!COMBO:SEND:lock" {
+		t.Errorf("expected !COMBO:SEND:lock, got %q", connSteps[1].Directive)
+	}
+
+	// Invalid directive
+	if _, err := ParseActionSequence("!UNKNOWN"); err == nil {
+		t.Errorf("expected error on !UNKNOWN directive")
+	}
+}

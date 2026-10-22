@@ -2,6 +2,7 @@ package tui
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -41,6 +42,7 @@ const (
 	StateDeviceRegisterInput
 	StateDeviceDeleteConfirm
 	StateComboStudio
+	StateComboExecuting
 )
 
 type MenuItem struct {
@@ -95,6 +97,15 @@ type Model struct {
 	snippetStudio  *SnippetStudioModel
 	pendingCombo   *combos.Combo
 	quickSendRaw   bool
+
+	// Combo execution / countdown stepper
+	execCombo         *combos.Combo
+	execSteps         []hid.ComboStep
+	execStepIdx       int
+	execTotalDuration time.Duration
+	execRemaining     time.Duration
+	execStepRemaining time.Duration
+	execStepDesc      string
 }
 
 type statusTickMsg time.Time
@@ -108,6 +119,11 @@ type actionDoneMsg struct {
 	notice  string
 	isError bool
 }
+type comboStepExecMsg struct {
+	stepIdx int
+	err     error
+}
+type comboTickMsg time.Time
 
 func NewModel(mgr *adb.Manager, cfg config.Config) Model {
 	cStore := combos.NewStore("")
@@ -180,29 +196,29 @@ func (m *Model) refreshMenuItems() {
 	var items []MenuItem
 	idx := 1
 
-	// Pinned favorite combos at the top with heart icon!
+	// Pinned favorite combos at the top with emoji & description or fallback
 	if m.combosStore != nil {
 		favs, _ := m.combosStore.Favorites()
 		for _, f := range favs {
+			icon := f.Emoji
+			if icon == "" {
+				icon = "❤️"
+			}
+			desc := f.Description
+			if desc == "" {
+				desc = f.Keys
+			}
 			items = append(items, MenuItem{
 				Key:         fmt.Sprintf("%d", idx),
 				Title:       f.Name,
-				Description: f.Keys,
-				Icon:        "❤️",
+				Description: desc,
+				Icon:        icon,
 			})
 			idx++
 		}
 	}
 
-	// Standard action items
-	items = append(items,
-		MenuItem{Key: fmt.Sprintf("%d", idx), Title: "lock", Description: "Instant Windows lock screen (Win + L)", Icon: "🔒"},
-	)
-	idx++
-	items = append(items,
-		MenuItem{Key: fmt.Sprintf("%d", idx), Title: "sleep", Description: "Windows sleep sequence + countdown clean exit", Icon: "🌙"},
-	)
-	idx++
+	// Standard action items (built-ins like lock & sleep are now native favorite combos)
 	items = append(items,
 		MenuItem{Key: fmt.Sprintf("%d", idx), Title: "combo", Description: "Create, send & edit Windows combos", Icon: "🎹"},
 	)
@@ -392,6 +408,59 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.quitting = true
 		return m, tea.Quit
 
+	case comboStepExecMsg:
+		if m.state == StateComboExecuting {
+			if msg.err != nil {
+				if errors.Is(msg.err, hid.ErrExitRequested) {
+					m.quitting = true
+					return m, tea.Quit
+				}
+				m.state = StateMenu
+				m.notice = fmt.Sprintf("Combo failed at step %d: %v", msg.stepIdx+1, msg.err)
+				m.isErrorNotice = true
+				return m, nil
+			}
+
+			step := m.execSteps[m.execStepIdx]
+			if step.Delay > 0 {
+				m.execStepRemaining = step.Delay
+				return m, m.comboTick()
+			}
+
+			m.execStepIdx++
+			if m.execStepIdx >= len(m.execSteps) {
+				m.state = StateMenu
+				m.notice = fmt.Sprintf("✔ Executed %q (%s)", m.execCombo.Name, m.execCombo.Keys)
+				m.isErrorNotice = false
+				return m, nil
+			}
+			m.execStepDesc = describeStep(m.execSteps[m.execStepIdx])
+			return m, m.executeCurrentStepCmd()
+		}
+
+	case comboTickMsg:
+		if m.state == StateComboExecuting {
+			stepTick := 100 * time.Millisecond
+			m.execStepRemaining -= stepTick
+			m.execRemaining -= stepTick
+			if m.execRemaining < 0 {
+				m.execRemaining = 0
+			}
+
+			if m.execStepRemaining <= 0 {
+				m.execStepIdx++
+				if m.execStepIdx >= len(m.execSteps) {
+					m.state = StateMenu
+					m.notice = fmt.Sprintf("✔ Executed %q (%s)", m.execCombo.Name, m.execCombo.Keys)
+					m.isErrorNotice = false
+					return m, nil
+				}
+				m.execStepDesc = describeStep(m.execSteps[m.execStepIdx])
+				return m, m.executeCurrentStepCmd()
+			}
+			return m, m.comboTick()
+		}
+
 	case sleepTickMsg:
 		if m.state == StateSleepCountdown {
 			m.sleepSeconds--
@@ -405,6 +474,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
+		if m.state == StateComboExecuting {
+			switch msg.String() {
+			case "esc", "q", "ctrl+c":
+				m.state = StateMenu
+				name := "Combo"
+				if m.execCombo != nil {
+					name = m.execCombo.Name
+				}
+				m.notice = fmt.Sprintf("Cancelled %q", name)
+				m.isErrorNotice = false
+				return m, nil
+			}
+		}
+
 		switch msg.String() {
 		case "ctrl+c":
 			m.quitting = true
@@ -523,25 +606,20 @@ func (m Model) triggerAction(action string) (tea.Model, tea.Cmd) {
 
 	switch action {
 	case "lock":
-		return m, func() tea.Msg {
-			err := m.manager.SendLock()
-			if err != nil {
-				return actionDoneMsg{notice: fmt.Sprintf("Lock failed: %v", err), isError: true}
+		if m.combosStore != nil {
+			if combo, ok := m.combosStore.Find("Lock"); ok {
+				return m.executeCombo(combo)
 			}
-			return actionDoneMsg{notice: "✔ Win + L lock command dispatched!", isError: false}
 		}
+		return m.executeCombo(combos.Combo{Name: "Lock", Keys: combos.DefaultLockKeys, Emoji: "🔒", Description: "Instant Windows lock screen (Win + L)"})
 
 	case "sleep":
-		m.state = StateSleepCountdown
-		m.sleepSeconds = 5
-		m.sleepTotal = 5
-		return m, tea.Batch(
-			m.sleepTick(),
-			func() tea.Msg {
-				_ = m.manager.SendSleepSequence()
-				return nil
-			},
-		)
+		if m.combosStore != nil {
+			if combo, ok := m.combosStore.Find("Sleep"); ok {
+				return m.executeCombo(combo)
+			}
+		}
+		return m.executeCombo(combos.Combo{Name: "Sleep", Keys: combos.DefaultSleepKeys, Emoji: "🌙", Description: "Windows sleep sequence + countdown exit"})
 
 	case "combo":
 		studio := NewComboStudioModel(m.combosStore, func(combo combos.Combo) error {
@@ -598,13 +676,107 @@ func (m Model) triggerAction(action string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) executeCombo(combo combos.Combo) (tea.Model, tea.Cmd) {
-	if !m.status.Connected {
-		m.notice = "✖ Target laptop is not connected via Bluetooth. Run [reconnect] or [doctor]."
-		m.isErrorNotice = true
-		return m, nil
+func describeStep(step hid.ComboStep) string {
+	switch {
+	case step.Directive != "":
+		return step.Directive
+	case step.Variable != "":
+		return "$" + step.Variable
+	case step.Text != "":
+		if len(step.Text) > 20 {
+			return fmt.Sprintf("type: %q...", step.Text[:17])
+		}
+		return fmt.Sprintf("type: %q", step.Text)
+	case step.Mouse != nil:
+		return step.Mouse.Name
+	default:
+		return step.Combo
 	}
+}
 
+func (m *Model) comboTick() tea.Cmd {
+	return tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
+		return comboTickMsg(t)
+	})
+}
+
+func (m *Model) executeCurrentStepCmd() tea.Cmd {
+	if m.execStepIdx >= len(m.execSteps) {
+		return nil
+	}
+	step := m.execSteps[m.execStepIdx]
+	idx := m.execStepIdx
+	return func() tea.Msg {
+		var err error
+		switch {
+		case step.Directive != "":
+			upper := strings.ToUpper(strings.TrimSpace(step.Directive))
+			switch {
+			case upper == hid.DirectiveExit:
+				return comboStepExecMsg{stepIdx: idx, err: hid.ErrExitRequested}
+			case upper == hid.DirectiveDisconnect:
+				err = m.manager.DisconnectTarget()
+			case upper == hid.DirectiveConnect:
+				err = m.manager.ConnectTarget("")
+			case strings.HasPrefix(upper, hid.DirectiveConnect+":"):
+				target := strings.TrimPrefix(step.Directive, hid.DirectiveConnect+":")
+				err = m.manager.ConnectTarget(strings.TrimSpace(target))
+			case upper == hid.DirectiveReconnect:
+				_ = m.manager.DisconnectTarget()
+				time.Sleep(300 * time.Millisecond)
+				err = m.manager.ConnectTarget("")
+			case upper == hid.DirectiveStart:
+				err = m.manager.StartGateway()
+			case upper == hid.DirectiveStop:
+				err = m.manager.StopGateway()
+			case upper == hid.DirectiveRestart:
+				_ = m.manager.StopGateway()
+				time.Sleep(300 * time.Millisecond)
+				err = m.manager.StartGateway()
+			case upper == hid.DirectiveUnpair:
+				err = m.manager.UnpairTarget()
+			case strings.HasPrefix(upper, hid.DirectiveComboSend):
+				targetName := strings.TrimSpace(step.Directive[len(hid.DirectiveComboSend):])
+				if m.combosStore != nil {
+					if targetCombo, ok := m.combosStore.Find(targetName); ok {
+						err = m.manager.SendComboWithResolver(targetCombo.Keys, m.snippetsStore.Resolver())
+					} else {
+						err = fmt.Errorf("combo %q not found", targetName)
+					}
+				}
+			default:
+				err = fmt.Errorf("unknown directive %q", step.Directive)
+			}
+
+		case step.Variable != "":
+			if m.snippetsStore != nil {
+				val, vErr := m.snippetsStore.Resolver()(step.Variable)
+				if vErr != nil {
+					err = vErr
+				} else {
+					err = m.manager.TypeText(val)
+				}
+			}
+
+		case step.Text != "":
+			text := step.Text
+			if m.snippetsStore != nil {
+				text = hid.ExpandTextVariables(text, m.snippetsStore.Resolver())
+			}
+			err = m.manager.TypeText(text)
+
+		case step.Mouse != nil:
+			err = m.manager.SendMouse(step.Mouse.Name)
+
+		default:
+			err = m.manager.SendCombo(step.Combo)
+		}
+
+		return comboStepExecMsg{stepIdx: idx, err: err}
+	}
+}
+
+func (m Model) executeCombo(combo combos.Combo) (tea.Model, tea.Cmd) {
 	vars := hid.ExtractVariables(combo.Keys)
 	missing := false
 	if m.snippetsStore != nil {
@@ -642,25 +814,46 @@ func (m Model) executeCombo(combo combos.Combo) (tea.Model, tea.Cmd) {
 		return m, textinput.Blink
 	}
 
-	m.notice = fmt.Sprintf("Dispatching %q...", combo.Name)
-	m.isErrorNotice = false
-	return m, func() tea.Msg {
-		resolver := func(name string) (string, error) {
-			if m.snippetsStore == nil {
-				return "", fmt.Errorf("snippets store unavailable")
-			}
-			s, ok, _ := m.snippetsStore.Get(name)
-			if !ok {
-				return "", fmt.Errorf("snippet %q not found", name)
-			}
-			return s.Value, nil
-		}
-		err := m.manager.SendComboWithResolver(combo.Keys, resolver)
-		if err != nil {
-			return actionDoneMsg{notice: fmt.Sprintf("Combo failed: %v", err), isError: true}
-		}
-		return actionDoneMsg{notice: fmt.Sprintf("✔ Executed %q (%s)", combo.Name, combo.Keys), isError: false}
+	steps, err := hid.ParseActionSequence(combo.Keys)
+	if err != nil {
+		m.notice = fmt.Sprintf("Invalid combo sequence: %v", err)
+		m.isErrorNotice = true
+		return m, nil
 	}
+
+	totalDelay := time.Duration(0)
+	for _, s := range steps {
+		totalDelay += s.Delay
+	}
+
+	// Zero delay combos (e.g. Lock with win+l) execute immediately without countdown UI
+	if totalDelay == 0 {
+		m.notice = fmt.Sprintf("Dispatching %q...", combo.Name)
+		m.isErrorNotice = false
+		return m, func() tea.Msg {
+			err := m.manager.SendComboWithResolver(combo.Keys, m.snippetsStore.Resolver())
+			if err != nil {
+				return actionDoneMsg{notice: fmt.Sprintf("Combo failed: %v", err), isError: true}
+			}
+			return actionDoneMsg{notice: fmt.Sprintf("✔ Executed %q (%s)", combo.Name, combo.Keys), isError: false}
+		}
+	}
+
+	// Combos with delay transition to unified countdown stepper UI
+	m.state = StateComboExecuting
+	m.execCombo = &combo
+	m.execSteps = steps
+	m.execStepIdx = 0
+	m.execTotalDuration = totalDelay
+	m.execRemaining = totalDelay
+	m.execStepRemaining = 0
+	if len(steps) > 0 {
+		m.execStepDesc = describeStep(steps[0])
+	}
+	m.notice = ""
+	m.isErrorNotice = false
+
+	return m, m.executeCurrentStepCmd()
 }
 
 func (m Model) updateDevicesList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
