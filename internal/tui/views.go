@@ -13,6 +13,10 @@ func (m Model) View() string {
 		return lipgloss.NewStyle().Foreground(ColorCyan).Render("\n👋 GhostHID gateway released. Goodbye!\n")
 	}
 
+	if m.state == StateComboStudio && m.comboStudio != nil {
+		return m.comboStudio.View()
+	}
+
 	var sb strings.Builder
 
 	// Top Banner

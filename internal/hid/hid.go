@@ -24,43 +24,55 @@ const (
 
 // Standard USB HID Usage Table Keycodes (Page 0x07)
 const (
-	KeyNone     byte = 0x00
-	KeyA        byte = 0x04
-	KeyZ        byte = 0x1D
-	Key1        byte = 0x1E
-	Key0        byte = 0x27
-	KeyEnter    byte = 0x28
-	KeyEscape   byte = 0x29
-	KeyDelete   byte = 0x2A // Backspace
-	KeyTab      byte = 0x2B
-	KeySpace    byte = 0x2C
-	KeyMinus    byte = 0x2D
-	KeyEqual    byte = 0x2E
-	KeyF1       byte = 0x3A
-	KeyF2       byte = 0x3B
-	KeyF3       byte = 0x3C
-	KeyF4       byte = 0x3D
-	KeyF5       byte = 0x3E
-	KeyF6       byte = 0x3F
-	KeyF7       byte = 0x40
-	KeyF8       byte = 0x41
-	KeyF9       byte = 0x42
-	KeyF10      byte = 0x43
-	KeyF11      byte = 0x44
-	KeyF12      byte = 0x45
-	KeyPrintScr byte = 0x46
-	KeyScrollLk byte = 0x47
-	KeyPause    byte = 0x48
-	KeyInsert   byte = 0x49
-	KeyHome     byte = 0x4A
-	KeyPageUp   byte = 0x4B
-	KeyDelFwd   byte = 0x4C // Forward delete
-	KeyEnd      byte = 0x4D
-	KeyPageDown byte = 0x4E
-	KeyRight    byte = 0x4F
-	KeyLeft     byte = 0x50
-	KeyDown     byte = 0x51
-	KeyUp       byte = 0x52
+	KeyNone      byte = 0x00
+	KeyA         byte = 0x04
+	KeyZ         byte = 0x1D
+	Key1         byte = 0x1E
+	Key0         byte = 0x27
+	KeyEnter     byte = 0x28
+	KeyEscape    byte = 0x29
+	KeyDelete    byte = 0x2A // Backspace
+	KeyTab       byte = 0x2B
+	KeySpace     byte = 0x2C
+	KeyMinus     byte = 0x2D
+	KeyEqual     byte = 0x2E
+	KeyLBracket  byte = 0x2F
+	KeyRBracket  byte = 0x30
+	KeyBackslash byte = 0x31
+	KeySemicolon byte = 0x33
+	KeyQuote     byte = 0x34
+	KeyGrave     byte = 0x35
+	KeyComma     byte = 0x36
+	KeyPeriod    byte = 0x37
+	KeySlash     byte = 0x38
+	KeyCapsLock  byte = 0x39
+	KeyF1        byte = 0x3A
+	KeyF2        byte = 0x3B
+	KeyF3        byte = 0x3C
+	KeyF4        byte = 0x3D
+	KeyF5        byte = 0x3E
+	KeyF6        byte = 0x3F
+	KeyF7        byte = 0x40
+	KeyF8        byte = 0x41
+	KeyF9        byte = 0x42
+	KeyF10       byte = 0x43
+	KeyF11       byte = 0x44
+	KeyF12       byte = 0x45
+	KeyPrintScr  byte = 0x46
+	KeyScrollLk  byte = 0x47
+	KeyPause     byte = 0x48
+	KeyInsert    byte = 0x49
+	KeyHome      byte = 0x4A
+	KeyPageUp    byte = 0x4B
+	KeyDelFwd    byte = 0x4C // Forward delete
+	KeyEnd       byte = 0x4D
+	KeyPageDown  byte = 0x4E
+	KeyRight     byte = 0x4F
+	KeyLeft      byte = 0x50
+	KeyDown      byte = 0x51
+	KeyUp        byte = 0x52
+	KeyNumLock   byte = 0x53
+	KeyMenu      byte = 0x65 // Windows context-menu / applications key
 )
 
 // KeyReport represents a standard 8-byte HID keyboard input report.
@@ -142,6 +154,40 @@ func ParseCombo(combo string) (modifier byte, keyCode byte, err error) {
 			keyCode = KeyPageDown
 		case "insert":
 			keyCode = KeyInsert
+		case "capslock", "caps":
+			keyCode = KeyCapsLock
+		case "numlock":
+			keyCode = KeyNumLock
+		case "scrolllock", "scroll":
+			keyCode = KeyScrollLk
+		case "printscreen", "prtsc", "print":
+			keyCode = KeyPrintScr
+		case "pause", "break":
+			keyCode = KeyPause
+		case "menu", "apps", "context":
+			keyCode = KeyMenu
+		case "minus":
+			keyCode = KeyMinus
+		case "equal", "equals":
+			keyCode = KeyEqual
+		case "leftbracket", "lbracket":
+			keyCode = KeyLBracket
+		case "rightbracket", "rbracket":
+			keyCode = KeyRBracket
+		case "backslash":
+			keyCode = KeyBackslash
+		case "semicolon":
+			keyCode = KeySemicolon
+		case "quote", "apostrophe":
+			keyCode = KeyQuote
+		case "grave", "backtick", "tilde":
+			keyCode = KeyGrave
+		case "comma":
+			keyCode = KeyComma
+		case "period", "dot":
+			keyCode = KeyPeriod
+		case "slash", "forwardslash":
+			keyCode = KeySlash
 		case "f1":
 			keyCode = KeyF1
 		case "f2":
@@ -223,6 +269,8 @@ type ComboStep struct {
 	Combo    string        // Human-readable combo for this step, e.g. "super+l"
 	Modifier byte          // Resolved modifier bitmask
 	KeyCode  byte          // Resolved primary keycode
+	Mouse    *MouseAction  // Non-nil when this step is a mouse gesture
+	Text     string        // Non-empty when this step types a literal string
 	Delay    time.Duration // Pause duration after transmitting this step
 }
 
@@ -239,6 +287,18 @@ var stepDelimRegex = regexp.MustCompile(`(?i)\s*(?:->|>)\s*(?:[\{\(\[]?\s*([0-9]
 //   - "super+l ->{0.9}"
 //   - "esc -> esc -> win+x -> u -> s"
 func ParseComboSequence(input string) ([]ComboStep, error) {
+	return parseSequence(input, func(segment string) (ComboStep, error) {
+		mod, code, err := ParseCombo(segment)
+		if err != nil {
+			return ComboStep{}, err
+		}
+		return ComboStep{Combo: segment, Modifier: mod, KeyCode: code}, nil
+	})
+}
+
+// parseSequence walks a "->" delimited sequence and delegates per-step parsing
+// so keyboard-only and keyboard+mouse sequences share one grammar.
+func parseSequence(input string, parseStep func(string) (ComboStep, error)) ([]ComboStep, error) {
 	trimmed := strings.TrimSpace(input)
 	if trimmed == "" {
 		return nil, errors.New("empty combo sequence")
@@ -246,16 +306,12 @@ func ParseComboSequence(input string) ([]ComboStep, error) {
 
 	indices := stepDelimRegex.FindAllStringSubmatchIndex(trimmed, -1)
 	if len(indices) == 0 {
-		mod, code, err := ParseCombo(trimmed)
+		step, err := parseStep(trimmed)
 		if err != nil {
 			return nil, err
 		}
-		return []ComboStep{{
-			Combo:    trimmed,
-			Modifier: mod,
-			KeyCode:  code,
-			Delay:    0,
-		}}, nil
+		step.Delay = 0
+		return []ComboStep{step}, nil
 	}
 
 	var steps []ComboStep
@@ -283,16 +339,12 @@ func ParseComboSequence(input string) ([]ComboStep, error) {
 		}
 
 		if segment != "" {
-			mod, code, err := ParseCombo(segment)
+			step, err := parseStep(segment)
 			if err != nil {
 				return nil, fmt.Errorf("invalid combo %q: %w", segment, err)
 			}
-			steps = append(steps, ComboStep{
-				Combo:    segment,
-				Modifier: mod,
-				KeyCode:  code,
-				Delay:    delay,
-			})
+			step.Delay = delay
+			steps = append(steps, step)
 		} else if len(steps) > 0 {
 			// Delimiter directly follows previous step without an intervening combo
 			steps[len(steps)-1].Delay = delay
@@ -305,16 +357,12 @@ func ParseComboSequence(input string) ([]ComboStep, error) {
 	if lastIdx < len(trimmed) {
 		tail := strings.TrimSpace(trimmed[lastIdx:])
 		if tail != "" {
-			mod, code, err := ParseCombo(tail)
+			step, err := parseStep(tail)
 			if err != nil {
 				return nil, fmt.Errorf("invalid combo %q: %w", tail, err)
 			}
-			steps = append(steps, ComboStep{
-				Combo:    tail,
-				Modifier: mod,
-				KeyCode:  code,
-				Delay:    0,
-			})
+			step.Delay = 0
+			steps = append(steps, step)
 		}
 	}
 

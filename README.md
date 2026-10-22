@@ -2,7 +2,7 @@
 
 > Headless Android Bluetooth HID Keyboard Controller & Automation Gateway.
 
-GhostHID converts an Android smartphone into a hardware-recognized Bluetooth Human Interface Device (HID) keyboard capable of injecting keystrokes, shortcuts, and automated authentication sequences into any paired Windows, macOS, or Linux host.
+GhostHID converts an Android smartphone into a hardware-recognized Bluetooth Human Interface Device (HID) keyboard and mouse capable of injecting keystrokes, shortcuts, pointer gestures, and automated authentication sequences into any paired Windows, macOS, or Linux host.
 
 It runs as a background Android Foreground Service controlled locally or remotely via ADB shell commands and the unified **`ghid`** CLI tool.
 
@@ -12,6 +12,7 @@ It runs as a background Android Foreground Service controlled locally or remotel
 
 The project now includes **`ghid`**, a native Go-powered CLI built with Charm (Bubble Tea & Lip Gloss) and interactive control console:
 - **Interactive TUI Session:** Run `ghid` to automatically start the phone service, verify SDP profile registration, connect Bluetooth to your laptop, and manage login, screen lock, sleep countdowns, typing, and shortcuts.
+- **Combo Studio:** Run `ghid combo` for one-screen create / send / delete of named Windows keyboard and mouse combos, with an empty-state list, a SEND button, and delete confirmation.
 - **Secure macOS Keychain Integration:** Windows credentials can be cached in the macOS Keychain (`ghost-hid` service) so you never re-type long passwords.
 - **Automated Exception Handling & Recovery:** Detects missing ADB, disconnected devices, unauthorized debugging, disabled Bluetooth, or missing APKs, with built-in interactive prompts to pair/connect over Wi-Fi or compile/install the APK.
 - **First-Class AI Agent & Scripting Support:** Every command supports `--json` flags, structured exit codes, and non-interactive arguments (`ghid status --json`, `ghid doctor --json`, `ghid login -u ... -p ...`).
@@ -86,7 +87,7 @@ Actions:
   [2] lock       - Lock Windows screen (Win + L)
   [3] sleep      - Windows Sleep sequence + countdown exit
   [4] type       - Inject text string via keyboard
-  [5] combo      - Send custom key combination (win+d, alt+tab)
+  [5] combo      - Combo Studio (create / send / delete Windows combos)
   [6] raw        - Inject raw 16-hex byte HID report
   [7] creds      - View / update cached login credentials
   [d] devices    - Registered target devices & pair new laptop/Mac
@@ -104,7 +105,35 @@ Actions:
 
 ## Non-Interactive & AI Agent Usage
 
-All commands support direct execution with `--json` for scripts and AI agents:
+All commands support direct execution with `--json` for scripts and AI agents.
+In JSON mode combos never prompt: `delete` proceeds without confirmation and
+errors are returned as `{"status":"error","error":"..."}` with exit code `1`.
+
+### AI Agents: Create Combos Without a TUI
+The studio is optional — agents drive the same library through flags and JSON.
+Discover the grammar instead of hard-coding it:
+
+```bash
+# 1. Discover accepted Windows keys, mouse gestures and the text syntax
+ghid combo schema --json
+
+# 2. Validate before writing (exit 0 valid, 1 invalid)
+ghid combo validate 'win+s ->{0.7} type:rustdesk ->{0.4} enter' --json
+# {"valid":true,"keys":"...","steps":[{"type":"keyboard","value":"win+s","delay_ms":700}, ...]}
+
+# 3. Create or update by name
+ghid combo save "Open RustDesk" 'win+s ->{0.7} type:rustdesk ->{0.4} enter' --json
+# {"status":"saved","updated":false,"combo":{...}}
+
+# 4. List, send, delete (non-interactive in JSON mode)
+ghid combo list --json
+ghid combo send "Open RustDesk" --json
+ghid combo delete "Open RustDesk" --json
+```
+
+`combo save` is an upsert: saving an existing name updates it and returns
+`"updated": true`. Typed text uses `type:word` or `type:"two words"` and is
+limited to printable ASCII.
 
 ### 0. Device Management & Registration (`devices`)
 Inspect registered targets, add new Windows/macOS devices, switch active targets, or unregister:
@@ -178,12 +207,55 @@ ghid lock
 ghid sleep --countdown 5
 ```
 
-### 6. Type Text or Send Combos
+### 6. Type Text, Combos & Mouse
 ```bash
 ghid type "git commit -m 'feat: update hid engine'"
 ghid combo "win+d"
 ghid combo "ctrl+shift+esc"
 ```
+
+`ghid combo` is one command that creates, saves, sends and deletes named
+Windows keyboard/mouse combos. With a terminal it opens the interactive
+studio; without one it lists the saved library.
+
+```bash
+ghid combo                      # open the Combo Studio
+ghid combo list                 # list saved combos (--json supported)
+ghid combo save "Open Run" "win+r"
+ghid combo send "Open Run"
+ghid combo delete "Open Run"    # asks for confirmation
+ghid combo "win+d"              # one-shot send, no save
+ghid combo mouse click-right    # one-shot mouse gesture
+```
+
+In the studio:
+
+* `↑` / `↓` select a combo, `Enter` sends it.
+* `Tab` moves focus to the **✈ SEND**, **+ NEW** and **🗑 DELETE** buttons.
+* `n` creates a combo (name + sequence), `e` edits, `ctrl+s` saves.
+* To type words such as an app name, add a `type:` step:
+  `win+s ->{0.7} type:rustdesk ->{0.3} enter`.
+* `Delete` removes the selected combo and asks **Y / N** before deleting.
+* An empty library shows a "No combos yet" card instead of a blank list.
+
+Combos support real Windows keys and mouse gestures:
+
+| Type | Tokens |
+|------|--------|
+| Modifiers | `win`, `ctrl`, `alt`, `shift` |
+| Keys | `a`–`z`, `0`–`9`, `f1`–`f12`, `enter`, `esc`, `tab`, `space`, `backspace`, `del`, `insert`, `home`, `end`, `pgup`, `pgdn`, `up`, `down`, `left`, `right`, `printscreen`, `capslock`, `numlock`, `scrolllock`, `pause`, `menu`, `minus`, `equal`, `comma`, `period`, `slash`, `semicolon`, `quote`, `grave`, brackets and `backslash` |
+| Mouse | `click-left`, `click-right`, `click-middle`, `double-click`, `scroll-up`, `scroll-down` |
+| Typed text | `type:rustdesk` or `type:"rust desk"` (printable ASCII) |
+| Chains | `win+s ->{0.7} type:rustdesk ->{0.3} enter` (delay in seconds) |
+
+macOS-only aliases (`cmd`, `super`, `option`) are rejected so the library
+always describes real Windows input. Combos live in
+`~/.config/ghid/combos.json`.
+
+> The mouse collection uses HID report ID 2. After updating the APK, remove the
+> old pairing on Windows and pair again so the host discovers the
+> keyboard + mouse descriptor.
+
 
 ### 7. Manage Credentials
 ```bash

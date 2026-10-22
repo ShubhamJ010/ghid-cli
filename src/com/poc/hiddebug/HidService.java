@@ -39,6 +39,37 @@ public class HidService extends Service {
     public static final String ACTION_TYPE = "com.poc.hiddebug.ACTION_TYPE";
 
     private static final byte[] HID_KEYBOARD_DESCRIPTOR = new byte[] {
+        // ---- Mouse collection (Report ID 2) ----
+        (byte) 0x05, (byte) 0x01,        // Usage Page (Generic Desktop)
+        (byte) 0x09, (byte) 0x02,        // Usage (Mouse)
+        (byte) 0xA1, (byte) 0x01,        // Collection (Application)
+        (byte) 0x85, (byte) 0x02,        //   Report ID (2)
+        (byte) 0x09, (byte) 0x01,        //   Usage (Pointer)
+        (byte) 0xA1, (byte) 0x00,        //   Collection (Physical)
+        (byte) 0x05, (byte) 0x09,        //     Usage Page (Buttons)
+        (byte) 0x19, (byte) 0x01,        //     Usage Minimum (1)
+        (byte) 0x29, (byte) 0x03,        //     Usage Maximum (3)
+        (byte) 0x15, (byte) 0x00,        //     Logical Minimum (0)
+        (byte) 0x25, (byte) 0x01,        //     Logical Maximum (1)
+        (byte) 0x95, (byte) 0x03,        //     Report Count (3)
+        (byte) 0x75, (byte) 0x01,        //     Report Size (1)
+        (byte) 0x81, (byte) 0x02,        //     Input (Data, Variable, Absolute)
+        (byte) 0x95, (byte) 0x01,        //     Report Count (1)
+        (byte) 0x75, (byte) 0x05,        //     Report Size (5)
+        (byte) 0x81, (byte) 0x01,        //     Input (Constant) - padding
+        (byte) 0x05, (byte) 0x01,        //     Usage Page (Generic Desktop)
+        (byte) 0x09, (byte) 0x30,        //     Usage (X)
+        (byte) 0x09, (byte) 0x31,        //     Usage (Y)
+        (byte) 0x09, (byte) 0x38,        //     Usage (Wheel)
+        (byte) 0x15, (byte) 0x81,        //     Logical Minimum (-127)
+        (byte) 0x25, (byte) 0x7F,        //     Logical Maximum (127)
+        (byte) 0x75, (byte) 0x08,        //     Report Size (8)
+        (byte) 0x95, (byte) 0x03,        //     Report Count (3)
+        (byte) 0x81, (byte) 0x06,        //     Input (Data, Variable, Relative)
+        (byte) 0xC0,                     //   End Collection (Physical)
+        (byte) 0xC0,                     // End Collection (Application)
+
+        // ---- Keyboard collection (Report ID 1) ----
         (byte) 0x05, (byte) 0x01,        // Usage Page (Generic Desktop)
         (byte) 0x09, (byte) 0x06,        // Usage (Keyboard)
         (byte) 0xA1, (byte) 0x01,        // Collection (Application)
@@ -171,10 +202,10 @@ public class HidService extends Service {
     public void registerHidApp() {
         if (mHidDevice == null) return;
         BluetoothHidDeviceAppSdpSettings sdp = new BluetoothHidDeviceAppSdpSettings(
-            "OnePlus HID Keyboard",
-            "Virtual HID Keyboard Gateway",
+            "GhostHID Keyboard & Mouse",
+            "Virtual HID Keyboard + Mouse Gateway",
             "Android",
-            BluetoothHidDevice.SUBCLASS1_KEYBOARD,
+            BluetoothHidDevice.SUBCLASS1_COMBO,
             HID_KEYBOARD_DESCRIPTOR
         );
         boolean ok = mHidDevice.registerApp(sdp, null, null, mExecutor, mHidCallback);
@@ -321,26 +352,9 @@ public class HidService extends Service {
             log(">>> Typing string (" + text.length() + " chars)");
             for (int i = 0; i < text.length(); i++) {
                 char c = text.charAt(i);
-                byte modifier = 0;
-                byte code = 0;
-
-                if (c >= 'a' && c <= 'z') code = (byte) (0x04 + (c - 'a'));
-                else if (c >= 'A' && c <= 'Z') { modifier = 0x02; code = (byte) (0x04 + (c - 'A')); }
-                else if (c >= '1' && c <= '9') code = (byte) (0x1E + (c - '1'));
-                else if (c == '0') code = 0x27;
-                else if (c == ' ') code = 0x2C;
-                else if (c == '\n' || c == '\r') code = 0x28;
-                else if (c == '\t') code = 0x2B;
-                else if (c == '.') code = 0x37;
-                else if (c == ',') code = 0x36;
-                else if (c == '-') code = 0x2D;
-                else if (c == '_') { modifier = 0x02; code = 0x2D; }
-                else if (c == '!') { modifier = 0x02; code = 0x1E; }
-                else if (c == '@') { modifier = 0x02; code = 0x1F; }
-                else if (c == '#') { modifier = 0x02; code = 0x20; }
-                else if (c == '$') { modifier = 0x02; code = 0x21; }
-                else if (c == '%') { modifier = 0x02; code = 0x22; }
-                else if (c == ':') { modifier = 0x02; code = 0x33; }
+                byte[] key = keyForChar(c);
+                byte modifier = key[0];
+                byte code = key[1];
 
                 if (code != 0) {
                     byte[] down = new byte[] { modifier, 0, code, 0, 0, 0, 0, 0 };
@@ -349,10 +363,63 @@ public class HidService extends Service {
                     try { Thread.sleep(25); } catch (Exception ignored) {}
                     mHidDevice.sendReport(mTargetDevice, 1, up);
                     try { Thread.sleep(25); } catch (Exception ignored) {}
+                } else {
+                    log("Cannot type character: U+" + String.format("%04X", (int) c));
                 }
             }
             log(">>> Typing complete.");
         });
+    }
+
+    /**
+     * Maps printable US-layout ASCII to a HID modifier byte and keycode.
+     * Returns {0, 0} for characters the keyboard cannot produce.
+     */
+    private static byte[] keyForChar(char c) {
+        byte mod = 0x00;
+        byte code = 0x00;
+
+        if (c >= 'a' && c <= 'z') code = (byte) (0x04 + (c - 'a'));
+        else if (c >= 'A' && c <= 'Z') { mod = 0x02; code = (byte) (0x04 + (c - 'A')); }
+        else if (c >= '1' && c <= '9') code = (byte) (0x1E + (c - '1'));
+        else if (c == '0') code = 0x27;
+        else if (c == ' ') code = 0x2C;
+        else if (c == '\n' || c == '\r') code = 0x28;
+        else if (c == '\t') code = 0x2B;
+        else if (c == '.') code = 0x37;
+        else if (c == ',') code = 0x36;
+        else if (c == '-') code = 0x2D;
+        else if (c == '=') code = 0x2E;
+        else if (c == ';') code = 0x33;
+        else if (c == '\'') code = 0x34;
+        else if (c == '[') code = 0x2F;
+        else if (c == ']') code = 0x30;
+        else if (c == '\\') code = 0x31;
+        else if (c == '`') code = 0x35;
+        else if (c == '/') code = 0x38;
+        else if (c == '!') { mod = 0x02; code = 0x1E; }
+        else if (c == '@') { mod = 0x02; code = 0x1F; }
+        else if (c == '#') { mod = 0x02; code = 0x20; }
+        else if (c == '$') { mod = 0x02; code = 0x21; }
+        else if (c == '%') { mod = 0x02; code = 0x22; }
+        else if (c == '^') { mod = 0x02; code = 0x23; }
+        else if (c == '&') { mod = 0x02; code = 0x24; }
+        else if (c == '*') { mod = 0x02; code = 0x25; }
+        else if (c == '(') { mod = 0x02; code = 0x26; }
+        else if (c == ')') { mod = 0x02; code = 0x27; }
+        else if (c == '_') { mod = 0x02; code = 0x2D; }
+        else if (c == '+') { mod = 0x02; code = 0x2E; }
+        else if (c == '{') { mod = 0x02; code = 0x2F; }
+        else if (c == '}') { mod = 0x02; code = 0x30; }
+        else if (c == '|') { mod = 0x02; code = 0x31; }
+        else if (c == ':') { mod = 0x02; code = 0x33; }
+        else if (c == '"') { mod = 0x02; code = 0x34; }
+        else if (c == '~') { mod = 0x02; code = 0x35; }
+        else if (c == '<') { mod = 0x02; code = 0x36; }
+        else if (c == '>') { mod = 0x02; code = 0x37; }
+        else if (c == '?') { mod = 0x02; code = 0x38; }
+
+        return new byte[] { mod, code };
     }
 
     public void sendCombo(String combo) {
@@ -383,6 +450,24 @@ public class HidService extends Service {
                 else if (p.equals("end")) key = 0x4D;
                 else if (p.equals("pageup") || p.equals("pgup")) key = 0x4B;
                 else if (p.equals("pagedown") || p.equals("pgdn")) key = 0x4E;
+                else if (p.equals("insert")) key = 0x49;
+                else if (p.equals("capslock") || p.equals("caps")) key = 0x39;
+                else if (p.equals("numlock")) key = 0x53;
+                else if (p.equals("scrolllock") || p.equals("scroll")) key = 0x47;
+                else if (p.equals("printscreen") || p.equals("prtsc") || p.equals("print")) key = 0x46;
+                else if (p.equals("pause") || p.equals("break")) key = 0x48;
+                else if (p.equals("menu") || p.equals("apps") || p.equals("context")) key = 0x65;
+                else if (p.equals("minus")) key = 0x2D;
+                else if (p.equals("equal") || p.equals("equals")) key = 0x2E;
+                else if (p.equals("leftbracket") || p.equals("lbracket")) key = 0x2F;
+                else if (p.equals("rightbracket") || p.equals("rbracket")) key = 0x30;
+                else if (p.equals("backslash")) key = 0x31;
+                else if (p.equals("semicolon")) key = 0x33;
+                else if (p.equals("quote") || p.equals("apostrophe")) key = 0x34;
+                else if (p.equals("grave") || p.equals("backtick") || p.equals("tilde")) key = 0x35;
+                else if (p.equals("comma")) key = 0x36;
+                else if (p.equals("period") || p.equals("dot")) key = 0x37;
+                else if (p.equals("slash") || p.equals("forwardslash")) key = 0x38;
                 else if (p.startsWith("f") && p.length() >= 2) {
                     try {
                         int fNum = Integer.parseInt(p.substring(1));
@@ -406,6 +491,82 @@ public class HidService extends Service {
             mHidDevice.sendReport(mTargetDevice, 1, up);
             log("Combo sent: mod=" + modifier + ", key=" + key);
         });
+    }
+
+    /**
+     * Sends a real HID mouse gesture (buttons or wheel) using report ID 2.
+     * Called from the Go CLI as: cmd=mouse, action=click-left|click-right|
+     * click-middle|double-click|scroll-up|scroll-down.
+     */
+    public void sendMouse(String action) {
+        if (mHidDevice == null || mTargetDevice == null || action == null) {
+            log("Cannot send mouse: device not ready");
+            return;
+        }
+        final String a = action.trim().toLowerCase(Locale.ROOT);
+        mExecutor.execute(() -> {
+            byte buttons = 0;
+            int wheel = 0;
+            boolean doubleClick = false;
+
+            switch (a) {
+                case "click-left":
+                case "left-click":
+                case "leftclick":
+                case "lclick":
+                    buttons = 0x01;
+                    break;
+                case "click-right":
+                case "right-click":
+                case "rightclick":
+                case "rclick":
+                    buttons = 0x02;
+                    break;
+                case "click-middle":
+                case "middle-click":
+                case "middleclick":
+                case "mclick":
+                    buttons = 0x04;
+                    break;
+                case "double-click":
+                case "doubleclick":
+                case "dblclick":
+                    buttons = 0x01;
+                    doubleClick = true;
+                    break;
+                case "scroll-up":
+                case "scrollup":
+                case "wheel-up":
+                    wheel = 1;
+                    break;
+                case "scroll-down":
+                case "scrolldown":
+                case "wheel-down":
+                    wheel = -1;
+                    break;
+                default:
+                    log("Unknown mouse action: " + action);
+                    return;
+            }
+
+            sendMouseReport(buttons, wheel);
+            if (doubleClick) {
+                try { Thread.sleep(80); } catch (Exception ignored) {}
+                sendMouseReport(buttons, wheel);
+            }
+            log(">>> Mouse sent: " + a + " (buttons=" + buttons + ", wheel=" + wheel + ")");
+        });
+    }
+
+    private void sendMouseReport(byte buttons, int wheel) {
+        byte[] down = new byte[] { buttons, 0x00, 0x00, (byte) wheel };
+        byte[] up = new byte[4];
+        boolean r1 = mHidDevice.sendReport(mTargetDevice, 2, down);
+        try { Thread.sleep(45); } catch (Exception ignored) {}
+        boolean r2 = mHidDevice.sendReport(mTargetDevice, 2, up);
+        if (!r1 || !r2) {
+            log("sendMouseReport failed: down=" + r1 + ", up=" + r2);
+        }
     }
 
     public void unpairTarget(String targetAddr) {
@@ -462,6 +623,8 @@ public class HidService extends Service {
                 typeText(intent.getStringExtra("text"));
             } else if ("combo".equalsIgnoreCase(cmd)) {
                 sendCombo(intent.getStringExtra("keys"));
+            } else if ("mouse".equalsIgnoreCase(cmd)) {
+                sendMouse(intent.getStringExtra("action"));
             } else if ("raw".equalsIgnoreCase(cmd)) {
                 String hex = intent.getStringExtra("hex");
                 if (hex != null && hex.length() == 16) {

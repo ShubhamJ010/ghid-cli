@@ -320,20 +320,47 @@ func (m *Manager) SendLock() error {
 }
 
 func (m *Manager) SendCombo(keys string) error {
-	steps, err := hid.ParseComboSequence(keys)
+	steps, err := hid.ParseActionSequence(keys)
 	if err != nil {
 		return err
 	}
 	for _, step := range steps {
-		clean := hid.NormalizeComboForAndroid(step.Combo)
-		if _, err := m.Run("shell", "am", "broadcast", "-n", ReceiverName, "-a", ActionCmd, "--es", "cmd", "combo", "--es", "keys", clean); err != nil {
-			return err
+		if step.Text != "" {
+			if err := m.TypeText(step.Text); err != nil {
+				return err
+			}
+		} else if step.Mouse != nil {
+			if err := m.sendMouseAction(*step.Mouse); err != nil {
+				return err
+			}
+		} else {
+			clean := hid.NormalizeComboForAndroid(step.Combo)
+			if _, err := m.Run("shell", "am", "broadcast", "-n", ReceiverName, "-a", ActionCmd, "--es", "cmd", "combo", "--es", "keys", clean); err != nil {
+				return err
+			}
 		}
 		if step.Delay > 0 {
 			time.Sleep(step.Delay)
 		}
 	}
 	return nil
+}
+
+// SendMouse dispatches a single Windows mouse gesture through the phone.
+func (m *Manager) SendMouse(action string) error {
+	parsed, ok, err := hid.ParseMouseAction(action)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("unknown mouse action %q (use %s)", action, strings.Join(hid.MouseActions(), ", "))
+	}
+	return m.sendMouseAction(parsed)
+}
+
+func (m *Manager) sendMouseAction(action hid.MouseAction) error {
+	_, err := m.Run("shell", "am", "broadcast", "-n", ReceiverName, "-a", ActionCmd, "--es", "cmd", "mouse", "--es", "action", action.Name)
+	return err
 }
 
 func (m *Manager) TypeText(text string) error {

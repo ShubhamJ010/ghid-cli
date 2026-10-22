@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -122,5 +123,26 @@ func TestUpdateComboInputKeyHandling(t *testing.T) {
 	mEmpty, _ := emptyModel.updateComboInput(tea.KeyMsg{Type: tea.KeyEsc})
 	if mEmpty.(Model).state != StateMenu {
 		t.Errorf("expected state to return to StateMenu on empty esc")
+	}
+}
+
+func TestMenuComboOpensStudio(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	m := Model{state: StateMenu, menuItems: []MenuItem{{Key: "5", Title: "combo"}}}
+	next, _ := m.triggerAction("combo")
+	got := next.(Model)
+	if got.state != StateComboStudio || got.comboStudio == nil {
+		t.Fatalf("menu combo should open the studio, state=%v studio=%v", got.state, got.comboStudio)
+	}
+	if !strings.Contains(got.View(), "COMBO STUDIO") {
+		t.Fatalf("studio view not rendered:\n%s", got.View())
+	}
+
+	// esc returns to the dashboard instead of quitting the app.
+	next, _ = got.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	got = next.(Model)
+	if got.state != StateMenu || got.comboStudio != nil {
+		t.Fatalf("esc should close the studio back to the menu, state=%v", got.state)
 	}
 }

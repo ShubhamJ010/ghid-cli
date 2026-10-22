@@ -221,3 +221,24 @@ func TestSendComboSequence(t *testing.T) {
 		}
 	}
 }
+
+func TestSendComboTypedText(t *testing.T) {
+	fake := NewFakeRunner()
+	mgr := NewManagerWithRunner(fake, "", "")
+
+	if err := mgr.SendCombo("win+s ->{0.001} type:rustdesk"); err != nil {
+		t.Fatalf("SendCombo failed: %v", err)
+	}
+
+	var typed string
+	for _, call := range fake.Calls {
+		for i := 0; i+3 < len(call); i++ {
+			if call[i] == "type" && call[i+1] == "--es" && call[i+2] == "text" && call[i+3] == "rustdesk" {
+				typed = call[i+3]
+			}
+		}
+	}
+	if typed != "rustdesk" {
+		t.Fatalf("typed text broadcast not found in %v", fake.Calls)
+	}
+}

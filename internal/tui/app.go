@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ghost-hid/ghid/internal/adb"
+	"github.com/ghost-hid/ghid/internal/combos"
 	"github.com/ghost-hid/ghid/internal/config"
 	"github.com/ghost-hid/ghid/internal/keychain"
 )
@@ -36,6 +37,7 @@ const (
 	StateDeviceRegisterGuide
 	StateDeviceRegisterInput
 	StateDeviceDeleteConfirm
+	StateComboStudio
 )
 
 type MenuItem struct {
@@ -84,6 +86,7 @@ type Model struct {
 	devAddrInput   textinput.Model
 	regActiveIn    int // 0: name, 1: addr
 	deviceToDelete *config.TargetDevice
+	comboStudio    *ComboStudioModel
 }
 
 type statusTickMsg time.Time
@@ -141,7 +144,7 @@ func NewModel(mgr *adb.Manager, cfg config.Config) Model {
 		{Key: "2", Title: "lock", Description: "Instant Windows lock screen (Win + L)", Icon: "🔒"},
 		{Key: "3", Title: "sleep", Description: "Windows sleep sequence + countdown clean exit", Icon: "🌙"},
 		{Key: "4", Title: "type", Description: "Type text string through virtual keyboard", Icon: "⌨️"},
-		{Key: "5", Title: "combo", Description: "Inject shortcut combo (win+d, alt+tab, etc.)", Icon: "🎹"},
+		{Key: "5", Title: "combo", Description: "Create, send & delete Windows combos", Icon: "🎹"},
 		{Key: "6", Title: "raw", Description: "Transmit raw 16-hex character HID report", Icon: "⚙️"},
 		{Key: "7", Title: "creds", Description: "Inspect / update macOS Keychain credentials", Icon: "🔑"},
 		{Key: "d", Title: "devices", Description: "Registered target devices & add new Windows/Mac", Icon: "💻"},
@@ -216,6 +219,34 @@ func (m Model) sleepTick() tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// The Combo Studio runs inside the main dashboard so menu key [5] feels
+	// native: it renders full screen and returns here on esc.
+	if m.state == StateComboStudio && m.comboStudio != nil {
+		if key, ok := msg.(tea.KeyMsg); ok && key.String() == "ctrl+c" {
+			m.quitting = true
+			return m, tea.Quit
+		}
+		switch msg := msg.(type) {
+		case tea.WindowSizeMsg:
+			m.width = msg.Width
+			m.height = msg.Height
+		case statusTickMsg:
+			m.lastPing = time.Time(msg)
+			m.status = m.manager.GetStatus()
+			return m, m.statusTick()
+		}
+
+		updated, cmd := m.comboStudio.Update(msg)
+		studio := updated.(ComboStudioModel)
+		m.comboStudio = &studio
+		if studio.quitting {
+			m.comboStudio = nil
+			m.state = StateMenu
+			return m, nil
+		}
+		return m, cmd
+	}
+
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
@@ -453,11 +484,16 @@ func (m Model) triggerAction(action string) (tea.Model, tea.Cmd) {
 		return m, textinput.Blink
 
 	case "combo":
-		m.state = StateComboInput
-		m.textInput.Placeholder = "Press keys (Ctrl+L, Alt+P, Esc) or type -> (1.0s) / ->{1.5}"
-		m.textInput.SetValue("")
-		m.textInput.Focus()
-		return m, textinput.Blink
+		store := combos.NewStore("")
+		studio := NewComboStudioModel(store, func(combo combos.Combo) error {
+			if m.manager == nil {
+				return fmt.Errorf("adb manager not initialized")
+			}
+			return m.manager.SendCombo(combo.Keys)
+		})
+		m.comboStudio = &studio
+		m.state = StateComboStudio
+		return m, studio.Init()
 
 	case "raw":
 		m.state = StateRawInput

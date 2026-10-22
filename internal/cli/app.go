@@ -13,8 +13,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ghost-hid/ghid/internal/adb"
+	"github.com/ghost-hid/ghid/internal/combos"
 	"github.com/ghost-hid/ghid/internal/config"
 	"github.com/ghost-hid/ghid/internal/gateway"
+	"github.com/ghost-hid/ghid/internal/hid"
 	"github.com/ghost-hid/ghid/internal/tui"
 	"github.com/ghost-hid/ghid/internal/vault"
 )
@@ -23,9 +25,11 @@ import (
 type App struct {
 	Version        string
 	ConfigStore    *config.Store
+	ComboStore     *combos.Store
 	Vault          vault.Vault
 	GatewayFactory func(serial string) (gateway.Controller, error)
 	InteractiveFn  func(mgr *adb.Manager, cfg config.Config) error
+	ComboStudioFn  func(store *combos.Store, send tui.ComboSendFunc) error
 	Stdout         io.Writer
 	Stderr         io.Writer
 }
@@ -37,6 +41,7 @@ func NewApp(version string) *App {
 	return &App{
 		Version:     version,
 		ConfigStore: store,
+		ComboStore:  combos.NewStore(""),
 		Vault:       vlt,
 		GatewayFactory: func(serial string) (gateway.Controller, error) {
 			mgr, err := adb.NewManager(serial)
@@ -54,6 +59,9 @@ func NewApp(version string) *App {
 			p := tea.NewProgram(model, tea.WithAltScreen())
 			_, err := p.Run()
 			return err
+		},
+		ComboStudioFn: func(store *combos.Store, send tui.ComboSendFunc) error {
+			return tui.RunComboStudio(store, send)
 		},
 		Stdout: os.Stdout,
 		Stderr: os.Stderr,
@@ -485,24 +493,335 @@ func (a *App) handleType(serial string, args []string, jsonOutput bool) int {
 }
 
 func (a *App) handleCombo(serial string, args []string, jsonOutput bool) int {
+	store := a.comboStore()
+
+	// Bare `ghid combo` opens the studio so creating and executing combos is a
+	// single command. Without a terminal, fall back to listing the library.
 	if len(args) == 0 {
-		fmt.Fprintf(a.Stderr, "Usage: ghid combo <key1+key2...>\n")
+		if !stdinIsTerminal() {
+			return a.listCombos(store, jsonOutput)
+		}
+		return a.openComboStudio(store, serial)
+	}
+
+	switch args[0] {
+	case "studio", "new", "ui", "interactive":
+		if !stdinIsTerminal() {
+			return a.listCombos(store, jsonOutput)
+		}
+		return a.openComboStudio(store, serial)
+
+	case "list", "ls":
+		return a.listCombos(store, jsonOutput)
+
+	case "schema", "tokens", "capabilities":
+		return a.handleComboSchema(store, jsonOutput)
+
+	case "validate", "check":
+		if len(args) < 2 {
+			return a.comboFail(jsonOutput, "usage: ghid combo validate <keys...>")
+		}
+		return a.handleComboValidate(strings.Join(args[1:], " "), jsonOutput)
+
+	case "save", "add":
+		if len(args) < 3 {
+			return a.comboFail(jsonOutput, "usage: ghid combo save <name> <keys...> (example: ghid combo save \"Open Run\" \"win+r\")")
+		}
+		name := args[1]
+		keys := strings.Join(args[2:], " ")
+		_, existed := store.Find(name)
+		list, err := store.Add(combos.Combo{Name: name, Keys: keys})
+		if err != nil {
+			return a.comboFail(jsonOutput, "%v", err)
+		}
+		if jsonOutput {
+			saved := combos.Combo{Name: name, Keys: keys}
+			for _, c := range list {
+				if strings.EqualFold(c.Name, name) {
+					saved = c
+					break
+				}
+			}
+			writeComboJSON(a.Stdout, map[string]interface{}{
+				"status":  "saved",
+				"updated": existed,
+				"combo":   saved,
+			})
+		} else {
+			fmt.Fprintf(a.Stdout, "✔ Saved combo %q (%s)\n", name, keys)
+		}
+		return 0
+
+	case "send", "run":
+		if len(args) < 2 {
+			return a.comboFail(jsonOutput, "usage: ghid combo send <name>")
+		}
+		name := strings.Join(args[1:], " ")
+		combo, ok := store.Find(name)
+		if !ok {
+			return a.comboFail(jsonOutput, "no saved combo named %q (run 'ghid combo list --json')", name)
+		}
+		return a.dispatchCombo(serial, combo.Name, combo.Keys, jsonOutput)
+
+	case "delete", "rm", "remove":
+		if len(args) < 2 {
+			return a.comboFail(jsonOutput, "usage: ghid combo delete <name> [-f]")
+		}
+		name := args[1]
+		// --json implies non-interactive: machine callers cannot answer prompts.
+		force := jsonOutput
+		for _, arg := range args[2:] {
+			if arg == "-f" || arg == "--force" || arg == "--yes" {
+				force = true
+			}
+		}
+		if _, ok := store.Find(name); !ok {
+			return a.comboFail(jsonOutput, "no saved combo named %q", name)
+		}
+		if !force {
+			fmt.Fprintf(a.Stdout, "Delete combo %q? [y/N]: ", name)
+			var resp string
+			_, _ = fmt.Scanln(&resp)
+			resp = strings.ToLower(strings.TrimSpace(resp))
+			if resp != "y" && resp != "yes" {
+				fmt.Fprintln(a.Stdout, "Aborted.")
+				return 0
+			}
+		}
+		if _, deleted, err := store.Delete(name); err != nil {
+			return a.comboFail(jsonOutput, "%v", err)
+		} else if !deleted {
+			return a.comboFail(jsonOutput, "no saved combo named %q", name)
+		}
+		if jsonOutput {
+			res, _ := json.Marshal(map[string]interface{}{"status": "deleted", "name": name})
+			fmt.Fprintln(a.Stdout, string(res))
+		} else {
+			fmt.Fprintf(a.Stdout, "✔ Deleted combo %q.\n", name)
+		}
+		return 0
+
+	case "mouse":
+		if len(args) < 2 {
+			return a.comboFail(jsonOutput, "usage: ghid combo mouse <click-left|click-right|click-middle|double-click|scroll-up|scroll-down>")
+		}
+		return a.dispatchMouse(serial, args[1], jsonOutput)
+
+	case "keys":
+		if len(args) < 2 {
+			return a.comboFail(jsonOutput, "usage: ghid combo keys <token...>")
+		}
+		return a.dispatchCombo(serial, "", strings.Join(args[1:], " "), jsonOutput)
+	}
+
+	// Backwards-compatible one-shot send: ghid combo "win+d".
+	keys := strings.Join(args, " ")
+	return a.dispatchCombo(serial, "", keys, jsonOutput)
+}
+
+// comboFail reports a combo error as JSON in machine mode so agents never have
+// to scrape stderr.
+func (a *App) comboFail(jsonOutput bool, format string, args ...interface{}) int {
+	message := fmt.Sprintf(format, args...)
+	if jsonOutput {
+		writeComboJSON(a.Stdout, map[string]interface{}{
+			"status": "error",
+			"error":  message,
+		})
+	} else {
+		fmt.Fprintf(a.Stderr, "Error: %s\n", message)
+	}
+	return 1
+}
+
+// handleComboSchema exposes the grammar and every accepted token so agents can
+// discover how to build combos without reading source or docs.
+func (a *App) handleComboSchema(store *combos.Store, jsonOutput bool) int {
+	schema := map[string]interface{}{
+		"windows_only": true,
+		"storage":      store.Path,
+		"grammar":      "step ->{seconds} step ->{seconds} step",
+		"step_types": []string{
+			"keyboard chord: ctrl+shift+esc",
+			"mouse gesture: click-left, scroll-up",
+			"typed text: type:rustdesk or type:\"rust desk\"",
+		},
+		"keyboard":      hid.WindowsKeyboardTokens(),
+		"mouse":         hid.MouseActions(),
+		"text_prefixes": []string{"type:", "text:", "type ", "text "},
+		"example":       "win+s ->{0.7} type:rustdesk ->{0.4} enter",
+		"commands": map[string]string{
+			"list":     "ghid combo list --json",
+			"save":     "ghid combo save \"Name\" \"keys\" --json",
+			"send":     "ghid combo send \"Name\" --json",
+			"delete":   "ghid combo delete \"Name\" --json",
+			"validate": "ghid combo validate \"keys\" --json",
+		},
+	}
+
+	if jsonOutput {
+		writeComboJSON(a.Stdout, schema)
+		return 0
+	}
+
+	fmt.Fprintln(a.Stdout, "\n🎹 COMBO GRAMMAR · Windows keyboard + mouse + text")
+	fmt.Fprintf(a.Stdout, "  Storage: %s\n", store.Path)
+	fmt.Fprintln(a.Stdout, "  Chain:   step ->{seconds} step")
+	fmt.Fprintf(a.Stdout, "  Example: %s\n\n", schema["example"])
+	fmt.Fprintln(a.Stdout, "  Keyboard:", strings.Join(hid.WindowsKeyboardTokens(), " "))
+	fmt.Fprintln(a.Stdout, "  Mouse:   ", strings.Join(hid.MouseActions(), " "))
+	fmt.Fprintln(a.Stdout, "  Text:     type:rustdesk  or  type:\"rust desk\"")
+	return 0
+}
+
+func (a *App) handleComboValidate(keys string, jsonOutput bool) int {
+	steps, err := hid.DescribeSequence(keys)
+	if err != nil {
+		if jsonOutput {
+			writeComboJSON(a.Stdout, map[string]interface{}{
+				"valid": false,
+				"keys":  keys,
+				"error": err.Error(),
+			})
+		} else {
+			fmt.Fprintf(a.Stderr, "✖ Invalid combo: %v\n", err)
+		}
 		return 1
 	}
-	keys := strings.Join(args, " ")
-	gw, err := a.GatewayFactory(serial)
+
+	// Apply the same Windows-only and ASCII rules used when saving.
+	if err := combos.Validate(keys); err != nil {
+		if jsonOutput {
+			writeComboJSON(a.Stdout, map[string]interface{}{
+				"valid": false,
+				"keys":  keys,
+				"error": err.Error(),
+			})
+		} else {
+			fmt.Fprintf(a.Stderr, "✖ Invalid combo: %v\n", err)
+		}
+		return 1
+	}
+
+	if jsonOutput {
+		writeComboJSON(a.Stdout, map[string]interface{}{
+			"valid": true,
+			"keys":  keys,
+			"steps": steps,
+		})
+	} else {
+		fmt.Fprintf(a.Stdout, "✔ Valid Windows combo (%d steps): %s\n", len(steps), keys)
+	}
+	return 0
+}
+
+// comboStore returns the configured store, or one next to the config file.
+func (a *App) comboStore() *combos.Store {
+	if a.ComboStore != nil {
+		return a.ComboStore
+	}
+	dir := filepath.Dir(config.GetConfigPath())
+	if a.ConfigStore != nil && a.ConfigStore.Path != "" {
+		dir = filepath.Dir(a.ConfigStore.Path)
+	}
+	return combos.NewStore(filepath.Join(dir, "combos.json"))
+}
+
+func stdinIsTerminal() bool {
+	info, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
+}
+
+func (a *App) openComboStudio(store *combos.Store, serial string) int {
+	if a.ComboStudioFn == nil {
+		return a.listCombos(store, false)
+	}
+	send := func(combo combos.Combo) error {
+		gw, err := a.GatewayFactory(serial)
+		if err != nil {
+			return err
+		}
+		return gw.Combo(combo.Keys)
+	}
+	if err := a.ComboStudioFn(store, send); err != nil {
+		fmt.Fprintf(a.Stderr, "Combo studio error: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func (a *App) listCombos(store *combos.Store, jsonOutput bool) int {
+	list, err := store.Load()
 	if err != nil {
 		fmt.Fprintf(a.Stderr, "Error: %v\n", err)
 		return 1
 	}
-	err = gw.Combo(keys)
+	if jsonOutput {
+		writeComboJSON(a.Stdout, list)
+		return 0
+	}
+
+	fmt.Fprintln(a.Stdout, "\n🎹 COMBO STUDIO · Windows keyboard + mouse")
+	if len(list) == 0 {
+		fmt.Fprintln(a.Stdout, "  No combos saved yet.")
+		fmt.Fprintln(a.Stdout, "  Create one with 'ghid combo' (interactive) or:")
+		fmt.Fprintln(a.Stdout, "    ghid combo save \"Open Run\" \"win+r\"")
+		fmt.Fprintln(a.Stdout)
+		return 0
+	}
+	for i, c := range list {
+		fmt.Fprintf(a.Stdout, "  %2d. %-28s %s\n", i+1, c.Name, c.Keys)
+	}
+	fmt.Fprintf(a.Stdout, "\n  Send one with 'ghid combo send <name>' or open the studio: ghid combo\n\n")
+	return 0
+}
+
+// writeComboJSON keeps "->" readable instead of escaping it to -\u003e.
+func writeComboJSON(w io.Writer, value interface{}) {
+	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(value)
+}
+
+func (a *App) dispatchMouse(serial, action string, jsonOutput bool) int {
+	gw, err := a.GatewayFactory(serial)
 	if err != nil {
-		fmt.Fprintf(a.Stderr, "Combo failed: %v\n", err)
-		return 1
+		return a.comboFail(jsonOutput, "%v", err)
+	}
+	if err := gw.Mouse(action); err != nil {
+		return a.comboFail(jsonOutput, "mouse gesture failed: %v", err)
 	}
 	if jsonOutput {
-		res, _ := json.Marshal(map[string]interface{}{"status": "success", "combo": keys})
+		res, _ := json.Marshal(map[string]interface{}{"status": "success", "mouse": action})
 		fmt.Fprintln(a.Stdout, string(res))
+	} else {
+		fmt.Fprintf(a.Stdout, "✔ Dispatched mouse gesture: %s\n", action)
+	}
+	return 0
+}
+
+func (a *App) dispatchCombo(serial, name, keys string, jsonOutput bool) int {
+	gw, err := a.GatewayFactory(serial)
+	if err != nil {
+		return a.comboFail(jsonOutput, "%v", err)
+	}
+	err = gw.Combo(keys)
+	if err != nil {
+		return a.comboFail(jsonOutput, "combo failed: %v", err)
+	}
+	if jsonOutput {
+		payload := map[string]interface{}{"status": "success", "combo": keys}
+		if name != "" {
+			payload["name"] = name
+		}
+		res, _ := json.Marshal(payload)
+		fmt.Fprintln(a.Stdout, string(res))
+	} else if name != "" {
+		fmt.Fprintf(a.Stdout, "✔ Dispatched %q: %s\n", name, keys)
 	} else {
 		fmt.Fprintf(a.Stdout, "✔ Dispatched combo: %s\n", keys)
 	}
@@ -918,7 +1237,15 @@ Commands:
   lock              Instant Windows lock screen (Win + L)
   sleep             Windows sleep sequence + countdown exit
   type <text...>    Type text string through virtual keyboard
-  combo <keys>      Send shortcut combination (e.g. 'win+d', 'ctrl+alt+del')
+  combo [keys]      Interactive Windows combo studio (create, send, delete)
+  combo list        List saved combos (--json supported)
+  combo schema      Grammar + every accepted token (JSON for AI agents)
+  combo validate <keys>  Validate without saving or sending
+  combo save <name> <keys...>   Save a named combo (keyboard + mouse + text)
+  combo send <name> Send a saved combo
+  combo delete <name> [-f]      Delete a combo (--json skips confirmation)
+  combo <keys>      Send a one-shot shortcut (e.g. 'win+d', 'ctrl+alt+del')
+  combo mouse       Send a mouse gesture (click-left, scroll-up, double-click)
   raw <hex16>       Transmit raw 8-byte HID keyboard report
   creds             Manage stored credentials in macOS Keychain (status, set, clear)
   connect [addr]    Connect Bluetooth HID to target laptop

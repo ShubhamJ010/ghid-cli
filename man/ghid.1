@@ -164,11 +164,50 @@ battery drain occurs.
 .B type \fItext...\fR
 Type arbitrary string arguments through virtual keyboard.
 .TP
-.B combo \fIkeys\fR
-Send key combination. Supported keys include: \fIctrl\fR, \fIalt\fR,
-\fIshift\fR, \fIwin\fR, \fIdel\fR, \fIenter\fR, \fIesc\fR, \fItab\fR,
-\fIspace\fR, \fIup\fR, \fIdown\fR, \fIleft\fR, \fIright\fR, and
-alphanumerics \fIa\fR\(en\fIz\fR, \fI0\fR\(en\fI9\fR.
+.B combo \fR[\fIkeys\fR | \fBlist\fR | \fBsave\fR | \fBsend\fR | \fBdelete\fR | \fBmouse\fR]
+With no arguments, opens the interactive Windows Combo Studio: saved combos
+are listed (or an empty-state card is shown), \fBEnter\fR sends the selected
+combo, \fBTab\fR focuses the SEND / NEW / DELETE buttons, \fBn\fR creates a
+named combo, and \fBDelete\fR removes one after a Y/N confirmation.
+.PP
+.RS 4
+\fBghid combo list\fR [\fB\-\-json\fR] \- list saved combos.
+.br
+\fBghid combo schema\fR [\fB\-\-json\fR] \- grammar and every accepted token.
+.br
+\fBghid combo validate\fR \fIkeys...\fR [\fB\-\-json\fR] \- parse without
+saving or sending; exits 1 when invalid.
+.br
+\fBghid combo save\fR \fIname\fR \fIkeys...\fR \- save a named combo.
+.br
+\fBghid combo send\fR \fIname\fR \- send a saved combo.
+.br
+\fBghid combo delete\fR \fIname\fR [\fB\-f\fR] \- delete with confirmation.
+.br
+\fBghid combo\fR \fIkeys\fR \- one-shot send (e.g. \fIwin+d\fR).
+.br
+\fBghid combo mouse\fR \fIgesture\fR \- \fIclick-left\fR, \fIclick-right\fR,
+\fIclick-middle\fR, \fIdouble-click\fR, \fIscroll-up\fR, \fIscroll-down\fR.
+.RE
+.PP
+Keyboard tokens cover real Windows keys: \fIwin\fR, \fIctrl\fR, \fIalt\fR,
+\fIshift\fR, \fIa\fR\(en\fIz\fR, \fI0\fR\(en\fI9\fR, \fIf1\fR\(en\fIf12\fR,
+\fIenter\fR, \fIesc\fR, \fItab\fR, \fIspace\fR, \fIbackspace\fR, \fIdel\fR,
+\fIinsert\fR, navigation keys, \fIprintscreen\fR, \fIcapslock\fR,
+\fInumlock\fR, \fIscrolllock\fR, \fIpause\fR, \fImenu\fR and punctuation names
+such as \fIsemicolon\fR or \fIslash\fR. Type literal text with a
+\fBtype:\fR step: \fIwin+s ->{0.7} type:rustdesk ->{0.3} enter\fR (quote text
+with spaces as \fItype:"rust desk"\fR; printable ASCII only). Chain steps with
+\fI->{seconds}\fR, for example \fIwin+r ->{0.6} click-left\fR. macOS-only
+aliases (\fIcmd\fR, \fIsuper\fR, \fIoption\fR) are rejected.
+.PP
+The combo library is stored in \fI~/.config/ghid/combos.json\fR. The mouse uses
+HID report ID 2, so re-pair the phone on Windows after updating the APK.
+.PP
+For automation, \fB\-\-json\fR makes every combo command non-interactive:
+errors are emitted as JSON on stdout with exit code 1, and \fBcombo delete\fR
+skips the confirmation prompt. Use \fBcombo schema \-\-json\fR to enumerate
+supported keys and gestures, then \fBcombo validate\fR before \fBcombo save\fR.
 .TP
 .B raw \fIhex16\fR
 Send raw 8-byte (16 hex character) USB HID keyboard report.

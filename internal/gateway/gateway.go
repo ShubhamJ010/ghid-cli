@@ -28,24 +28,24 @@ type DoctorCheck struct {
 
 // DoctorReport contains the full system diagnostic status.
 type DoctorReport struct {
-	Version            string        `json:"version"`
-	AdbPath            string        `json:"adb_path"`
-	AdbAvailable       bool          `json:"adb_available"`
-	DeviceConnected    bool          `json:"device_connected"`
-	DeviceModel        string        `json:"device_model"`
-	DeviceSerial       string        `json:"device_serial"`
-	ApkInstalled       bool          `json:"apk_installed"`
-	BluetoothOn        bool          `json:"bluetooth_on"`
-	GatewayRegistered  bool          `json:"gateway_registered"`
-	GatewayConnected   bool          `json:"gateway_connected"`
-	TargetLaptop       string        `json:"target_laptop"`
-	TargetAddress      string        `json:"target_address"`
-	SelectedDevice     *config.TargetDevice `json:"selected_device,omitempty"`
-	RegisteredDevices  int           `json:"registered_devices"`
-	KeychainAvailable  bool          `json:"keychain_available"`
-	CachedUser         string        `json:"cached_user"`
-	HasCachedPassword  bool          `json:"has_cached_password"`
-	Checks             []DoctorCheck `json:"checks,omitempty"`
+	Version           string               `json:"version"`
+	AdbPath           string               `json:"adb_path"`
+	AdbAvailable      bool                 `json:"adb_available"`
+	DeviceConnected   bool                 `json:"device_connected"`
+	DeviceModel       string               `json:"device_model"`
+	DeviceSerial      string               `json:"device_serial"`
+	ApkInstalled      bool                 `json:"apk_installed"`
+	BluetoothOn       bool                 `json:"bluetooth_on"`
+	GatewayRegistered bool                 `json:"gateway_registered"`
+	GatewayConnected  bool                 `json:"gateway_connected"`
+	TargetLaptop      string               `json:"target_laptop"`
+	TargetAddress     string               `json:"target_address"`
+	SelectedDevice    *config.TargetDevice `json:"selected_device,omitempty"`
+	RegisteredDevices int                  `json:"registered_devices"`
+	KeychainAvailable bool                 `json:"keychain_available"`
+	CachedUser        string               `json:"cached_user"`
+	HasCachedPassword bool                 `json:"has_cached_password"`
+	Checks            []DoctorCheck        `json:"checks,omitempty"`
 }
 
 // Controller defines the deep module interface for all GhostHID gateway operations.
@@ -63,6 +63,7 @@ type Controller interface {
 	SleepSequence() error
 	Type(text string) error
 	Combo(keys string) error
+	Mouse(action string) error
 	Raw(hexReport string) error
 	Login(req LoginRequest, progress func(step int, desc string)) error
 	GetLogs(lines int) (string, error)
@@ -169,11 +170,18 @@ func (g *Gateway) Combo(keys string) error {
 	if g.mgr == nil {
 		return errors.New("adb manager not initialized")
 	}
-	// Validate combo format or sequence using domain HID parser
-	if _, err := hid.ParseComboSequence(keys); err != nil {
+	// Validate keyboard chords and mouse gestures using the domain HID parser
+	if _, err := hid.ParseActionSequence(keys); err != nil {
 		return fmt.Errorf("invalid combo: %w", err)
 	}
 	return g.mgr.SendCombo(keys)
+}
+
+func (g *Gateway) Mouse(action string) error {
+	if g.mgr == nil {
+		return errors.New("adb manager not initialized")
+	}
+	return g.mgr.SendMouse(action)
 }
 
 func (g *Gateway) Raw(hexReport string) error {
