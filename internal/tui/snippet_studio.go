@@ -394,6 +394,10 @@ func (m SnippetStudioModel) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.
 	return m, nil
 }
 
+func (m SnippetStudioModel) cardWidth() int {
+	return calculateCardWidth(m.width)
+}
+
 func (m SnippetStudioModel) View() string {
 	var sb strings.Builder
 
@@ -423,7 +427,7 @@ func (m SnippetStudioModel) View() string {
 	sb.WriteString("\n\n")
 	sb.WriteString(m.renderStudioFooter())
 
-	return FocusCardStyle.Width(76).Render(sb.String())
+	return FocusCardStyle.Width(m.cardWidth()).Render(sb.String())
 }
 
 func (m SnippetStudioModel) renderList() string {
@@ -451,38 +455,60 @@ func (m SnippetStudioModel) renderList() string {
 }
 
 func (m SnippetStudioModel) renderSnippetTable() string {
-	header := lipgloss.NewStyle().Foreground(ColorFgMuted).Render(
-		fmt.Sprintf("   %-3s %-20s %-26s %s", "#", "VARIABLE", "VALUE", "SECURITY"))
+	cardWidth := m.cardWidth()
+	innerWidth := cardWidth - 6
+
+	colNum := 5
+	colVar := 20
+	colSec := 15
+	valWidth := innerWidth - colNum - colVar - colSec - 6
+	if valWidth < 16 {
+		valWidth = 16
+	}
+
+	headerPrefix := "  "
+	headerNum := padRight("  #", colNum)
+	headerVar := padRight("VARIABLE", colVar)
+	headerVal := padRight("VALUE", valWidth)
+	headerSec := padRight("SECURITY", colSec)
+	headerLine := fmt.Sprintf("%s%s %s %s %s", headerPrefix, headerNum, headerVar, headerVal, headerSec)
+	header := lipgloss.NewStyle().Foreground(ColorFgMuted).Render(headerLine)
 
 	var rows []string
 	rows = append(rows, header)
 	for i, s := range m.list {
 		varName := "$" + strings.ToUpper(s.Name)
-		if runes := []rune(varName); len(runes) > 20 {
-			varName = string(runes[:19]) + "…"
-		}
+		numCol := padRight(fmt.Sprintf("   %-2d", i+1), colNum)
+		varCol := padRight(truncate(varName, colVar), colVar)
+		valCol := padRight(truncate(s.MaskedValue(), valWidth), valWidth)
 
-		displayVal := s.MaskedValue()
-		if runes := []rune(displayVal); len(runes) > 26 {
-			displayVal = string(runes[:25]) + "…"
-		}
-
-		secStatus := lipgloss.NewStyle().Foreground(ColorFgMuted).Render("[PLAIN]")
+		var secCol string
 		if s.Secure {
-			secStatus = lipgloss.NewStyle().Foreground(ColorGreen).Bold(true).Render("[KEYCHAIN 🔒]")
+			secCol = padRight("[KEYCHAIN 🔒]", colSec)
+		} else {
+			secCol = padRight("[PLAIN]", colSec)
 		}
 
-		line := fmt.Sprintf(" %2d  %-20s %-26s %s", i+1, varName, displayVal, secStatus)
 		if i == m.index {
-			prefix := "▸"
+			prefix := "▸ "
+			line := fmt.Sprintf("%s%s %s %s %s", prefix, numCol, varCol, valCol, secCol)
 			if m.focus == 0 {
-				rows = append(rows, MenuSelectedStyle.Render(prefix+line))
+				rows = append(rows, lipgloss.NewStyle().
+					Bold(true).
+					Foreground(ColorCyan).
+					Background(lipgloss.Color("#313244")).
+					Render(line))
 			} else {
 				rows = append(rows, lipgloss.NewStyle().
-					Foreground(ColorCyan).PaddingLeft(1).Render(prefix+line))
+					Foreground(ColorCyan).
+					Render(line))
 			}
 		} else {
-			rows = append(rows, MenuItemStyle.Render(" "+line))
+			prefix := "  "
+			line := fmt.Sprintf("%s%s %s %s %s", prefix, numCol, varCol, valCol, secCol)
+			rows = append(rows, lipgloss.NewStyle().
+				Foreground(ColorFgLight).
+				Render(line))
 		}
 	}
 	return strings.Join(rows, "\n")
@@ -496,7 +522,8 @@ func (m SnippetStudioModel) renderButtons() string {
 			Foreground(ColorFgLight).
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(ColorFgMuted).
-			Padding(0, 2)
+			Padding(0, 2).
+			Background(ColorBgCard)
 		if m.focus == i+1 {
 			style = style.
 				Bold(true).
@@ -596,10 +623,10 @@ func (m SnippetStudioModel) renderDeleteConfirm() string {
 
 func (m SnippetStudioModel) renderStudioFooter() string {
 	if m.mode == snipCreate {
-		return HelpStyle.Render("tab next field · space toggle secure · enter save · esc back")
+		return HelpStyle.Render("[Tab]: Switch field • [Space]: Toggle Keychain • [Enter / Ctrl+S]: Save • [Esc]: Cancel")
 	}
 	if m.mode == snipConfirmDelete {
-		return HelpStyle.Render("y confirm · n or esc cancel")
+		return HelpStyle.Render("[y]: Confirm delete • [n / Esc]: Cancel")
 	}
-	return HelpStyle.Render("↑↓ select · enter/e edit · s toggle keychain · n new · del remove · esc back")
+	return HelpStyle.Render("↑/↓: Navigate • [Enter/e]: Edit • [n]: New • [d]: Delete • [s]: Toggle Keychain • [Tab]: Focus buttons • [Esc/q]: Back")
 }

@@ -75,12 +75,17 @@ func (m Model) renderBanner() string {
 	return fmt.Sprintf("%s %s\n%s\n", title, badge, tagline)
 }
 
+func (m Model) cardWidth() int {
+	return calculateCardWidth(m.width)
+}
+
 func (m Model) renderInit() string {
-	return CardStyle.Render(fmt.Sprintf(
+	content := fmt.Sprintf(
 		"%s Establishing link with Android Bluetooth Gateway...\n\n%s",
 		m.spinner.View(),
 		SubtitleStyle.Render("Checking USB/Wi-Fi connection & negotiating SDP profile..."),
-	))
+	)
+	return CardStyle.Width(m.cardWidth()).Render(content)
 }
 
 func (m Model) renderTelemetryCard() string {
@@ -111,15 +116,7 @@ func (m Model) renderTelemetryCard() string {
 		targetText = fmt.Sprintf("%s [%s]", m.status.Target, m.status.Address)
 	}
 
-	cardWidth := 78
-	if m.width > 0 {
-		cardWidth = m.width - 4
-		if cardWidth < 70 {
-			cardWidth = 70
-		} else if cardWidth > 96 {
-			cardWidth = 96
-		}
-	}
+	cardWidth := m.cardWidth()
 	innerWidth := cardWidth - 6
 
 	rightColWidth := 24
@@ -155,23 +152,36 @@ func (m Model) renderMenu() string {
 	sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(ColorCyan).Render("ACTIONS"))
 	sb.WriteString("\n")
 
-	cardWidth := 78
-	if m.width > 0 {
-		cardWidth = m.width - 4
-		if cardWidth < 70 {
-			cardWidth = 70
-		} else if cardWidth > 96 {
-			cardWidth = 96
+	cardWidth := m.cardWidth()
+
+	// Dynamically calculate title column width so multi-word names never wrap
+	maxTitleWidth := 14
+	for _, item := range m.menuItems {
+		w := lipgloss.Width(item.Title)
+		if w > maxTitleWidth {
+			maxTitleWidth = w
 		}
+	}
+	if maxTitleWidth > 24 {
+		maxTitleWidth = 24
 	}
 
 	for i, item := range m.menuItems {
 		var line string
 		keyStr := KeyBadgeStyle.Render(fmt.Sprintf("[%s]", item.Key))
-		titleStr := lipgloss.NewStyle().Bold(true).Width(12).Render(item.Title)
-		descStr := SubtitleStyle.Render(item.Description)
+		iconStr := padRight(item.Icon, 2)
+		titlePadded := padRight(truncate(item.Title, maxTitleWidth), maxTitleWidth)
+		titleStr := lipgloss.NewStyle().Bold(true).Render(titlePadded)
 
-		content := fmt.Sprintf("%s %s %s - %s", keyStr, item.Icon, titleStr, descStr)
+		// Space for description: cardWidth minus prefix, key, icon, title, separator, margins
+		usedWidth := 2 + 1 + lipgloss.Width(keyStr) + 1 + lipgloss.Width(iconStr) + 1 + maxTitleWidth + 3 + 4
+		availDesc := cardWidth - usedWidth
+		if availDesc < 15 {
+			availDesc = 15
+		}
+		descStr := SubtitleStyle.Render(truncate(item.Description, availDesc))
+
+		content := fmt.Sprintf("%s %s %s - %s", keyStr, iconStr, titleStr, descStr)
 		if i == m.menuIndex {
 			prefix := lipgloss.NewStyle().Foreground(ColorCyan).Bold(true).Render("▶ ")
 			line = lipgloss.NewStyle().
@@ -204,9 +214,9 @@ func (m Model) renderFooter() string {
 		} else {
 			noticeBox = SuccessStyle.Render(m.notice)
 		}
-		return fmt.Sprintf("\n%s\n\n%s", noticeBox, HelpStyle.Render("↑/↓ or key: Select action • [Enter]: Execute • [q]: Exit"))
+		return fmt.Sprintf("\n%s\n\n%s", noticeBox, HelpStyle.Render("↑/↓: Navigate • [Enter]: Execute • [1-9/d/0]: Quick key • [q]: Exit"))
 	}
-	return HelpStyle.Render("↑/↓ or key: Select action • [Enter]: Execute • [q]: Exit")
+	return HelpStyle.Render("↑/↓: Navigate • [Enter]: Execute • [1-9/d/0]: Quick key • [q]: Exit")
 }
 
 func (m Model) renderRegisterPlatform() string {
@@ -228,9 +238,9 @@ func (m Model) renderRegisterPlatform() string {
 	opt2Desc := SubtitleStyle.Render("    MacBook, Mac Studio, Mac Mini running macOS Sonoma / Sequoia.")
 
 	sb.WriteString(fmt.Sprintf("%s\n%s\n\n%s\n%s\n\n", opt1, opt1Desc, opt2, opt2Desc))
-	sb.WriteString(HelpStyle.Render("Press [1] or [2] to choose platform • [Esc]: Cancel"))
+	sb.WriteString(HelpStyle.Render("[1] / [2]: Choose platform • [Esc]: Cancel"))
 
-	return FocusCardStyle.Width(66).Render(sb.String())
+	return FocusCardStyle.Width(m.cardWidth()).Render(sb.String())
 }
 
 func (m Model) renderRegisterGuide() string {
@@ -256,7 +266,11 @@ func (m Model) renderRegisterGuide() string {
 			lipgloss.NewStyle().Bold(true).Foreground(ColorCyan).Render(m.deviceModel),
 			lipgloss.NewStyle().Bold(true).Render("Connect"),
 		)
-		sb.WriteString(DocBoxStyle.Width(64).Render(guideContent))
+		docWidth := m.cardWidth() - 6
+		if docWidth < 60 {
+			docWidth = 60
+		}
+		sb.WriteString(DocBoxStyle.Width(docWidth).Render(guideContent))
 	} else {
 		sb.WriteString(TitleStyle.Render("🪟 Windows HID Peripheral Pairing Instructions (Step 2 of 3)"))
 		sb.WriteString("\n\n")
@@ -283,12 +297,16 @@ func (m Model) renderRegisterGuide() string {
 			lipgloss.NewStyle().Bold(true).Render("Bluetooth"),
 			lipgloss.NewStyle().Bold(true).Foreground(ColorCyan).Render(m.deviceModel),
 		)
-		sb.WriteString(DocBoxStyle.Width(64).Render(guideContent))
+		docWidth := m.cardWidth() - 6
+		if docWidth < 60 {
+			docWidth = 60
+		}
+		sb.WriteString(DocBoxStyle.Width(docWidth).Render(guideContent))
 	}
 
 	sb.WriteString("\n\n")
-	sb.WriteString(HelpStyle.Render("Press [Enter] or [Space] when paired ➔ Next step • [Esc]: Cancel"))
-	return FocusCardStyle.Width(68).Render(sb.String())
+	sb.WriteString(HelpStyle.Render("[Enter / Space]: Next step • [Esc]: Cancel"))
+	return FocusCardStyle.Width(m.cardWidth()).Render(sb.String())
 }
 
 func (m Model) renderRegisterInput() string {
@@ -312,8 +330,8 @@ func (m Model) renderRegisterInput() string {
 	sb.WriteString(addrLabel + "\n")
 	sb.WriteString(m.devAddrInput.View() + "\n\n")
 
-	sb.WriteString(HelpStyle.Render("[Tab/↓]: Switch Field • [Enter]: Save Device • [Esc]: Cancel"))
-	return FocusCardStyle.Width(64).Render(sb.String())
+	sb.WriteString(HelpStyle.Render("[Tab / ↓]: Switch field • [Enter]: Save device • [Esc]: Cancel"))
+	return FocusCardStyle.Width(m.cardWidth()).Render(sb.String())
 }
 
 func (m Model) renderDevicesList() string {
@@ -342,23 +360,24 @@ func (m Model) renderDevicesList() string {
 				activeBadge = BadgeConnected.Render()
 			}
 
-			nameStr := lipgloss.NewStyle().Bold(true).Width(20).Render(dev.Name)
-			addrStr := lipgloss.NewStyle().Foreground(ColorFgMuted).Width(20).Render(dev.Address)
+			nameStr := lipgloss.NewStyle().Bold(true).Render(padRight(truncate(dev.Name, 20), 20))
+			addrStr := lipgloss.NewStyle().Foreground(ColorFgMuted).Render(padRight(truncate(dev.Address, 20), 20))
 
+			rowWidth := m.cardWidth() - 6
 			if i == m.devicesIndex {
 				prefix := lipgloss.NewStyle().Foreground(ColorCyan).Bold(true).Render("▶ ")
-				line = MenuSelectedStyle.Width(62).Render(fmt.Sprintf("%s%s %s %s %s", prefix, icon, nameStr, addrStr, activeBadge))
+				line = MenuSelectedStyle.Width(rowWidth).Render(fmt.Sprintf("%s%s %s %s %s", prefix, icon, nameStr, addrStr, activeBadge))
 			} else {
 				prefix := "  "
-				line = MenuItemStyle.Render(fmt.Sprintf("%s%s %s %s %s", prefix, icon, nameStr, addrStr, activeBadge))
+				line = MenuItemStyle.Width(rowWidth).Render(fmt.Sprintf("%s%s %s %s %s", prefix, icon, nameStr, addrStr, activeBadge))
 			}
 			sb.WriteString(line + "\n")
 		}
 		sb.WriteString("\n")
 	}
 
-	sb.WriteString(HelpStyle.Render("[Enter/s]: Connect • [a]: Add New • [d]: Delete • [u]: Unpair • [Esc]: Back"))
-	return CardStyle.Width(68).Render(sb.String())
+	sb.WriteString(HelpStyle.Render("[Enter / s]: Connect • [a]: Add new • [d]: Delete • [u]: Unpair • [Esc]: Back"))
+	return FocusCardStyle.Width(m.cardWidth()).Render(sb.String())
 }
 
 func (m Model) renderDeleteConfirm() string {
@@ -384,8 +403,8 @@ func (m Model) renderDeleteConfirm() string {
 	sb.WriteString(warning)
 	sb.WriteString("\n\n")
 
-	sb.WriteString(HelpStyle.Render("Press [y] to Confirm Unregister • Press [n / Esc] to Cancel"))
-	return FocusCardStyle.Width(64).Render(sb.String())
+	sb.WriteString(HelpStyle.Render("[y]: Confirm unregister • [n / Esc]: Cancel"))
+	return FocusCardStyle.Width(m.cardWidth()).Render(sb.String())
 }
 
 func (m Model) renderLoginPrompt() string {
@@ -411,10 +430,10 @@ func (m Model) renderLoginPrompt() string {
 		m.userInput.View(),
 		passLabel,
 		m.passInput.View(),
-		SubtitleStyle.Render("[Tab/↓]: Switch Field • [Enter]: Save & Run • [Esc]: Cancel"),
+		HelpStyle.Render("[Tab / ↓]: Switch field • [Enter]: Save & run • [Esc]: Cancel"),
 	)
 
-	return FocusCardStyle.Width(56).Render(content)
+	return FocusCardStyle.Width(m.cardWidth()).Render(content)
 }
 
 func (m Model) renderComboCountdown() string {
@@ -473,7 +492,7 @@ func (m Model) renderComboCountdown() string {
 		remainingSec,
 		HelpStyle.Render("[Esc] or [q]: Cancel Sequence"),
 	)
-	return CardStyle.Width(52).Render(content)
+	return FocusCardStyle.Width(m.cardWidth()).Render(content)
 }
 
 func (m Model) renderComboInput() string {
@@ -482,9 +501,9 @@ func (m Model) renderComboInput() string {
 		TitleStyle.Render("🎹 Custom Keyboard Chord & Gesture Sequence"),
 		m.textInput.View(),
 		SubtitleStyle.Render("Examples: super+l  •  ctrl+alt+del -> esc -> $USERNAME  •  click-left ->{0.5} win+d"),
-		SubtitleStyle.Render("[Enter]: Transmit • Shortcuts auto-record • Delays: -> (1.0s) or ->{1.5} • [Esc]: Cancel"),
+		HelpStyle.Render("[Enter]: Transmit • Delays: -> (1.0s) or ->{1.5} • [Esc]: Cancel"),
 	)
-	return FocusCardStyle.Width(72).Render(content)
+	return FocusCardStyle.Width(m.cardWidth()).Render(content)
 }
 
 func (m Model) renderQuickSend() string {
@@ -508,9 +527,9 @@ func (m Model) renderQuickSend() string {
 		tabs,
 		SubtitleStyle.Render(desc),
 		m.textInput.View(),
-		SubtitleStyle.Render("[Tab]: Toggle Type/Raw • [Enter]: Transmit • [Esc]: Cancel"),
+		HelpStyle.Render("[Tab]: Toggle Type/Raw • [Enter]: Transmit • [Esc]: Cancel"),
 	)
-	return FocusCardStyle.Width(68).Render(content)
+	return FocusCardStyle.Width(m.cardWidth()).Render(content)
 }
 
 func (m Model) renderDoctorView() string {
@@ -529,14 +548,14 @@ func (m Model) renderDoctorView() string {
 	}
 
 	sb.WriteString("\n")
-	sb.WriteString(HelpStyle.Render("Press [Enter] or [Esc] to return to menu"))
-	return CardStyle.Width(64).Render(sb.String())
+	sb.WriteString(HelpStyle.Render("[Enter / Esc]: Return to menu"))
+	return FocusCardStyle.Width(m.cardWidth()).Render(sb.String())
 }
 
 func (m Model) renderRecoveryView() string {
 	var sb strings.Builder
 	sb.WriteString(TitleStyle.Render("🔧 Connection Recovery Options"))
 	sb.WriteString("\n\n")
-	sb.WriteString(HelpStyle.Render("Press [Enter] or [Esc] to return to menu"))
-	return CardStyle.Width(64).Render(sb.String())
+	sb.WriteString(HelpStyle.Render("[Enter / Esc]: Return to menu"))
+	return FocusCardStyle.Width(m.cardWidth()).Render(sb.String())
 }

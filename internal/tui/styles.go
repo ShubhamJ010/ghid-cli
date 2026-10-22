@@ -127,3 +127,17 @@ var (
 			Foreground(ColorRed).
 			Bold(true)
 )
+
+// calculateCardWidth calculates a responsive card width clamped between 74 and 100 columns.
+func calculateCardWidth(termWidth int) int {
+	w := 80
+	if termWidth > 0 {
+		w = termWidth - 4
+		if w < 74 {
+			w = 74
+		} else if w > 100 {
+			w = 100
+		}
+	}
+	return w
+}

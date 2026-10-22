@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/ghost-hid/ghid/internal/adb"
 )
 
@@ -221,5 +222,117 @@ func TestTelemetryCardDoesNotExposeSnippets(t *testing.T) {
 	}
 	if !strings.Contains(card, "READY") || !strings.Contains(card, "DISCONNECTED") {
 		t.Fatalf("telemetry card missing status badges:\n%s", card)
+	}
+}
+
+func TestMenuItemsDoNotWrapMultiWordTitles(t *testing.T) {
+	m := Model{
+		state: StateMenu,
+		menuItems: []MenuItem{
+			{Key: "1", Title: "Open RustDesk", Description: "Open Rustdesk", Icon: "😎"},
+			{Key: "2", Title: "Login", Description: "Windows unlock & credential injection", Icon: "🔑"},
+			{Key: "3", Title: "Lock", Description: "Instant Windows lock screen (Win + L)", Icon: "🔒"},
+		},
+		menuIndex: 0,
+	}
+	rendered := m.renderMenu()
+
+	lines := strings.Split(strings.TrimSpace(rendered), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("expected 4 lines in menu rendering (header + 3 items), got %d:\n%s", len(lines), rendered)
+	}
+	if !strings.Contains(lines[1], "Open RustDesk") {
+		t.Fatalf("item 1 should contain full title on the same line, got: %q", lines[1])
+	}
+}
+
+func TestCardWidthResponsiveConsistency(t *testing.T) {
+	m := Model{}
+	// Default when width is 0
+	if w := m.cardWidth(); w != 80 {
+		t.Fatalf("expected default cardWidth 80, got %d", w)
+	}
+
+	// Narrow window (< 74)
+	m.width = 60
+	if w := m.cardWidth(); w != 74 {
+		t.Fatalf("expected clamped min cardWidth 74, got %d", w)
+	}
+
+	// Standard window (84) -> 84 - 4 = 80
+	m.width = 84
+	if w := m.cardWidth(); w != 80 {
+		t.Fatalf("expected cardWidth 80 for width 84, got %d", w)
+	}
+
+	// Large window (> 104) -> clamped to 100
+	m.width = 120
+	if w := m.cardWidth(); w != 100 {
+		t.Fatalf("expected clamped max cardWidth 100, got %d", w)
+	}
+}
+
+func TestAllViewsConsistentCardWidth(t *testing.T) {
+	m := Model{width: 90}
+	expectedWidth := m.cardWidth() + 2 // card width + rounded border
+
+	vDoctor := m.renderDoctorView()
+	vQuick := m.renderQuickSend()
+	vCombo := m.renderComboInput()
+	vLogin := m.renderLoginPrompt()
+	vReg := m.renderRegisterPlatform()
+
+	for name, view := range map[string]string{
+		"doctor":   vDoctor,
+		"quick":    vQuick,
+		"combo":    vCombo,
+		"login":    vLogin,
+		"register": vReg,
+	} {
+		actualWidth := lipgloss.Width(view)
+		if actualWidth != expectedWidth {
+			t.Errorf("view %s has width %d, expected %d", name, actualWidth, expectedWidth)
+		}
+	}
+}
+
+func TestSnippetStudioAndComboStudioConsistentWidth(t *testing.T) {
+	cStudio := NewComboStudioModel(nil, nil)
+	cStudio.width = 90
+	sStudio := NewSnippetStudioModel(nil)
+	sStudio.width = 90
+
+	cView := cStudio.View()
+	sView := sStudio.View()
+
+	cWidth := lipgloss.Width(cView)
+	sWidth := lipgloss.Width(sView)
+
+	if cWidth != sWidth {
+		t.Fatalf("ComboStudio width (%d) and SnippetStudio width (%d) should be identical", cWidth, sWidth)
+	}
+}
+
+func TestStudioWindowResizeNoPanic(t *testing.T) {
+	m := Model{
+		state:       StateComboStudio,
+		comboStudio: &ComboStudioModel{},
+	}
+	// snippetStudio is nil; must not panic
+	newM, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	model := newM.(Model)
+	if model.comboStudio.width != 100 {
+		t.Fatalf("expected comboStudio width 100, got %d", model.comboStudio.width)
+	}
+
+	m2 := Model{
+		state:         StateSnippetStudio,
+		snippetStudio: &SnippetStudioModel{},
+	}
+	// comboStudio is nil; must not panic
+	newM2, _ := m2.Update(tea.WindowSizeMsg{Width: 110, Height: 50})
+	model2 := newM2.(Model)
+	if model2.snippetStudio.width != 110 {
+		t.Fatalf("expected snippetStudio width 110, got %d", model2.snippetStudio.width)
 	}
 }

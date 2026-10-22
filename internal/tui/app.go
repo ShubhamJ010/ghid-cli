@@ -307,6 +307,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.WindowSizeMsg:
 			m.width = msg.Width
 			m.height = msg.Height
+			if m.comboStudio != nil {
+				m.comboStudio.width = msg.Width
+				m.comboStudio.height = msg.Height
+			}
 		case statusTickMsg:
 			m.lastPing = time.Time(msg)
 			m.status = m.manager.GetStatus()
@@ -335,6 +339,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.WindowSizeMsg:
 			m.width = msg.Width
 			m.height = msg.Height
+			if m.snippetStudio != nil {
+				m.snippetStudio.width = msg.Width
+				m.snippetStudio.height = msg.Height
+			}
 		case statusTickMsg:
 			m.lastPing = time.Time(msg)
 			m.status = m.manager.GetStatus()
@@ -644,6 +652,8 @@ func (m Model) triggerAction(action string) (tea.Model, tea.Cmd) {
 
 	case "snippets":
 		studio := NewSnippetStudioModel(m.snippetsStore)
+		studio.width = m.width
+		studio.height = m.height
 		m.snippetStudio = &studio
 		m.state = StateSnippetStudio
 		return m, studio.Init()

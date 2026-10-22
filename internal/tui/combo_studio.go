@@ -528,16 +528,12 @@ func truncate(s string, maxVisualWidth int) string {
 	return res.String()
 }
 
+func (m ComboStudioModel) cardWidth() int {
+	return calculateCardWidth(m.width)
+}
+
 func (m ComboStudioModel) View() string {
-	cardWidth := 96
-	if m.width > 0 {
-		cardWidth = m.width - 4
-		if cardWidth < 78 {
-			cardWidth = 78
-		} else if cardWidth > 110 {
-			cardWidth = 110
-		}
-	}
+	cardWidth := m.cardWidth()
 	innerWidth := cardWidth - 6
 
 	var sb strings.Builder
@@ -798,12 +794,12 @@ func (m ComboStudioModel) renderDeleteConfirm() string {
 
 func (m ComboStudioModel) renderStudioFooter() string {
 	if m.mode == studioCreate {
-		return HelpStyle.Render("tab next field · shift+tab prev · enter next/save · ctrl+s save · esc cancel")
+		return HelpStyle.Render("[Tab / Shift+Tab]: Switch field • [Enter / Ctrl+S]: Save • [Esc]: Cancel")
 	}
 	if m.mode == studioConfirmDelete {
-		return HelpStyle.Render("y confirm · n or esc cancel")
+		return HelpStyle.Render("[y]: Confirm delete • [n / Esc]: Cancel")
 	}
-	return HelpStyle.Render("↑↓ select · enter send · f favorite (❤️ pin) · tab SEND/NEW/DEL · s send · n new · e edit · del remove · esc back")
+	return HelpStyle.Render("↑/↓: Navigate • [Enter]: Send • [n]: New • [e]: Edit • [d]: Delete • [f]: Favorite • [Tab]: Focus buttons • [Esc/q]: Back")
 }
 
 func comboTextStyle() lipgloss.Style {
