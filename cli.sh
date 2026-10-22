@@ -1,5 +1,6 @@
 #!/bin/bash
 
+SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/cli.sh"
 CMD="$1"
 shift || true
 
@@ -7,6 +8,15 @@ case "$CMD" in
     lock)
         echo "⚡ Sending Win + L lock command..."
         adb shell am broadcast -n com.poc.hiddebug/.HidCommandReceiver -a com.poc.hiddebug.ACTION_LOCK > /dev/null
+        echo "Done."
+        ;;
+    sleep)
+        echo "💤 Sending Windows Sleep sequence (Win+X -> u -> s)..."
+        "$SCRIPT_PATH" combo "win+x"
+        sleep 0.6
+        "$SCRIPT_PATH" combo "u"
+        sleep 0.4
+        "$SCRIPT_PATH" combo "s"
         echo "Done."
         ;;
     type)
@@ -44,7 +54,7 @@ case "$CMD" in
         adb shell cat /sdcard/Android/data/com.poc.hiddebug/files/status.json 2>/dev/null || echo "Status file not found"
         ;;
     *)
-        echo "Usage: $0 {lock|type <text>|combo <keys>|connect|disconnect|status}"
+        echo "Usage: $0 {lock|sleep|type <text>|combo <keys>|connect|disconnect|status}"
         exit 1
         ;;
 esac
