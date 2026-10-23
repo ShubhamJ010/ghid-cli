@@ -128,6 +128,13 @@ Typed text = printable US-ASCII. Go validator + Java `keyForChar` must stay in s
 - Commit style: `feat:`, `fix:`, `refactor:`, `docs:`, `test:`.
 - Alpha means large refactors OK. Do not leave half-migrated layers, dead code, or duplicate parsers.
 
+## Android app design & iteration rules
+
+- **Super new app & fast evolution**: Actively listen to user feedback and iterate immediately on the go.
+- **Zero backward compatibility constraints for Android UI**: Do not preserve deprecated UI elements or hold onto legacy screens when the user asks to remove or change them (e.g. gateway terminal log completely removed from dashboard).
+- **Material 3 Expressive shapes & styling**: Use official Google M3 Expressive shape catalog (4-petal clovers, scallops, soft diamonds, arches, soft triangles, hearts, pentagons, concave squircles) and vibrant high-contrast cyberpunk dark palettes.
+- **Always verify on real connected device**: When APK is deployed to ADB device, take screenshots, review visual alignment, and polish touch targets directly.
+
 ## Gotchas
 
 - Flags stripped globally (`--json`, `-s`). Text containing those tokens can break.
