@@ -304,12 +304,12 @@ graph TD
   - Secure toggle: when enabled, persists into `AndroidKeystoreVault` and blanks out plaintext in JSON export.
 
 #### Screen 5: Virtual Mouse / Trackpad (`TrackpadScreen.kt`)
-- **Touch Surface:** Responsive canvas reporting delta touch movements `(dX, dY)` mapped directly to HID Report ID 2 mouse pointer packets.
-- **Sensitivity Slider:** Adjustable multiplier for pointer acceleration.
-- **Mouse Button Deck:**
-  - Large **Left Click** and **Right Click** buttons with distinct tactile haptics.
-  - Center **Middle Click / Scroll Toggle**.
-- **Vertical Scroll Strip:** Dedicated right-edge touch area for mouse wheel scrolling up/down.
+- **Pointer Surface:** Full-bleed pad with dot-grid texture, corner brackets, and live touch glow. Finger deltas map directly to HID Report ID 2 relative motion at a fixed **1.5×** sensitivity, configured in `TrackpadConfig` (no in-app slider, no on-screen readout).
+- **Native click model:** A tap emits one real left click; two quick taps emit two real clicks, which Windows and macOS both read as a native double click. There is no synthetic "2x click" button.
+- **Mouse Button Deck:** Compact **Left** and **Right** keys with icon glyphs, spring press feedback, and haptics.
+- **Scroll Rail:** Right-edge rail with a horizontal **SCROLL** label converts drag distance into discrete wheel notches, with a moving thumb and per-notch haptics.
+- **Scroll step keys:** Detached Material 3 Expressive **Arch** caps (`MaterialShapes.ShapeArch`) sit above and below the rail, mirrored so each dome points away from it. One tap sends a fixed wheel step (`scrollStepNotches`), matching the CLI's `scroll-up` / `scroll-down` actions, with a squash-and-overshoot press and a matching arrow nudge.
+- **Link state:** The pad reads **Drag to move** when linked and **Not connected** otherwise; the click deck disables itself when no target is connected.
 
 ---
 

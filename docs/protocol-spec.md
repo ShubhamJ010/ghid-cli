@@ -208,7 +208,7 @@ Executes a single keyboard chord.
 Transmits a pointer gesture using Report ID 2.
 - Extras: `--es action "<action_token>"`
 - Supported actions: `click-left`, `click-right`, `click-middle`, `double-click`, `scroll-up`, `scroll-down`.
-- Behavior: Sends 4-byte report with button bitmask or wheel value, sleeps 45 ms, sends release report. For `double-click`, repeats after an 80 ms pause.
+- Behavior: Sends a 4-byte button report, holds it for 48 ms, then sends a release report. `double-click` is two complete press/release cycles separated by a 90 ms gap, so Windows and macOS both synthesize a native double click instead of receiving a vendor-specific gesture. Relative motion is coalesced and split into ≤127-count reports, so fast drags are never clipped by the 8-bit HID field.
 
 #### `raw`
 Transmits an explicit 8-byte hexadecimal report.
