@@ -56,7 +56,7 @@ public class HidService extends Service {
         (byte) 0x81, (byte) 0x02,        //     Input (Data, Variable, Absolute)
         (byte) 0x95, (byte) 0x01,        //     Report Count (1)
         (byte) 0x75, (byte) 0x05,        //     Report Size (5)
-        (byte) 0x81, (byte) 0x01,        //     Input (Constant) - padding
+        (byte) 0x81, (byte) 0x03,        //     Input (Constant, Variable, Absolute) - padding
         (byte) 0x05, (byte) 0x01,        //     Usage Page (Generic Desktop)
         (byte) 0x09, (byte) 0x30,        //     Usage (X)
         (byte) 0x09, (byte) 0x31,        //     Usage (Y)
@@ -238,7 +238,12 @@ public class HidService extends Service {
         public void onGetReport(BluetoothDevice device, byte type, byte id, int bufferSize) {
             log("onGetReport: type=" + type + ", id=" + id);
             if (mHidDevice != null) {
-                mHidDevice.replyReport(device, type, id, new byte[8]);
+                if (type == BluetoothHidDevice.REPORT_TYPE_INPUT) {
+                    int size = (id == 2) ? 4 : 8;
+                    mHidDevice.replyReport(device, type, id, new byte[size]);
+                } else {
+                    mHidDevice.reportError(device, BluetoothHidDevice.ERROR_RSP_UNSUPPORTED_REQ);
+                }
             }
         }
 
@@ -246,7 +251,7 @@ public class HidService extends Service {
         public void onSetReport(BluetoothDevice device, byte type, byte id, byte[] data) {
             log("onSetReport: type=" + type + ", id=" + id);
             if (mHidDevice != null) {
-                mHidDevice.replyReport(device, type, id, new byte[0]);
+                mHidDevice.reportError(device, BluetoothHidDevice.ERROR_RSP_SUCCESS);
             }
         }
     };
