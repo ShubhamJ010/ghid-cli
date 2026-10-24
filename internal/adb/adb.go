@@ -269,6 +269,88 @@ func (m *Manager) GetDeviceModel() string {
 	return strings.TrimSpace(out)
 }
 
+// GetDeviceName retrieves the dynamic, user-facing Bluetooth or device name of the connected phone.
+// It queries Bluetooth/device name settings, marketing name, and model properties in order of preference.
+func (m *Manager) GetDeviceName() string {
+	cmd := `for k in "secure bluetooth_name" "global bluetooth_name" "global device_name" "system bluetooth_name"; do v=$(settings get $k 2>/dev/null); if [ -n "$v" ] && [ "$v" != "null" ]; then echo "$v"; exit 0; fi; done; m=$(getprop ro.product.marketname); if [ -n "$m" ]; then echo "$m"; exit 0; fi; getprop ro.product.model`
+	out, err := m.Run("shell", cmd)
+	if err == nil {
+		name := strings.TrimSpace(out)
+		if name != "" && name != "null" {
+			return name
+		}
+	}
+
+	model := m.GetDeviceModel()
+	if model != "" && model != "Android Device" {
+		return model
+	}
+
+	return "Android Device"
+}
+
+type BondedDevice struct {
+	Address string `json:"address"`
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+}
+
+var (
+	macRegex  = regexp.MustCompile(`(?i)\b([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})\b`)
+	typeRegex = regexp.MustCompile(`\[\s*([^\]]+)\s*\]`)
+)
+
+// GetBondedBluetoothDevices parses bonded/paired devices from dumpsys bluetooth_manager.
+func (m *Manager) GetBondedBluetoothDevices() ([]BondedDevice, error) {
+	out, err := m.Run("shell", "dumpsys", "bluetooth_manager")
+	if err != nil {
+		return nil, err
+	}
+	return parseBondedDevices(out), nil
+}
+
+func parseBondedDevices(out string) []BondedDevice {
+	var devices []BondedDevice
+	lines := strings.Split(out, "\n")
+	inBonded := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "Bonded devices:") {
+			inBonded = true
+			continue
+		}
+		if inBonded {
+			if trimmed == "" || strings.HasPrefix(trimmed, "AdapterState:") || strings.HasPrefix(trimmed, "mSnoopLogSetting") || strings.HasPrefix(trimmed, "Bond Events:") {
+				break
+			}
+			macMatch := macRegex.FindString(trimmed)
+			if macMatch == "" {
+				continue
+			}
+			devType := "BR/EDR"
+			if tMatch := typeRegex.FindStringSubmatch(trimmed); len(tMatch) > 1 {
+				devType = strings.TrimSpace(tMatch[1])
+			}
+			name := ""
+			if idx := strings.Index(trimmed, "]"); idx != -1 && idx+1 < len(trimmed) {
+				name = strings.TrimSpace(trimmed[idx+1:])
+			} else {
+				name = strings.TrimSpace(strings.Replace(trimmed, macMatch, "", 1))
+			}
+			if name == "" {
+				name = "Bluetooth Device"
+			}
+			devices = append(devices, BondedDevice{
+				Address: strings.ToUpper(macMatch),
+				Name:    name,
+				Type:    devType,
+			})
+		}
+	}
+	return devices
+}
+
 func (m *Manager) StartGateway() error {
 	_, _ = m.Run("shell", "dumpsys", "deviceidle", "whitelist", "+"+PackageName)
 	_, err := m.Run("shell", "am", "start-foreground-service", "-n", ServiceName)

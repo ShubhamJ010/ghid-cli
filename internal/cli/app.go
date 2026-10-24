@@ -292,6 +292,7 @@ func (a *App) handleDoctor(cfg config.Config, serial string, jsonOutput bool) in
 			"adb_available":       report.AdbAvailable,
 			"device_connected":    report.DeviceConnected,
 			"device_model":        report.DeviceModel,
+			"device_name":         report.DeviceName,
 			"device_serial":       report.DeviceSerial,
 			"apk_installed":       report.ApkInstalled,
 			"bluetooth_on":        report.BluetoothOn,
@@ -1229,6 +1230,51 @@ func (a *App) handleDevices(cfg config.Config, serial string, args []string, jso
 		}
 		return 0
 
+	case "scan", "paired":
+		gw, err := a.GatewayFactory(serial)
+		if err != nil {
+			if jsonOutput {
+				res, _ := json.Marshal(map[string]interface{}{"error": err.Error()})
+				fmt.Fprintln(a.Stdout, string(res))
+			} else {
+				fmt.Fprintf(a.Stderr, "Error: %v\n", err)
+			}
+			return 1
+		}
+		bonded, err := gw.GetBondedDevices()
+		if err != nil {
+			if jsonOutput {
+				res, _ := json.Marshal(map[string]interface{}{"error": err.Error()})
+				fmt.Fprintln(a.Stdout, string(res))
+			} else {
+				fmt.Fprintf(a.Stderr, "Error: %v\n", err)
+			}
+			return 1
+		}
+		if jsonOutput {
+			data, _ := json.MarshalIndent(bonded, "", "  ")
+			fmt.Fprintln(a.Stdout, string(data))
+		} else {
+			fmt.Fprintln(a.Stdout, "\n=== Paired Bluetooth Devices on Phone ===")
+			if len(bonded) == 0 {
+				fmt.Fprintln(a.Stdout, "  No bonded devices found on phone.")
+			}
+			for _, d := range bonded {
+				osGuess := "windows"
+				nameLower := strings.ToLower(d.Name)
+				if strings.Contains(nameLower, "mac") || strings.Contains(nameLower, "apple") || strings.Contains(nameLower, "air") {
+					osGuess = "macos"
+				}
+				osIcon := "🪟"
+				if osGuess == "macos" {
+					osIcon = "🍏"
+				}
+				fmt.Fprintf(a.Stdout, "  %s %-10s %-25s %-20s [%s]\n", osIcon, fmt.Sprintf("[%s]", osGuess), d.Name, d.Address, d.Type)
+			}
+			fmt.Fprintln(a.Stdout)
+		}
+		return 0
+
 	case "add":
 		fs := flag.NewFlagSet("devices add", flag.ContinueOnError)
 		name := fs.String("name", "", "Device friendly name")
@@ -1326,7 +1372,7 @@ func (a *App) handleDevices(cfg config.Config, serial string, args []string, jso
 		}
 
 	default:
-		fmt.Fprintf(a.Stderr, "Unknown devices subcommand '%s'. Usage: ghid devices [list|add|select|delete]\n", subcmd)
+		fmt.Fprintf(a.Stderr, "Unknown devices subcommand '%s'. Usage: ghid devices [list|scan|add|select|delete]\n", subcmd)
 		return 1
 	}
 }

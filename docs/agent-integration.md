@@ -281,6 +281,27 @@ ghid snippets delete api_token --json
 
 ---
 
+### `ghid devices scan --json`
+Queries the phone directly over ADB (`dumpsys bluetooth_manager`) for bonded Bluetooth devices. Enables zero-touch registration without needing to manually transcribe MAC addresses.
+
+#### Response
+```json
+[
+  {
+    "address": "A0:9A:8E:57:36:DA",
+    "name": "Shubham’s MacBook Air",
+    "type": "DUAL"
+  },
+  {
+    "address": "38:FC:98:E8:E3:87",
+    "name": "LP-TZD-0X114650",
+    "type": "BR/EDR"
+  }
+]
+```
+
+---
+
 ### `ghid devices list --json`
 Lists all configured target hosts.
 

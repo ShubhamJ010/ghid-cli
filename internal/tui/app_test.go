@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ghost-hid/ghid/internal/adb"
+	"github.com/ghost-hid/ghid/internal/config"
 )
 
 func TestAppendComboKey(t *testing.T) {
@@ -334,5 +335,152 @@ func TestStudioWindowResizeNoPanic(t *testing.T) {
 	model2 := newM2.(Model)
 	if model2.snippetStudio.width != 110 {
 		t.Fatalf("expected snippetStudio width 110, got %d", model2.snippetStudio.width)
+	}
+}
+
+func TestPhoneDisplayName(t *testing.T) {
+	// 1. cfg.PhoneName override
+	m1 := Model{
+		cfg:         config.Config{PhoneName: "Custom Phone Name"},
+		deviceModel: "Pixel 7",
+		device:      &adb.Device{Model: "KB2001"},
+	}
+	if got := m1.phoneDisplayName(); got != "Custom Phone Name" {
+		t.Errorf("expected cfg.PhoneName override, got %q", got)
+	}
+
+	// 2. deviceModel takes precedence over raw hardware model
+	m2 := Model{
+		deviceModel: "SJ's OnePlus 8T",
+		device:      &adb.Device{Model: "KB2001"},
+	}
+	if got := m2.phoneDisplayName(); got != "SJ's OnePlus 8T" {
+		t.Errorf("expected deviceModel, got %q", got)
+	}
+
+	// 3. device.Model used when deviceModel is empty or generic
+	m3 := Model{
+		deviceModel: "Android Device",
+		device:      &adb.Device{Model: "KB2001"},
+	}
+	if got := m3.phoneDisplayName(); got != "KB2001" {
+		t.Errorf("expected device.Model fallback, got %q", got)
+	}
+
+	// 4. Default fallback
+	m4 := Model{}
+	if got := m4.phoneDisplayName(); got != "GhostHID Phone" {
+		t.Errorf("expected default GhostHID Phone, got %q", got)
+	}
+}
+
+func TestGuideViewDynamicPhoneName(t *testing.T) {
+	m := Model{
+		deviceModel: "SJ's OnePlus 8T",
+		regPlatform: "macos",
+		width:       80,
+	}
+	guideMac := m.renderRegisterGuide()
+	if !strings.Contains(guideMac, "SJ's OnePlus 8T") {
+		t.Errorf("macOS guide missing dynamic phone name: %s", guideMac)
+	}
+
+	m.regPlatform = "windows"
+	guideWin := m.renderRegisterGuide()
+	if !strings.Contains(guideWin, "SJ's OnePlus 8T") {
+		t.Errorf("windows guide missing dynamic phone name: %s", guideWin)
+	}
+}
+
+func TestDeviceRegisterPickerView(t *testing.T) {
+	m := Model{
+		state: StateDeviceRegisterPicker,
+		width: 80,
+		pickerDevices: []adb.BondedDevice{
+			{Address: "A0:9A:8E:57:36:DA", Name: "Shubham’s MacBook Air", Type: "DUAL"},
+			{Address: "38:FC:98:E8:E3:87", Name: "LP-TZD-0X114650", Type: "BR/EDR"},
+		},
+		pickerIndex: 0,
+	}
+
+	view := m.renderRegisterPicker()
+	if !strings.Contains(view, "Shubham’s MacBook Air") {
+		t.Errorf("expected MacBook Air in picker view, got: %s", view)
+	}
+	if !strings.Contains(view, "A0:9A:8E:57:36:DA") {
+		t.Errorf("expected MAC address in picker view, got: %s", view)
+	}
+	if !strings.Contains(view, "Manual MAC address entry...") {
+		t.Errorf("expected manual option in picker view, got: %s", view)
+	}
+}
+
+func TestDeviceRegisterPickerNavigation(t *testing.T) {
+	devName := textinput.New()
+	devAddr := textinput.New()
+	m := Model{
+		devNameInput: devName,
+		devAddrInput: devAddr,
+		state: StateDeviceRegisterPicker,
+		width: 80,
+		pickerDevices: []adb.BondedDevice{
+			{Address: "A0:9A:8E:57:36:DA", Name: "Shubham’s MacBook Air", Type: "DUAL"},
+			{Address: "38:FC:98:E8:E3:87", Name: "LP-TZD-0X114650", Type: "BR/EDR"},
+		},
+		pickerIndex: 0,
+		regPlatform: "macos",
+	}
+
+	// Down arrow moves to item 1
+	mUpdated, _ := m.updateRegisterPicker(tea.KeyMsg{Type: tea.KeyDown})
+	m = mUpdated.(Model)
+	if m.pickerIndex != 1 {
+		t.Errorf("expected pickerIndex=1, got %d", m.pickerIndex)
+	}
+
+	// Down arrow moves to manual option (index 2)
+	mUpdated, _ = m.updateRegisterPicker(tea.KeyMsg{Type: tea.KeyDown})
+	m = mUpdated.(Model)
+	if m.pickerIndex != 2 {
+		t.Errorf("expected pickerIndex=2, got %d", m.pickerIndex)
+	}
+
+	// Enter on manual option opens input form
+	mUpdated, _ = m.updateRegisterPicker(tea.KeyMsg{Type: tea.KeyEnter})
+	m = mUpdated.(Model)
+	if m.state != StateDeviceRegisterInput {
+		t.Errorf("expected StateDeviceRegisterInput, got %v", m.state)
+	}
+
+	// Esc from input goes back to picker
+	mUpdated, _ = m.updateRegisterInput(tea.KeyMsg{Type: tea.KeyEsc})
+	m = mUpdated.(Model)
+	if m.state != StateDeviceRegisterPicker {
+		t.Errorf("expected StateDeviceRegisterPicker after Esc from input, got %v", m.state)
+	}
+
+	// Select first device and press Enter -> registers and connects
+	m.pickerIndex = 0
+	mUpdated, _ = m.updateRegisterPicker(tea.KeyMsg{Type: tea.KeyEnter})
+	m = mUpdated.(Model)
+	if m.state != StateDevicesList {
+		t.Errorf("expected StateDevicesList after selecting device, got %v", m.state)
+	}
+	if len(m.cfg.Devices) != 1 || m.cfg.Devices[0].Address != "A0:9A:8E:57:36:DA" {
+		t.Errorf("expected registered device in config, got %+v", m.cfg.Devices)
+	}
+}
+
+func TestTelemetryCardEmptyWhenNoDevice(t *testing.T) {
+	m := Model{
+		width: 80,
+		cfg:   config.DefaultConfig(),
+	}
+	card := m.renderTelemetryCard()
+	if strings.Contains(card, "LP-TZD") || strings.Contains(card, "38:FC:98:E8:E3:87") {
+		t.Fatalf("telemetry card should NOT display dummy device when no devices registered:\n%s", card)
+	}
+	if !strings.Contains(card, "None (press [d]") {
+		t.Fatalf("telemetry card should prompt to pair/select when empty:\n%s", card)
 	}
 }

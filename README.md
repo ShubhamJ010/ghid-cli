@@ -267,19 +267,27 @@ Saved combos are stored in `~/.config/ghid/combos.json`.
 Manage multiple target computers (for example, switching between a work laptop and a home Mac):
 
 ```bash
-# List all registered devices
+# Scan/list bonded Bluetooth devices directly from the phone (zero manual MAC typing)
+ghid devices scan
+ghid devices scan --json
+
+# List all registered devices in local config
+ghid devices list
 ghid devices list --json
 
 # Add a target device and set it as active
 ghid devices add --name "MacBook Pro M3" --addr "F8:FF:C2:11:22:33" --os macos --select
 
-# Switch connection to a different device by ID or address
+# Switch connection to a different device by ID, address, or name
 ghid devices select "dev-1"
-ghid devices select "38:FC:98:E8:E3:87"
+ghid devices select "F8:FF:C2:11:22:33"
+ghid devices select "MacBook Pro M3"
 
 # Unregister a target device
 ghid devices delete "F8:FF:C2:11:22:33" -f
 ```
+
+In the interactive TUI (`ghid`), pressing `[d]` -> `[a]` lets you select your OS (Mac/Windows), displays a step-by-step pairing checklist with phone Bluetooth name detection, and enters an interactive device picker loaded live from the phone. Selecting a device auto-registers and connects immediately without manual MAC address entry.
 
 Device profiles are stored in `~/.config/ghid/config.json`.
 

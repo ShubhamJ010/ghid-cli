@@ -120,6 +120,9 @@ test-serial     device model:Pixel7 transport_id:1
 	if rep["device_connected"] != true || rep["apk_installed"] != true {
 		t.Errorf("doctor report mismatch: %+v", rep)
 	}
+	if rep["device_name"] == nil || rep["device_name"] == "" {
+		t.Errorf("expected non-empty device_name in doctor report, got %+v", rep)
+	}
 }
 
 func TestAppCredsRemovedAndSnippetsUsed(t *testing.T) {
@@ -153,18 +156,32 @@ func TestAppCredsRemovedAndSnippetsUsed(t *testing.T) {
 }
 
 func TestAppDevices(t *testing.T) {
-	app, _, _, store, stdout, _ := setupTestApp(t)
+	app, fakeRunner, _, store, stdout, stderr := setupTestApp(t)
+	fakeRunner.Register("devices -l", `List of devices attached
+988e1039484b39414e     device usb:337641472X product:OnePlus7Pro model:GM1917 device:OnePlus7Pro transport_id:1
+`, nil)
+	fakeRunner.Register("dumpsys bluetooth_manager", `
+  Bonded devices:
+    A0:9A:8E:57:36:DA [ DUAL ] Shubham’s MacBook Air
+    38:FC:98:E8:E3:87 [BR/EDR] LP-TZD-0X114650
+`, nil)
 
-	// Add new device
+	// Add first device
 	code := app.Run([]string{"devices", "add", "--name", "TestPC", "--addr", "11:22:33:44:55:66", "--os", "windows", "--select"})
 	if code != 0 {
 		t.Fatalf("devices add failed with code %d", code)
 	}
 
+	// Add second device
+	code = app.Run([]string{"devices", "add", "--name", "MacBook", "--addr", "AA:BB:CC:DD:EE:FF", "--os", "macos", "--select"})
+	if code != 0 {
+		t.Fatalf("devices add MacBook failed with code %d", code)
+	}
+
 	cfg := store.Load()
 	sel := cfg.GetSelectedDevice()
-	if sel == nil || sel.Name != "TestPC" || sel.Address != "11:22:33:44:55:66" {
-		t.Errorf("selected device mismatch after add: %+v", sel)
+	if sel == nil || sel.Name != "MacBook" || sel.Address != "AA:BB:CC:DD:EE:FF" {
+		t.Errorf("selected device mismatch after second add: %+v", sel)
 	}
 
 	// List devices
@@ -178,20 +195,40 @@ func TestAppDevices(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &devices); err != nil {
 		t.Fatalf("failed to parse devices list json: %v", err)
 	}
-	if len(devices) < 2 {
-		t.Errorf("expected at least 2 devices, got %d", len(devices))
+	if len(devices) != 2 {
+		t.Errorf("expected 2 devices, got %d", len(devices))
 	}
 
 	// Select previous device
 	stdout.Reset()
-	code = app.Run([]string{"devices", "select", "LP-TZD-0X114650"})
+	code = app.Run([]string{"devices", "select", "TestPC"})
 	if code != 0 {
 		t.Fatalf("devices select failed with code %d", code)
 	}
 	cfg = store.Load()
 	sel = cfg.GetSelectedDevice()
-	if sel == nil || sel.Name != "LP-TZD-0X114650" {
+	if sel == nil || sel.Name != "TestPC" {
 		t.Errorf("selected device mismatch after select: %+v", sel)
+	}
+
+	// Devices scan
+	stdout.Reset()
+	code = app.Run([]string{"devices", "scan", "--json"})
+	if code != 0 {
+		t.Fatalf("devices scan failed with code %d: %s", code, stderr.String())
+	}
+	var scanned []adb.BondedDevice
+	if err := json.Unmarshal(stdout.Bytes(), &scanned); err != nil {
+		t.Fatalf("failed to parse devices scan json: %v", err)
+	}
+
+	stdout.Reset()
+	code = app.Run([]string{"devices", "scan"})
+	if code != 0 {
+		t.Fatalf("devices scan text failed with code %d", code)
+	}
+	if !strings.Contains(stdout.String(), "Paired Bluetooth Devices on Phone") {
+		t.Errorf("expected header in scan output: %s", stdout.String())
 	}
 }
 

@@ -246,3 +246,65 @@ func TestSendComboWithResolver(t *testing.T) {
 		t.Errorf("unexpected typed values: %v", typed)
 	}
 }
+
+func TestGetDeviceName(t *testing.T) {
+	cmd := `for k in "secure bluetooth_name" "global bluetooth_name" "global device_name" "system bluetooth_name"; do v=$(settings get $k 2>/dev/null); if [ -n "$v" ] && [ "$v" != "null" ]; then echo "$v"; exit 0; fi; done; m=$(getprop ro.product.marketname); if [ -n "$m" ]; then echo "$m"; exit 0; fi; getprop ro.product.model`
+
+	// Case 1: Dynamic Bluetooth / device name found
+	fake1 := NewFakeRunner()
+	fake1.Register("shell "+cmd, "SJ's OnePlus 8T\n", nil)
+	mgr1 := NewManagerWithRunner(fake1, "test-serial", "")
+	if name := mgr1.GetDeviceName(); name != "SJ's OnePlus 8T" {
+		t.Errorf("expected dynamic name, got %q", name)
+	}
+
+	// Case 2: Settings return empty/null, fall back to model
+	fake2 := NewFakeRunner()
+	fake2.Register("shell "+cmd, "", nil)
+	fake2.Register("shell getprop ro.product.marketname", "", nil)
+	fake2.Register("shell getprop ro.product.model", "KB2001\n", nil)
+	mgr2 := NewManagerWithRunner(fake2, "test-serial", "")
+	if name := mgr2.GetDeviceName(); name != "KB2001" {
+		t.Errorf("expected fallback to model KB2001, got %q", name)
+	}
+
+	// Case 3: Completely empty, fall back to Android Device
+	fake3 := NewFakeRunner()
+	mgr3 := NewManagerWithRunner(fake3, "test-serial", "")
+	if name := mgr3.GetDeviceName(); name != "Android Device" {
+		t.Errorf("expected default Android Device, got %q", name)
+	}
+}
+
+func TestGetBondedBluetoothDevices(t *testing.T) {
+	sampleOutput := `
+  Discovering: false
+  DiscoveryEndMs: 1792846141507
+  Bonded devices:
+    F8:55:CD:5C:2E:C4 [BR/EDR] MAHINDRA4JK231024
+    84:0F:2A:4B:6F:ED [ DUAL ] OnePlus Buds Z2
+    38:FC:98:E8:E3:87 [BR/EDR] LP-TZD-0X114650
+    A0:9A:8E:57:36:DA [ DUAL ] Shubham’s MacBook Air
+mSnoopLogSettingAtEnable = empty
+
+AdapterState:
+`
+	fake := NewFakeRunner()
+	fake.Register("shell dumpsys bluetooth_manager", sampleOutput, nil)
+	mgr := NewManagerWithRunner(fake, "test-serial", "")
+
+	devices, err := mgr.GetBondedBluetoothDevices()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(devices) != 4 {
+		t.Fatalf("expected 4 devices, got %d", len(devices))
+	}
+
+	if devices[2].Address != "38:FC:98:E8:E3:87" || devices[2].Name != "LP-TZD-0X114650" || devices[2].Type != "BR/EDR" {
+		t.Errorf("device 2 mismatch: %+v", devices[2])
+	}
+	if devices[3].Address != "A0:9A:8E:57:36:DA" || devices[3].Name != "Shubham’s MacBook Air" || devices[3].Type != "DUAL" {
+		t.Errorf("device 3 mismatch: %+v", devices[3])
+	}
+}

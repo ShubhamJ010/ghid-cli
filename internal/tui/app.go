@@ -39,6 +39,7 @@ const (
 	StateDevicesList
 	StateDeviceRegisterPlatform
 	StateDeviceRegisterGuide
+	StateDeviceRegisterPicker
 	StateDeviceRegisterInput
 	StateDeviceDeleteConfirm
 	StateComboStudio
@@ -93,6 +94,9 @@ type Model struct {
 	devAddrInput   textinput.Model
 	regActiveIn    int // 0: name, 1: addr
 	deviceToDelete *config.TargetDevice
+	pickerDevices  []adb.BondedDevice
+	pickerIndex    int
+	pickerLoading  bool
 	comboStudio    *ComboStudioModel
 	snippetStudio  *SnippetStudioModel
 	pendingCombo   *combos.Combo
@@ -171,12 +175,15 @@ func NewModelWithStores(mgr *adb.Manager, cfg config.Config, cStore *combos.Stor
 	dai.CharLimit = 17
 	dai.Width = 36
 
+	devModel := cfg.PhoneName
+
 	m := Model{
 		manager:       mgr,
 		cfg:           cfg,
 		combosStore:   cStore,
 		snippetsStore: sStore,
 		state:         StateInit,
+		deviceModel:   devModel,
 		spinner:       s,
 		progress:      p,
 		textInput:     ti,
@@ -248,6 +255,30 @@ func (m *Model) refreshMenuItems() {
 	m.menuItems = items
 }
 
+// phoneDisplayName returns the dynamic user-friendly device name for the connected phone.
+// It prioritizes explicit config override, dynamic Bluetooth/device name, hardware model, or fallback.
+func (m Model) phoneDisplayName() string {
+	if m.cfg.PhoneName != "" {
+		return m.cfg.PhoneName
+	}
+	if m.deviceModel != "" && m.deviceModel != "Android Device" {
+		return m.deviceModel
+	}
+	if m.device != nil && m.device.Model != "" {
+		return m.device.Model
+	}
+	if m.manager != nil && m.manager.Serial != "" {
+		name := m.manager.GetDeviceName()
+		if name != "" && name != "Android Device" {
+			return name
+		}
+	}
+	if m.deviceModel != "" {
+		return m.deviceModel
+	}
+	return "GhostHID Phone"
+}
+
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		m.spinner.Tick,
@@ -275,13 +306,35 @@ func (m Model) initCheckCmd() tea.Cmd {
 
 		time.Sleep(800 * time.Millisecond)
 		st := m.manager.GetStatus()
-		return initSuccessMsg{dev: dev, status: st}
+		devName := ""
+		if m.cfg.PhoneName != "" {
+			devName = m.cfg.PhoneName
+		} else if m.manager != nil {
+			devName = m.manager.GetDeviceName()
+		}
+		return initSuccessMsg{dev: dev, status: st, devName: devName}
 	}
 }
 
 type initSuccessMsg struct {
-	dev    *adb.Device
-	status adb.GatewayStatus
+	dev     *adb.Device
+	status  adb.GatewayStatus
+	devName string
+}
+
+type bondedDevicesMsg struct {
+	devices []adb.BondedDevice
+	err     error
+}
+
+func fetchBondedDevicesCmd(mgr *adb.Manager) tea.Cmd {
+	return func() tea.Msg {
+		if mgr == nil {
+			return bondedDevicesMsg{err: errors.New("adb manager not initialized")}
+		}
+		devices, err := mgr.GetBondedBluetoothDevices()
+		return bondedDevicesMsg{devices: devices, err: err}
+	}
 }
 
 func (m Model) statusTick() tea.Cmd {
@@ -379,7 +432,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case initSuccessMsg:
 		m.device = msg.dev
-		m.deviceModel = m.manager.GetDeviceModel()
+		if msg.devName != "" {
+			m.deviceModel = msg.devName
+		} else if m.cfg.PhoneName != "" {
+			m.deviceModel = m.cfg.PhoneName
+		} else {
+			m.deviceModel = m.manager.GetDeviceName()
+		}
 		m.status = msg.status
 		m.state = StateMenu
 		cmds = append(cmds, m.statusTick())
@@ -392,6 +451,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.quitting {
 			cmds = append(cmds, m.statusTick())
 		}
+
+	case bondedDevicesMsg:
+		m.pickerLoading = false
+		if msg.err == nil {
+			m.pickerDevices = msg.devices
+		} else {
+			m.notice = "Failed to query Bluetooth devices: " + msg.err.Error()
+			m.isErrorNotice = true
+		}
+		return m, nil
 
 	case actionDoneMsg:
 		m.notice = msg.notice
@@ -514,8 +583,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.state = StateDeviceRegisterPlatform
 				return m, nil
 			}
-			if m.state == StateDeviceRegisterInput {
+			if m.state == StateDeviceRegisterPicker {
 				m.state = StateDeviceRegisterGuide
+				return m, nil
+			}
+			if m.state == StateDeviceRegisterInput {
+				m.state = StateDeviceRegisterPicker
 				return m, nil
 			}
 			if m.state == StateComboInput {
@@ -548,6 +621,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateRegisterPlatform(msg)
 		case StateDeviceRegisterGuide:
 			return m.updateRegisterGuide(msg)
+		case StateDeviceRegisterPicker:
+			return m.updateRegisterPicker(msg)
 		case StateDeviceRegisterInput:
 			return m.updateRegisterInput(msg)
 		case StateDeviceDeleteConfirm:
@@ -935,6 +1010,35 @@ func (m Model) updateRegisterPlatform(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) updateRegisterGuide(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "enter", " ":
+		m.state = StateDeviceRegisterPicker
+		m.pickerLoading = true
+		m.pickerIndex = 0
+		return m, fetchBondedDevicesCmd(m.manager)
+	case "esc":
+		m.state = StateDeviceRegisterPlatform
+	}
+	return m, nil
+}
+
+func (m Model) updateRegisterPicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	totalItems := len(m.pickerDevices) + 1 // +1 for manual option
+	switch msg.String() {
+	case "up", "k":
+		if m.pickerIndex > 0 {
+			m.pickerIndex--
+		} else {
+			m.pickerIndex = totalItems - 1
+		}
+	case "down", "j":
+		if m.pickerIndex < totalItems-1 {
+			m.pickerIndex++
+		} else {
+			m.pickerIndex = 0
+		}
+	case "r":
+		m.pickerLoading = true
+		return m, fetchBondedDevicesCmd(m.manager)
+	case "m":
 		m.state = StateDeviceRegisterInput
 		m.regActiveIn = 0
 		m.devNameInput.SetValue("")
@@ -942,8 +1046,55 @@ func (m Model) updateRegisterGuide(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.devNameInput.Focus()
 		m.devAddrInput.Blur()
 		return m, textinput.Blink
+	case "e":
+		if m.pickerIndex < len(m.pickerDevices) {
+			dev := m.pickerDevices[m.pickerIndex]
+			m.state = StateDeviceRegisterInput
+			m.regActiveIn = 0
+			m.devNameInput.SetValue(dev.Name)
+			m.devAddrInput.SetValue(dev.Address)
+			m.devNameInput.Focus()
+			m.devAddrInput.Blur()
+			return m, textinput.Blink
+		}
+	case "enter", "s":
+		if m.pickerIndex == len(m.pickerDevices) {
+			// Manual entry option selected
+			m.state = StateDeviceRegisterInput
+			m.regActiveIn = 0
+			m.devNameInput.SetValue("")
+			m.devAddrInput.SetValue("")
+			m.devNameInput.Focus()
+			m.devAddrInput.Blur()
+			return m, textinput.Blink
+		}
+		dev := m.pickerDevices[m.pickerIndex]
+		platform := m.regPlatform
+		nameLower := strings.ToLower(dev.Name)
+		if strings.Contains(nameLower, "mac") || strings.Contains(nameLower, "apple") || strings.Contains(nameLower, "air") {
+			platform = "macos"
+		} else if strings.Contains(nameLower, "windows") || strings.Contains(nameLower, "thinkpad") || strings.Contains(nameLower, "lp-") || strings.Contains(nameLower, "pc") {
+			platform = "windows"
+		}
+
+		newDev := m.cfg.AddDevice(dev.Name, dev.Address, platform, true)
+		_ = config.SaveConfig(m.cfg)
+		m.state = StateDevicesList
+		m.devicesIndex = len(m.cfg.Devices) - 1
+
+		return m, func() tea.Msg {
+			if m.manager != nil {
+				_ = m.manager.StartGateway()
+				time.Sleep(300 * time.Millisecond)
+				_ = m.manager.ConnectTarget(dev.Address)
+			}
+			return actionDoneMsg{
+				notice:  fmt.Sprintf("✔ Registered & connecting to '%s' (%s) [%s]", newDev.Name, newDev.Platform, newDev.Address),
+				isError: false,
+			}
+		}
 	case "esc":
-		m.state = StateDeviceRegisterPlatform
+		m.state = StateDeviceRegisterGuide
 	}
 	return m, nil
 }
@@ -1003,7 +1154,7 @@ func (m Model) updateRegisterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case "esc":
-		m.state = StateDeviceRegisterGuide
+		m.state = StateDeviceRegisterPicker
 		return m, nil
 	}
 
@@ -1072,7 +1223,7 @@ func (m *Model) runDoctorChecks() {
 
 	m.doctorChecks = []DoctorCheck{
 		{Title: "ADB Executable", Pass: m.manager.AdbPath != "", Info: m.manager.AdbPath},
-		{Title: "Android Device", Pass: m.device != nil, Info: fmt.Sprintf("%s [%s]", m.deviceModel, m.manager.Serial)},
+		{Title: "Android Device", Pass: m.device != nil, Info: fmt.Sprintf("%s [%s]", m.phoneDisplayName(), m.manager.Serial)},
 		{Title: "GhostHID APK", Pass: m.manager.IsPackageInstalled(), Info: adb.PackageName},
 		{Title: "Phone Bluetooth Radio", Pass: m.manager.GetBluetoothState(), Info: "Enabled"},
 		{Title: "Bluetooth HID (SDP)", Pass: m.status.Registered, Info: "Profile Active"},

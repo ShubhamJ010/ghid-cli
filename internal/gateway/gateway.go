@@ -33,6 +33,7 @@ type DoctorReport struct {
 	AdbAvailable      bool                 `json:"adb_available"`
 	DeviceConnected   bool                 `json:"device_connected"`
 	DeviceModel       string               `json:"device_model"`
+	DeviceName        string               `json:"device_name,omitempty"`
 	DeviceSerial      string               `json:"device_serial"`
 	ApkInstalled      bool                 `json:"apk_installed"`
 	BluetoothOn       bool                 `json:"bluetooth_on"`
@@ -72,6 +73,7 @@ type Controller interface {
 	GetFileLog() (string, error)
 	BuildApk() error
 	InstallApk(path string) error
+	GetBondedDevices() ([]adb.BondedDevice, error)
 	Manager() *adb.Manager
 }
 
@@ -254,6 +256,16 @@ func (g *Gateway) InstallApk(path string) error {
 	return g.mgr.InstallApk(path)
 }
 
+func (g *Gateway) GetBondedDevices() ([]adb.BondedDevice, error) {
+	if g.mgr == nil {
+		return nil, errors.New("adb manager not initialized")
+	}
+	if _, err := g.EnsureDevice(); err != nil {
+		return nil, err
+	}
+	return g.mgr.GetBondedBluetoothDevices()
+}
+
 func (g *Gateway) Doctor(version string, cfg config.Config, vlt vault.Vault) (DoctorReport, error) {
 	if g.mgr == nil {
 		return DoctorReport{}, errors.New("adb manager not initialized")
@@ -286,9 +298,14 @@ func (g *Gateway) Doctor(version string, cfg config.Config, vlt vault.Vault) (Do
 		userDesc = cfg.DefaultUser
 	}
 
+	phoneName := g.mgr.GetDeviceName()
+	if cfg.PhoneName != "" {
+		phoneName = cfg.PhoneName
+	}
+
 	checks := []DoctorCheck{
 		{Name: "ADB Executable", Pass: true, Detail: g.mgr.AdbPath},
-		{Name: "Android Device", Pass: devErr == nil, Detail: fmt.Sprintf("%s [%s]", g.mgr.GetDeviceModel(), g.mgr.Serial)},
+		{Name: "Android Device", Pass: devErr == nil, Detail: fmt.Sprintf("%s [%s]", phoneName, g.mgr.Serial)},
 		{Name: "GhostHID APK", Pass: pkgInstalled, Detail: adb.PackageName},
 		{Name: "Phone Bluetooth State", Pass: btOn, Detail: "Enabled"},
 		{Name: "Bluetooth HID Profile (SDP)", Pass: status.Registered, Detail: "Registered"},
@@ -304,6 +321,7 @@ func (g *Gateway) Doctor(version string, cfg config.Config, vlt vault.Vault) (Do
 		AdbAvailable:      true,
 		DeviceConnected:   dev != nil && devErr == nil,
 		DeviceModel:       g.mgr.GetDeviceModel(),
+		DeviceName:        phoneName,
 		DeviceSerial:      g.mgr.Serial,
 		ApkInstalled:      pkgInstalled,
 		BluetoothOn:       btOn,

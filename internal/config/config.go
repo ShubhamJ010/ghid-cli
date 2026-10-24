@@ -27,6 +27,7 @@ type TargetDevice struct {
 }
 
 type Config struct {
+	PhoneName          string         `json:"phone_name,omitempty"`
 	DefaultUser        string         `json:"default_user"`
 	TargetAddress      string         `json:"target_address"`
 	WirelessADBAddress string         `json:"wireless_adb_address"`
@@ -38,9 +39,10 @@ type Config struct {
 
 func DefaultConfig() Config {
 	return Config{
+		PhoneName:          "",
 		DefaultUser:        "",
-		TargetAddress:      "38:FC:98:E8:E3:87",
-		WirelessADBAddress: "192.168.1.80:41839",
+		TargetAddress:      "",
+		WirelessADBAddress: "",
 		Delays: Delays{
 			Wake:    1.0,
 			Overlay: 1.0,
@@ -49,15 +51,7 @@ func DefaultConfig() Config {
 			Pass:    1.2,
 			Submit:  1.0,
 		},
-		Devices: []TargetDevice{
-			{
-				ID:       "dev-1",
-				Name:     "LP-TZD-0X114650",
-				Address:  "38:FC:98:E8:E3:87",
-				Platform: "windows",
-				Selected: true,
-			},
-		},
+		Devices: []TargetDevice{},
 	}
 }
 
@@ -82,35 +76,24 @@ func GetConfigPath() string {
 }
 
 func normalizeDevices(cfg *Config) {
+	if cfg.Devices == nil {
+		cfg.Devices = []TargetDevice{}
+	}
 	if len(cfg.Devices) == 0 {
-		name := "LP-TZD-0X114650"
-		addr := "38:FC:98:E8:E3:87"
-		if cfg.TargetAddress != "" {
-			addr = cfg.TargetAddress
+		cfg.TargetAddress = ""
+		return
+	}
+	hasSelected := false
+	for i := range cfg.Devices {
+		if cfg.Devices[i].Selected {
+			hasSelected = true
+			cfg.TargetAddress = cfg.Devices[i].Address
+			break
 		}
-		cfg.Devices = []TargetDevice{
-			{
-				ID:       "dev-1",
-				Name:     name,
-				Address:  addr,
-				Platform: "windows",
-				Selected: true,
-			},
-		}
-		cfg.TargetAddress = addr
-	} else {
-		hasSelected := false
-		for i := range cfg.Devices {
-			if cfg.Devices[i].Selected {
-				hasSelected = true
-				cfg.TargetAddress = cfg.Devices[i].Address
-				break
-			}
-		}
-		if !hasSelected && len(cfg.Devices) > 0 {
-			cfg.Devices[0].Selected = true
-			cfg.TargetAddress = cfg.Devices[0].Address
-		}
+	}
+	if !hasSelected && len(cfg.Devices) > 0 {
+		cfg.Devices[0].Selected = true
+		cfg.TargetAddress = cfg.Devices[0].Address
 	}
 }
 
