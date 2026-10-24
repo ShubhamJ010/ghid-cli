@@ -1,7 +1,7 @@
 # AGENTS.md
 
 GhostHID = Android phone as Bluetooth HID keyboard + mouse.
-`ghid` (Go, this Mac) → ADB → `com.poc.hiddebug` on phone → Bluetooth HID → target PC.
+`ghid` (Go, this Mac) → ADB → `com.sj010.ghid_headless` on phone → Bluetooth HID → target PC.
 
 Status: alpha. Big refactors welcome. Run tests, update docs, keep JSON contract stable in same change.
 
@@ -17,7 +17,7 @@ Status: alpha. Big refactors welcome. Run tests, update docs, keep JSON contract
 | `internal/combos` | combo library at `~/.config/ghid/combos.json` |
 | `internal/tui` | bubbletea dashboard + Combo Studio |
 | `internal/config`, `vault`, `keychain` | config, credential storage |
-| `src/com/poc/hiddebug` | Android `HidService` + `HidCommandReceiver` |
+| `src/com.sj010/ghid_headless` | Android `HidService` + `HidCommandReceiver` |
 | `res/`, `AndroidManifest.xml`, `build.sh` | APK resources + zero-Gradle build |
 | `docs/` | architecture, flows, protocol, agent integration, ADRs |
 

@@ -175,8 +175,8 @@ The host triggers commands by dispatching Android broadcast intents via `adb she
 
 ```bash
 adb shell am broadcast \
-  -a com.poc.hiddebug.ACTION_CMD \
-  -n com.poc.hiddebug/.HidCommandReceiver \
+  -a com.sj010.ghid_headless.ACTION_CMD \
+  -n com.sj010.ghid_headless/.HidCommandReceiver \
   --es cmd "<command>" \
   [optional arguments]
 ```
@@ -225,7 +225,7 @@ Gracefully cleans up Bluetooth resources and kills the Android foreground servic
 
 ## 4. Filesystem State and Logging Protocol
 
-The Android gateway writes state and log files directly to external application storage (`/sdcard/Android/data/com.poc.hiddebug/files/`).
+The Android gateway writes state and log files directly to external application storage (`/sdcard/Android/data/com.sj010.ghid_headless/files/`).
 
 ### Status File (`status.json`)
 The service overwrites this file on every state transition (SDP registration, connection change, disconnect).

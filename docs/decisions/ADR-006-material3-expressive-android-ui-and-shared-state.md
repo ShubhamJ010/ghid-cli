@@ -7,7 +7,7 @@ Accepted
 2026-10-23
 
 ## Context
-GhostHID originated as a headless Android service (`com.poc.hiddebug`) receiving commands over ADB from the macOS Go CLI (`ghid`). This topology worked well for desktop-bound automation but required a tethered or networked host computer to trigger even simple actions (such as locking a workstation or injecting credentials).
+GhostHID originated as a headless Android service (`com.sj010.ghid_headless`) receiving commands over ADB from the macOS Go CLI (`ghid`). This topology worked well for desktop-bound automation but required a tethered or networked host computer to trigger even simple actions (such as locking a workstation or injecting credentials).
 
 Users require the ability to use the phone as a fully autonomous, standalone hardware Bluetooth HID controller with on-device controls, while:
 1. Retaining 100% backward compatibility with the Go CLI and ADB automation pipeline.
@@ -27,7 +27,7 @@ Users require the ability to use the phone as a fully autonomous, standalone har
    - Retain `HidCommandReceiver` for external ADB broadcasts from the Mac CLI. Both local UI and remote ADB can control the service concurrently.
 
 3. **Bi-directional Shared State & Secure Vault**:
-   - Store combos in `/sdcard/Android/data/com.poc.hiddebug/files/combos.json` using the identical JSON schema as Mac `~/.config/ghid/combos.json`.
+   - Store combos in `/sdcard/Android/data/com.sj010.ghid_headless/files/combos.json` using the identical JSON schema as Mac `~/.config/ghid/combos.json`.
    - Store plaintext snippets in `snippets.json`.
    - Store sensitive secrets (such as `$PASSWORD`) in the hardware-backed Android Keystore via `EncryptedSharedPreferences` (AES-256-GCM MasterKey), matching the security posture of macOS Keychain on the Mac.
    - Add a `ghid sync` command to the Go CLI to pull/push macro and snippet updates between Mac and phone storage over ADB.
