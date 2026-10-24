@@ -19,7 +19,6 @@ import (
 	"github.com/ghost-hid/ghid/internal/hid"
 	"github.com/ghost-hid/ghid/internal/keychain"
 	"github.com/ghost-hid/ghid/internal/snippets"
-	"github.com/ghost-hid/ghid/internal/vault"
 )
 
 type AppState int
@@ -128,14 +127,6 @@ type comboStepExecMsg struct {
 	err     error
 }
 type comboTickMsg time.Time
-
-func NewModel(mgr *adb.Manager, cfg config.Config) Model {
-	cStore := combos.NewStore("")
-	_, _ = cStore.EnsureDefaults()
-	sStore := snippets.NewStore("", vault.NewKeychainVault(""))
-	_, _ = sStore.EnsureDefaults()
-	return NewModelWithStores(mgr, cfg, cStore, sStore)
-}
 
 func NewModelWithStores(mgr *adb.Manager, cfg config.Config, cStore *combos.Store, sStore *snippets.Store) Model {
 	s := spinner.New()

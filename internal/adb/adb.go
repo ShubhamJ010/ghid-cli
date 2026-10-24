@@ -75,18 +75,6 @@ func NewManager(serial string) (*Manager, error) {
 	}, nil
 }
 
-func NewManagerWithRunner(runner Runner, serial, root string) *Manager {
-	if root == "" {
-		root, _ = os.Getwd()
-	}
-	return &Manager{
-		AdbPath: runner.AdbPath(),
-		Serial:  serial,
-		Root:    root,
-		runner:  runner,
-	}
-}
-
 func (m *Manager) Run(args ...string) (string, error) {
 	if m.runner == nil {
 		r, err := NewExecRunner()
