@@ -1,10 +1,17 @@
 # ADR-001: Headless Android Service with BroadcastReceiver IPC over ADB
 
 ## Status
-Accepted
+Accepted (mechanics still current; package and paths superseded by [ADR-012](ADR-012-single-android-app-and-release-only-deployment.md))
 
 ## Date
 2026-03-15
+
+> **Amended 2026-10-25:** the foreground-service + `BroadcastReceiver` over ADB design stands,
+> but the app it describes was renamed and rewritten as the Material 3 app, and the original
+> `com.sj010.ghid_headless` sources were deleted. Current values: action
+> `com.sj010.ghid.ACTION_CMD`, component `com.sj010.ghid/.service.HidCommandReceiver`, service
+> `com.sj010.ghid/.service.HidService`, state file
+> `/sdcard/Android/data/com.sj010.ghid/files/status.json`. Nothing falls back to the old paths.
 
 ## Context
 GhostHID requires a mechanism to transmit keyboard and mouse HID reports from a host workstation (macOS, Linux, or CI agent) to a target computer (such as a Windows laptop) using an Android smartphone as the physical transmitter.

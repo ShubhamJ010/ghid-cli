@@ -1625,17 +1625,31 @@ func (a *App) handleFileLog(serial string) int {
 	return 0
 }
 
+// handleBuild assembles the release APK. build.sh drives Gradle
+// (:app:assembleRelease) and publishes build/ghost-hid.apk; without it the
+// in-repo Gradle wrapper is used directly.
 func (a *App) handleBuild() int {
-	fmt.Fprintln(a.Stdout, "Building GhostHID APK (./gradlew assembleDebug)...")
-	cmd := exec.Command("./gradlew", "assembleDebug")
+	var cmd *exec.Cmd
+	artifact := "build/ghost-hid.apk"
+	if _, err := os.Stat("build.sh"); err == nil {
+		fmt.Fprintln(a.Stdout, "Building GhostHID release APK (bash build.sh -> :app:assembleRelease)...")
+		cmd = exec.Command("bash", "build.sh")
+	} else if _, err := os.Stat(filepath.Join("android", "gradlew")); err == nil {
+		fmt.Fprintln(a.Stdout, "Building GhostHID release APK (android/gradlew :app:assembleRelease)...")
+		cmd = exec.Command("./gradlew", ":app:assembleRelease")
+		cmd.Dir = "android"
+		artifact = "android/app/build/outputs/apk/release/app-release.apk"
+	} else {
+		fmt.Fprintln(a.Stderr, "Build failed: build.sh not found (run ghid build from the GhostHID repo root)")
+		return 1
+	}
 	cmd.Stdout = a.Stdout
 	cmd.Stderr = a.Stderr
-	err := cmd.Run()
-	if err != nil {
+	if err := cmd.Run(); err != nil {
 		fmt.Fprintf(a.Stderr, "Build failed: %v\n", err)
 		return 1
 	}
-	fmt.Fprintln(a.Stdout, "✔ Build successful: app/build/outputs/apk/debug/app-debug.apk")
+	fmt.Fprintf(a.Stdout, "✔ Build successful: %s (release)\n", artifact)
 	return 0
 }
 
@@ -1646,8 +1660,8 @@ func (a *App) handleInstallApk(serial string, args []string) int {
 	} else {
 		candidates := []string{
 			"build/ghost-hid.apk",
+			"android/app/build/outputs/apk/release/app-release.apk",
 			"ghost-hid.apk",
-			"app/build/outputs/apk/debug/app-debug.apk",
 		}
 		for _, cand := range candidates {
 			if _, err := os.Stat(cand); err == nil {
@@ -1813,7 +1827,7 @@ func (a *App) handleSync(serial string, args []string, jsonOutput bool) int {
 }
 
 func (a *App) printHelp() {
-	fmt.Fprintln(a.Stdout, `GhostHID - Headless Android Bluetooth HID Keyboard Controller (Go/Charm TUI)
+	fmt.Fprintln(a.Stdout, `GhostHID - Android Bluetooth HID Keyboard Controller (Go/Charm TUI)
 
 Usage:
   ghid [command] [options]
@@ -1852,8 +1866,8 @@ Commands:
   restart           Restart Android service
   logs              Live stream Android Logcat
   filelog           Dump persisted file log
-  build             Assemble Android debug APK
-  install-apk       Install APK via adb
+  build             Assemble Android release APK
+  install-apk       Install release APK via adb
   install-bin       Install ghid binary into ~/.local/bin and manpage
   uninstall-bin     Uninstall ghid binary and manpage
   man               Open manual page

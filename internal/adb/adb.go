@@ -14,14 +14,13 @@ import (
 )
 
 const (
-	PackageName           = "com.sj010.ghid_headless"
-	ServiceName           = "com.sj010.ghid_headless/.HidService"
+	PackageName           = "com.sj010.ghid"
+	ServiceName           = "com.sj010.ghid/.service.HidService"
 	ReceiverName          = "com.sj010.ghid/.service.HidCommandReceiver"
 	ActionCmd             = "com.sj010.ghid.ACTION_CMD"
 	ActionLock            = "com.sj010.ghid.ACTION_LOCK"
-	StatusFileRemote      = "/sdcard/Android/data/com.sj010.ghid_headless/files/status.json"
+	StatusFileRemote      = "/sdcard/Android/data/com.sj010.ghid/files/status.json"
 	LogFileRemote         = "/sdcard/Android/data/com.sj010.ghid/files/gateway.log"
-	AppPackageName        = "com.sj010.ghid"
 	AppMainActivity       = "com.sj010.ghid/.MainActivity"
 	AppCombosFileRemote   = "/sdcard/Android/data/com.sj010.ghid/files/combos.json"
 	AppSnippetsFileRemote = "/sdcard/Android/data/com.sj010.ghid/files/snippets.json"
@@ -362,7 +361,7 @@ func (m *Manager) StopGateway() error {
 }
 
 func (m *Manager) RestartAppAndReconnect() error {
-	_, _ = m.Run("shell", "am", "force-stop", AppPackageName)
+	_, _ = m.Run("shell", "am", "force-stop", PackageName)
 	_, _ = m.Run("shell", "am", "start", "-n", AppMainActivity)
 	time.Sleep(1500 * time.Millisecond)
 	_, err := m.Run("shell", "am", "broadcast", "-a", ActionCmd, "-n", ReceiverName, "--es", "cmd", "connect")
@@ -382,17 +381,7 @@ func (m *Manager) GetStatus() GatewayStatus {
 
 	out, err := m.Run("shell", "cat", StatusFileRemote)
 	if err != nil || !strings.HasPrefix(strings.TrimSpace(out), "{") {
-		// Try active modernized app path if headless path didn't return json
-		altPath := "/sdcard/Android/data/com.sj010.ghid/files/status.json"
-		if StatusFileRemote == altPath {
-			altPath = "/sdcard/Android/data/com.sj010.ghid_headless/files/status.json"
-		}
-		if altOut, altErr := m.Run("shell", "cat", altPath); altErr == nil && strings.HasPrefix(strings.TrimSpace(altOut), "{") {
-			out = altOut
-			err = nil
-		} else if err != nil {
-			return fallback
-		}
+		return fallback
 	}
 
 	out = strings.TrimSpace(out)

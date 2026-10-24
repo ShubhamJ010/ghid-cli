@@ -1,10 +1,16 @@
 # ADR-006: Standalone Android Material 3 Expressive UI with Bi-directional Shared State
 
 ## Status
-Accepted
+Accepted (expanded by [ADR-012](ADR-012-single-android-app-and-release-only-deployment.md))
 
 ## Date
 2026-10-23
+
+> **Amended 2026-10-25:** this ADR's origin app (`com.sj010.ghid_headless`) and the root
+> `AndroidManifest.xml`/`res/`/zero-Gradle build were deleted, so `com.sj010.ghid` is now the
+> only app in the repo. Storage paths in item 3 are
+> `/sdcard/Android/data/com.sj010.ghid/files/{combos,snippets}.json`, and `build.sh` produces a
+> release APK (`:app:assembleRelease`) — see ADR-012.
 
 ## Context
 GhostHID originated as a headless Android service (`com.sj010.ghid_headless`) receiving commands over ADB from the macOS Go CLI (`ghid`). This topology worked well for desktop-bound automation but required a tethered or networked host computer to trigger even simple actions (such as locking a workstation or injecting credentials).
@@ -27,7 +33,7 @@ Users require the ability to use the phone as a fully autonomous, standalone har
    - Retain `HidCommandReceiver` for external ADB broadcasts from the Mac CLI. Both local UI and remote ADB can control the service concurrently.
 
 3. **Bi-directional Shared State & Secure Vault**:
-   - Store combos in `/sdcard/Android/data/com.sj010.ghid_headless/files/combos.json` using the identical JSON schema as Mac `~/.config/ghid/combos.json`.
+   - Store combos in `/sdcard/Android/data/com.sj010.ghid/files/combos.json` using the identical JSON schema as Mac `~/.config/ghid/combos.json`.
    - Store plaintext snippets in `snippets.json`.
    - Store sensitive secrets (such as `$PASSWORD`) in the hardware-backed Android Keystore via `EncryptedSharedPreferences` (AES-256-GCM MasterKey), matching the security posture of macOS Keychain on the Mac.
    - Add a `ghid sync` command to the Go CLI to pull/push macro and snippet updates between Mac and phone storage over ADB.

@@ -74,7 +74,7 @@ func (m Model) renderBanner() string {
 		Padding(0, 1).
 		Render("v1.0.0")
 
-	tagline := SubtitleStyle.Render("Headless Android Bluetooth HID Automation Gateway")
+	tagline := SubtitleStyle.Render("Android Bluetooth HID Automation Gateway")
 	return fmt.Sprintf("%s %s\n%s\n", title, badge, tagline)
 }
 

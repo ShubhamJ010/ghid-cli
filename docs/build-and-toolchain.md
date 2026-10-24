@@ -1,110 +1,97 @@
-# Standalone Android Toolchain (Zero Gradle)
+# Android Build Toolchain (Gradle Release Pipeline)
 
-GhostHID builds its Android APK using a direct command-line pipeline without Gradle, Groovy, Kotlin scripts, or Android Studio daemons.
+GhostHID builds its Android APK with the Gradle wrapper inside [`android/`](../android) — Android Gradle Plugin 8.7.2, Kotlin 2.0.21, Jetpack Compose. The build always produces a **release** artifact; there is no debug build in the deployment path.
+
+The former zero-Gradle pipeline (`aapt2` → `javac` → `d8` → `zipalign` → `apksigner`) and the legacy `com.sj010.ghid_headless` sources it compiled were removed along with the headless app. Nothing in the repo invokes those tools anymore.
 
 ---
 
-## 1. Why Zero Gradle
+## 1. Entry points
 
-Standard Android builds use Gradle, which incurs high overhead:
-- JVM daemon warmup and background memory consumption (~1 GB RAM).
-- Dependency resolution scans and lock file management.
-- Multi-minute initial configuration and build phases.
+| Command | What it runs | Output |
+|---|---|---|
+| `./build.sh` | `android/gradlew :app:assembleRelease` | `build/ghost-hid.apk` |
+| `ghid build` | `bash build.sh` (falls back to `gradlew` if `build.sh` is absent) | `build/ghost-hid.apk` |
+| `ghid install-apk` | `adb install -r` of `build/ghost-hid.apk` | APK on the phone |
 
-GhostHID has zero external Java dependencies; it relies only on Android framework APIs (`android.bluetooth.*`, `android.app.*`, `android.content.*`). Building the APK directly with Google's standalone command-line tools takes approximately 1.8 seconds from clean state and produces a ~20 KB executable.
+`ghid install-apk` resolves the artifact in this order:
+
+1. `build/ghost-hid.apk` (repo root, published by `build.sh`)
+2. `android/app/build/outputs/apk/release/app-release.apk` (raw Gradle output)
+3. `ghost-hid.apk` (explicit path passed as an argument)
+
+An explicit path always wins: `ghid install-apk /path/to/app.apk`.
+
+---
+
+## 2. What Gradle does
+
+`android/app/build.gradle.kts`:
+
+- **Application ID** `com.sj010.ghid`, `minSdk 28`, `targetSdk 35`, `compileSdk 35`.
+- **Release build type:** `isMinifyEnabled = true` (R8 code shrinking), `isShrinkResources = true`,
+  `proguard-android-optimize.txt` plus `android/app/proguard-rules.pro` (which currently only
+  silences AndroidX security-annotation warnings).
+- **Signing:** both debug and release sign with the repo's `debug.keystore`
+  (`androiddebugkey`, password `android`), so a release APK installs over a debug install
+  without re-pairing Bluetooth.
+- **Compose:** enabled through the Compose compiler plugin and the Compose BOM
+  (`2024.10.00`), plus `androidx.graphics:graphics-shapes` for the Material 3 Expressive
+  shapes.
+- **Targets the release artifact only.** `assembleDebug` still exists as a local development
+  convenience, but it is never published to `build/` and never installed by `ghid`.
+
+Build stages:
 
 ```text
-build.sh Execution Timeline:
-+--------------------------------------------------------------+
-| aapt2 compile | aapt2 link | javac | d8 | zip | zipalign | sign |
-+--------------------------------------------------------------+
-0.0s            0.3s         0.7s    1.1s 1.3s  1.5s       1.8s
+:app:compileReleaseKotlin → :app:compileReleaseJavaWithJavac
+    → :app:minifyReleaseWithR8 → :app:shrinkReleaseResources
+    → :app:packageRelease → :app:signRelease
+    → android/app/build/outputs/apk/release/app-release.apk
+    → cp build/ghost-hid.apk
 ```
 
 ---
 
-## 2. Compilation Stages in `build.sh`
+## 3. Environment prerequisites
 
-The build pipeline in [`build.sh`](file:///Users/sj/Desktop/ws/ghost-hid/build.sh) runs in seven discrete steps:
-
-### Stage 1: Resource Compilation (`aapt2 compile`)
-Compiles XML files in `res/` into intermediate binary flat archives:
-```bash
-$BUILD_TOOLS/aapt2 compile --dir res -o build/resources.zip
-```
-
-### Stage 2: Resource Linking (`aapt2 link`)
-Links compiled resources against the target Android platform stubs (`android.jar`), generates the `gen/com.sj010/ghid_headless/R.java` symbol file, and constructs the initial APK skeleton with compiled `AndroidManifest.xml`:
-```bash
-$BUILD_TOOLS/aapt2 link -I "$PLATFORM" \
-    --manifest AndroidManifest.xml \
-    -o build/unaligned.apk \
-    --java gen \
-    --auto-add-overlay \
-    build/resources.zip
-```
-
-### Stage 3: Java Bytecode Compilation (`javac`)
-Compiles both generated source (`gen/`) and project source (`src/`) targeting Java 17 bytecode:
-```bash
-javac -source 17 -target 17 \
-    -classpath "$PLATFORM" \
-    -d bin \
-    $(find gen src -name "*.java")
-```
-
-### Stage 4: Dalvik Executable Conversion (`d8`)
-Converts JVM `.class` bytecode files into Dalvik/ART executable bytecode (`classes.dex`):
-```bash
-$BUILD_TOOLS/d8 --lib "$PLATFORM" --output bin $(find bin -name "*.class")
-```
-
-### Stage 5: Archive Injection (`zip`)
-Injects `classes.dex` into the root of `build/unaligned.apk`:
-```bash
-cd bin
-zip -u ../build/unaligned.apk classes.dex
-cd ..
-```
-
-### Stage 6: 4-Byte Memory Alignment (`zipalign`)
-Aligns all uncompressed data (such as shared assets and raw resources) on 4-byte boundaries. This allows the Android operating system to memory-map resources directly from flash storage using `mmap()` without allocating extra RAM:
-```bash
-$BUILD_TOOLS/zipalign -f -p 4 build/unaligned.apk build/ghost-hid.apk
-```
-
-### Stage 7: Cryptographic Signing (`apksigner`)
-If `debug.keystore` does not exist, `build.sh` generates an RSA-2048 keypair. It then applies Android APK Signature Scheme v2 and v3:
-```bash
-$BUILD_TOOLS/apksigner sign \
-    --ks debug.keystore \
-    --ks-pass pass:android \
-    --ks-key-alias androiddebugkey \
-    build/ghost-hid.apk
-```
-
----
-
-## 3. Environment Prerequisites
-
-To run [`build.sh`](file:///Users/sj/Desktop/ws/ghost-hid/build.sh):
-1. **JDK 17:** OpenJDK 17 installed and `JAVA_HOME` configured.
-2. **Android Command-Line Tools:**
-   - `build-tools/35.0.0` or newer containing `aapt2`, `d8`, `zipalign`, and `apksigner`.
-   - `platforms/android-34/android.jar` platform stub.
+1. **JDK 17** (`JAVA_HOME` pointing at it).
+2. **Android SDK** with platform `android-35` and current build-tools; `android/local.properties`
+   must contain `sdk.dir=...` (the file is gitignored — create it once).
+3. **Network access on the first build** so Gradle can resolve AGP, Kotlin, and AndroidX
+   artifacts; subsequent builds use the wrapper caches in `android/.gradle` and
+   `~/.gradle`.
 
 On macOS with Homebrew:
+
 ```bash
 brew install openjdk@17 android-commandlinetools
-```
-
-Set paths in your shell profile:
-```bash
 export ANDROID_HOME="/opt/homebrew/share/android-commandlinetools"
 export JAVA_HOME="/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home"
 ```
 
-Once installed, build and deploy in a single command:
+Build and deploy in a single command:
+
 ```bash
 ./build.sh && ghid install-apk
 ```
+
+After installing, restart the gateway so the new package state is picked up:
+
+```bash
+ghid restart && ghid connect && ghid status
+```
+
+---
+
+## 4. Why release, not debug
+
+- R8 strips unused Compose/AndroidX code, so the shipped APK stays small despite the UI stack.
+- One artifact: what `ghid build` produces is byte-for-byte what `ghid install-apk` deploys,
+  which keeps `ghid doctor --json` results reproducible across machines.
+- The signed release build keeps the same package identity (`com.sj010.ghid`), so
+  `adb install -r` upgrades in place and the existing Windows Bluetooth pairing survives.
+
+> Changing the HID descriptor, report IDs, or HID subclasses still invalidates a cached
+> Windows pairing — that is a protocol change, not a build change. Re-pair GhostHID on
+> Windows after any descriptor edit.
