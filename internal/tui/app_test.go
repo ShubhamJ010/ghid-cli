@@ -421,8 +421,8 @@ func TestDeviceRegisterPickerNavigation(t *testing.T) {
 	m := Model{
 		devNameInput: devName,
 		devAddrInput: devAddr,
-		state: StateDeviceRegisterPicker,
-		width: 80,
+		state:        StateDeviceRegisterPicker,
+		width:        80,
 		pickerDevices: []adb.BondedDevice{
 			{Address: "A0:9A:8E:57:36:DA", Name: "Shubham’s MacBook Air", Type: "DUAL"},
 			{Address: "38:FC:98:E8:E3:87", Name: "LP-TZD-0X114650", Type: "BR/EDR"},

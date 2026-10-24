@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ghost-hid/ghid/internal/adb"
+	"github.com/ghost-hid/ghid/internal/combos"
 	"github.com/ghost-hid/ghid/internal/config"
 	"github.com/ghost-hid/ghid/internal/gateway"
 	"github.com/ghost-hid/ghid/internal/vault"
@@ -68,9 +69,12 @@ func TestAppStatus(t *testing.T) {
   "registered": true,
   "connected": true,
   "state": "CONNECTED",
-  "target": "ThinkPad",
-  "address": "38:FC:98:E8:E3:87",
-  "updated": "2026-10-23 00:00:00.000"
+  "target": "MacBook Air",
+  "address": "A0:9A:8E:57:36:DA",
+  "os": "macos",
+  "os_confidence": "high",
+  "detection_method": "apple_oui",
+  "updated": "2026-10-24 00:00:00.000"
 }`, nil)
 
 	// JSON mode
@@ -83,8 +87,46 @@ func TestAppStatus(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &status); err != nil {
 		t.Fatalf("failed to parse json output: %v", err)
 	}
-	if !status.Connected || status.Target != "ThinkPad" {
+	if !status.Connected || status.Target != "MacBook Air" {
 		t.Errorf("status mismatch: %+v", status)
+	}
+	if status.OS != "macos" || status.OSConfidence != "high" || status.DetectionMethod != "apple_oui" {
+		t.Errorf("fingerprint not surfaced: %+v", status)
+	}
+
+	// Human mode names the detected OS and where it came from.
+	stdout.Reset()
+	if code := app.Run([]string{"status"}); code != 0 {
+		t.Fatalf("expected exit code 0, got %d", code)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "Target OS:") || !strings.Contains(out, "macOS") || !strings.Contains(out, "apple_oui") {
+		t.Errorf("status should describe the detected OS:\n%s", out)
+	}
+}
+
+func TestAppStatusLegacyWithoutOS(t *testing.T) {
+	app, fakeRunner, _, _, stdout, _ := setupTestApp(t)
+
+	fakeRunner.Register("cat /sdcard/Android/data/com.sj010.ghid_headless/files/status.json", `{
+  "registered": true,
+  "connected": false,
+  "state": "DISCONNECTED",
+  "target": "none",
+  "address": "none",
+  "updated": "2026-10-23 00:00:00.000"
+}`, nil)
+
+	if code := app.Run([]string{"status", "--json"}); code != 1 {
+		t.Fatalf("expected exit code 1 for a disconnected gateway, got %d", code)
+	}
+
+	var status adb.GatewayStatus
+	if err := json.Unmarshal(stdout.Bytes(), &status); err != nil {
+		t.Fatalf("failed to parse json output: %v", err)
+	}
+	if status.OS != "unknown" {
+		t.Errorf("legacy status should report os=unknown, got %q", status.OS)
 	}
 }
 
@@ -329,9 +371,9 @@ func TestAppCommands(t *testing.T) {
 func TestComboMetadataAndDirectives(t *testing.T) {
 	app, _, _, store, stdout, stderr := setupTestApp(t)
 
-	// Save combo with --emoji and --desc
+	// Save combo with --os and --desc
 	stdout.Reset()
-	code := app.Run([]string{"combo", "save", "MyLock", "!COMBO:SEND:lock", "--emoji", "🔒", "--desc", "Chained lock combo", "--json"})
+	code := app.Run([]string{"combo", "save", "MyLock", "!COMBO:SEND:lock", "--os", "linux", "--desc", "Chained lock combo", "--json"})
 	if code != 0 {
 		t.Fatalf("combo save failed: code %d, stderr: %s", code, stderr.String())
 	}
@@ -340,7 +382,7 @@ func TestComboMetadataAndDirectives(t *testing.T) {
 		t.Fatalf("parse save response: %v", err)
 	}
 	comboObj := saveRes["combo"].(map[string]interface{})
-	if comboObj["emoji"] != "🔒" || comboObj["description"] != "Chained lock combo" {
+	if comboObj["os"] != combos.OSLinux || comboObj["description"] != "Chained lock combo" {
 		t.Errorf("unexpected combo metadata: %+v", comboObj)
 	}
 

@@ -237,6 +237,9 @@ The service overwrites this file on every state transition (SDP registration, co
   "state": "CONNECTED",
   "target": "LP-TZD-0X114650",
   "address": "38:FC:98:E8:E3:87",
+  "os": "windows",
+  "os_confidence": "high",
+  "detection_method": "hid_led_handshake",
   "updated": "2026-10-23 01:15:30.122"
 }
 ```
@@ -247,7 +250,13 @@ Field definitions:
 - `state` (string): Current state representation: `DISCONNECTED`, `CONNECTING...`, `CONNECTED`, or `DISCONNECTING...`.
 - `target` (string): Bluetooth friendly name of connected host.
 - `address` (string): MAC address of target host.
+- `os` (string): Passively fingerprinted host OS: `windows`, `macos`, `linux`, or `unknown` (see ADR-007).
+- `os_confidence` (string): `high`, `medium`, `low`, or `none`.
+- `detection_method` (string): `apple_oui`, `apple_sdp_uuid`, `hid_led_handshake`, `name_heuristic`, `fallback`, or `none`.
 - `updated` (string): Timestamp formatted as `yyyy-MM-dd HH:mm:ss.SSS`.
+
+The OS fields are additive: older gateway builds omit them, and the CLI treats a
+missing `os` as `unknown` rather than failing to parse the file.
 
 ### Gateway Log File (`gateway.log`)
 Appended line by line on each service operation.

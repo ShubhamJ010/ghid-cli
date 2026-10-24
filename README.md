@@ -248,11 +248,12 @@ ghid combo schema --json
 # Validate a chained sequence before saving
 ghid combo validate "win+s ->{0.7} type:rustdesk ->{0.4} enter" --json
 
-# Save a named combo (updates if already exists)
-ghid combo save "Open RustDesk" "win+s ->{0.7} type:rustdesk ->{0.4} enter" --json
+# Save a named combo for a host OS (updates if already exists)
+ghid combo save "Open RustDesk" "win+s ->{0.7} type:rustdesk ->{0.4} enter" --os windows --json
 
-# List saved combos
+# List saved combos, optionally scoped to one OS
 ghid combo list --json
+ghid combo list --os macos --json
 
 # Send a saved combo by name
 ghid combo send "Open RustDesk" --json

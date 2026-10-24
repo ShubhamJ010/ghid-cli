@@ -246,6 +246,7 @@ func (a *App) handleStatus(cfg config.Config, serial string, jsonOutput bool) in
 		} else {
 			fmt.Fprintf(a.Stdout, "  Target:         %s [%s]\n", status.Target, status.Address)
 		}
+		fmt.Fprintf(a.Stdout, "  Target OS:      %s\n", describeStatusOS(status))
 		fmt.Fprintf(a.Stdout, "  Updated:        %s\n", status.Updated)
 	}
 
@@ -253,6 +254,23 @@ func (a *App) handleStatus(cfg config.Config, serial string, jsonOutput bool) in
 		return 1
 	}
 	return 0
+}
+
+// describeStatusOS renders the fingerprint result for humans.
+func describeStatusOS(status adb.GatewayStatus) string {
+	osName := strings.ToLower(strings.TrimSpace(status.OS))
+	if osName == "" || osName == "unknown" {
+		return "Unknown (waiting for a connected host)"
+	}
+	description := combos.OSLabel(osName)
+	if status.OSConfidence != "" {
+		description += " (" + status.OSConfidence + " confidence"
+		if status.DetectionMethod != "" {
+			description += " via " + status.DetectionMethod
+		}
+		description += ")"
+	}
+	return description
 }
 
 func (a *App) handleDoctor(cfg config.Config, serial string, jsonOutput bool) int {
@@ -576,7 +594,7 @@ func (a *App) handleCombo(serial string, args []string, jsonOutput bool) int {
 	// single command. Without a terminal, fall back to listing the library.
 	if len(args) == 0 {
 		if !stdinIsTerminal() {
-			return a.listCombos(store, jsonOutput)
+			return a.listCombos(store, jsonOutput, "")
 		}
 		return a.openComboStudio(store, serial)
 	}
@@ -584,12 +602,16 @@ func (a *App) handleCombo(serial string, args []string, jsonOutput bool) int {
 	switch args[0] {
 	case "studio", "new", "ui", "interactive":
 		if !stdinIsTerminal() {
-			return a.listCombos(store, jsonOutput)
+			return a.listCombos(store, jsonOutput, "")
 		}
 		return a.openComboStudio(store, serial)
 
 	case "list", "ls":
-		return a.listCombos(store, jsonOutput)
+		osFilter, _, err := parseComboOSArgs(args[1:])
+		if err != nil {
+			return a.comboFail(jsonOutput, "%v", err)
+		}
+		return a.listCombos(store, jsonOutput, osFilter)
 
 	case "fav", "favorite":
 		if len(args) < 2 {
@@ -637,7 +659,7 @@ func (a *App) handleCombo(serial string, args []string, jsonOutput bool) int {
 	case "save", "add", "set", "edit":
 		var positional []string
 		isFav := false
-		emoji := ""
+		osName := ""
 		description := ""
 
 		for i := 1; i < len(args); i++ {
@@ -645,15 +667,15 @@ func (a *App) handleCombo(serial string, args []string, jsonOutput bool) int {
 			switch {
 			case arg == "--fav" || arg == "--favorite" || arg == "-f":
 				isFav = true
-			case arg == "--emoji" || arg == "-e":
+			case arg == "--os" || arg == "-o":
 				if i+1 < len(args) {
-					emoji = args[i+1]
+					osName = args[i+1]
 					i++
 				}
-			case strings.HasPrefix(arg, "--emoji="):
-				emoji = strings.TrimPrefix(arg, "--emoji=")
-			case strings.HasPrefix(arg, "-e="):
-				emoji = strings.TrimPrefix(arg, "-e=")
+			case strings.HasPrefix(arg, "--os="):
+				osName = strings.TrimPrefix(arg, "--os=")
+			case strings.HasPrefix(arg, "-o="):
+				osName = strings.TrimPrefix(arg, "-o=")
 			case arg == "--desc" || arg == "--description" || arg == "-d":
 				if i+1 < len(args) {
 					description = args[i+1]
@@ -671,15 +693,19 @@ func (a *App) handleCombo(serial string, args []string, jsonOutput bool) int {
 		}
 
 		if len(positional) < 2 {
-			return a.comboFail(jsonOutput, "usage: ghid combo save <name> <keys...> [--emoji <e>] [--desc <d>] [--fav]")
+			return a.comboFail(jsonOutput, "usage: ghid combo save <name> <keys...> [--os windows|macos|linux] [--desc <d>] [--fav]")
 		}
 		name := positional[0]
 		keys := strings.Join(positional[1:], " ")
+		normalizedOS, err := combos.NormalizeOS(osName)
+		if err != nil {
+			return a.comboFail(jsonOutput, "%v", err)
+		}
 		_, existed := store.Find(name)
 		list, err := store.Add(combos.Combo{
 			Name:        name,
 			Keys:        keys,
-			Emoji:       emoji,
+			OS:          normalizedOS,
 			Description: description,
 			Favorite:    isFav,
 		})
@@ -687,7 +713,7 @@ func (a *App) handleCombo(serial string, args []string, jsonOutput bool) int {
 			return a.comboFail(jsonOutput, "%v", err)
 		}
 		if jsonOutput {
-			saved := combos.Combo{Name: name, Keys: keys, Emoji: emoji, Description: description, Favorite: isFav}
+			saved := combos.Combo{Name: name, Keys: keys, OS: normalizedOS, Description: description, Favorite: isFav}
 			for _, c := range list {
 				if strings.EqualFold(c.Name, name) {
 					saved = c
@@ -704,11 +730,8 @@ func (a *App) handleCombo(serial string, args []string, jsonOutput bool) int {
 			if isFav {
 				favMsg = " [pinned ❤️]"
 			}
-			emojiMsg := ""
-			if emoji != "" {
-				emojiMsg = emoji + " "
-			}
-			fmt.Fprintf(a.Stdout, "✔ Saved combo %s%q (%s)%s\n", emojiMsg, name, keys, favMsg)
+			osMsg := "[" + combos.OSLabel(normalizedOS) + "] "
+			fmt.Fprintf(a.Stdout, "✔ Saved combo %s%q (%s)%s\n", osMsg, name, keys, favMsg)
 		}
 		return 0
 
@@ -812,11 +835,14 @@ func (a *App) handleComboSchema(store *combos.Store, jsonOutput bool) int {
 		"mouse":         hid.MouseActions(),
 		"directives":    hid.Directives(),
 		"text_prefixes": []string{"type:", "text:", "type ", "text "},
+		"os_tags":       combos.OSTokens(),
+		"default_os":    combos.OSWindows,
+		"os_note":       "The win token is the HID GUI modifier: Windows/Linux Super, macOS Command.",
 		"example":       "ctrl+alt+del ->{1.0} esc ->{0.8} $USERNAME ->{0.8} tab ->{0.8} $PASSWORD ->{0.8} enter",
 		"commands": map[string]string{
 			"list":     "ghid combo list --json",
 			"fav":      "ghid combo fav <name> --json",
-			"save":     "ghid combo save \"Name\" \"keys\" [--emoji <e>] [--desc <d>] [--fav] --json",
+			"save":     "ghid combo save \"Name\" \"keys\" [--os windows|macos|linux] [--desc <d>] [--fav] --json",
 			"send":     "ghid combo send \"Name\" --json",
 			"delete":   "ghid combo delete \"Name\" --json",
 			"validate": "ghid combo validate \"keys\" --json",
@@ -836,7 +862,39 @@ func (a *App) handleComboSchema(store *combos.Store, jsonOutput bool) int {
 	fmt.Fprintln(a.Stdout, "  Keyboard: ", strings.Join(hid.WindowsKeyboardTokens(), " "))
 	fmt.Fprintln(a.Stdout, "  Mouse:    ", strings.Join(hid.MouseActions(), " "))
 	fmt.Fprintln(a.Stdout, "  Text:      type:rustdesk  or  type:\"rust desk\"")
+	fmt.Fprintln(a.Stdout, "  OS tags:   ", strings.Join(combos.OSTokens(), " "))
 	return 0
+}
+
+// parseComboOSArgs extracts an optional --os filter from combo list arguments.
+func parseComboOSArgs(args []string) (string, []string, error) {
+	osFilter := ""
+	var rest []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--os" || arg == "-o":
+			if i+1 >= len(args) {
+				return "", rest, errors.New("--os requires windows, macos or linux")
+			}
+			osFilter = args[i+1]
+			i++
+		case strings.HasPrefix(arg, "--os="):
+			osFilter = strings.TrimPrefix(arg, "--os=")
+		case strings.HasPrefix(arg, "-o="):
+			osFilter = strings.TrimPrefix(arg, "-o=")
+		default:
+			rest = append(rest, arg)
+		}
+	}
+	if osFilter == "" {
+		return "", rest, nil
+	}
+	normalized, err := combos.NormalizeOS(osFilter)
+	if err != nil {
+		return "", rest, err
+	}
+	return normalized, rest, nil
 }
 
 func (a *App) handleComboValidate(keys string, jsonOutput bool) int {
@@ -918,7 +976,7 @@ func stdinIsTerminal() bool {
 
 func (a *App) openComboStudio(store *combos.Store, serial string) int {
 	if a.ComboStudioFn == nil {
-		return a.listCombos(store, false)
+		return a.listCombos(store, false, "")
 	}
 	send := func(combo combos.Combo) error {
 		gw, err := a.GatewayFactory(serial)
@@ -934,19 +992,37 @@ func (a *App) openComboStudio(store *combos.Store, serial string) int {
 	return 0
 }
 
-func (a *App) listCombos(store *combos.Store, jsonOutput bool) int {
+func (a *App) listCombos(store *combos.Store, jsonOutput bool, osFilter string) int {
 	list, err := store.Load()
 	if err != nil {
 		fmt.Fprintf(a.Stderr, "Error: %v\n", err)
 		return 1
+	}
+	if osFilter != "" {
+		filtered := make([]combos.Combo, 0, len(list))
+		for _, c := range list {
+			if combos.NormalizeOSDefault(c.OS) == osFilter {
+				filtered = append(filtered, c)
+			}
+		}
+		list = filtered
 	}
 	if jsonOutput {
 		writeJSONIndent(a.Stdout, list)
 		return 0
 	}
 
-	fmt.Fprintln(a.Stdout, "\n🎹 COMBO STUDIO · Windows keyboard + mouse + variables")
+	title := "🎹 COMBO STUDIO · Windows keyboard + mouse + variables"
+	if osFilter != "" {
+		title += " · " + combos.OSLabel(osFilter)
+	}
+	fmt.Fprintln(a.Stdout, "\n"+title)
 	if len(list) == 0 {
+		if osFilter != "" {
+			fmt.Fprintf(a.Stdout, "  No combos tagged for %s.\n", combos.OSLabel(osFilter))
+			fmt.Fprintln(a.Stdout)
+			return 0
+		}
 		fmt.Fprintln(a.Stdout, "  No combos saved yet.")
 		fmt.Fprintln(a.Stdout, "  Create one with 'ghid combo' (interactive) or:")
 		fmt.Fprintln(a.Stdout, "    ghid combo save \"Open Run\" \"win+r\"")
@@ -958,23 +1034,20 @@ func (a *App) listCombos(store *combos.Store, jsonOutput bool) int {
 		if c.Favorite {
 			favIcon = "❤️ "
 		}
-		emojiStr := ""
-		if c.Emoji != "" {
-			emojiStr = c.Emoji + " "
-		}
-		nameWithEmoji := emojiStr + c.Name
-		nameWidth := runewidth.StringWidth(nameWithEmoji)
+		osTag := "[" + combos.OSShortTag(c.OS) + "]"
+		nameWithOS := osTag + " " + c.Name
+		nameWidth := runewidth.StringWidth(nameWithOS)
 		namePad := ""
-		if nameWidth < 24 {
-			namePad = strings.Repeat(" ", 24-nameWidth)
+		if nameWidth < 26 {
+			namePad = strings.Repeat(" ", 26-nameWidth)
 		}
 		descStr := ""
 		if c.Description != "" {
 			descStr = fmt.Sprintf(" (%s)", c.Description)
 		}
-		fmt.Fprintf(a.Stdout, "  %2d. %s%s%s %-26s%s\n", i+1, favIcon, nameWithEmoji, namePad, c.Keys, descStr)
+		fmt.Fprintf(a.Stdout, "  %2d. %s%s%s %-26s%s\n", i+1, favIcon, nameWithOS, namePad, c.Keys, descStr)
 	}
-	fmt.Fprintf(a.Stdout, "\n  Send one with 'ghid combo send <name>' or toggle favorite with 'ghid combo fav <name>'\n\n")
+	fmt.Fprintf(a.Stdout, "\n  Send one with 'ghid combo send <name>' or filter with 'ghid combo list --os macos'\n\n")
 	return 0
 }
 
@@ -1592,11 +1665,11 @@ Commands:
   lock              Instant Windows lock screen (Win + L)
   sleep             Windows sleep sequence + countdown exit
   combo [keys]      Interactive Windows combo studio (create, send, delete)
-  combo list        List saved combos (--json supported)
+  combo list [--os <os>]  List saved combos, optionally filtered by target OS (--json supported)
   combo fav <name>  Toggle favorite (pin with ❤️ to top of dashboard action list)
   combo schema      Grammar + every accepted token (JSON for AI agents)
   combo validate <keys>  Validate without saving or sending
-  combo save <name> <keys...> [--emoji <e>] [--desc <d>] [--fav]   Save a named combo (keyboard + mouse + text + $VAR)
+  combo save <name> <keys...> [--os windows|macos|linux] [--desc <d>] [--fav]   Save a named combo (keyboard + mouse + text + $VAR)
   combo send <name> Send a saved combo
   combo delete <name> [-f]      Delete a combo (--json skips confirmation)
   combo <keys>      Send a one-shot shortcut (e.g. 'win+d', 'ctrl+alt+del')

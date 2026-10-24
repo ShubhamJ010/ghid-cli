@@ -29,13 +29,18 @@ type Device struct {
 	Model  string `json:"model,omitempty"`
 }
 
+// GatewayStatus mirrors status.json on the Android host. OS fields come from
+// the passive fingerprinting engine (ADR-007) and stay empty on older builds.
 type GatewayStatus struct {
-	Registered bool   `json:"registered"`
-	Connected  bool   `json:"connected"`
-	State      string `json:"state"`
-	Target     string `json:"target"`
-	Address    string `json:"address"`
-	Updated    string `json:"updated"`
+	Registered      bool   `json:"registered"`
+	Connected       bool   `json:"connected"`
+	State           string `json:"state"`
+	Target          string `json:"target"`
+	Address         string `json:"address"`
+	OS              string `json:"os"`
+	OSConfidence    string `json:"os_confidence,omitempty"`
+	DetectionMethod string `json:"detection_method,omitempty"`
+	Updated         string `json:"updated"`
 }
 
 // DirectiveHandler is invoked when a combo encounters a !DIRECTIVE step.
@@ -371,6 +376,7 @@ func (m *Manager) GetStatus() GatewayStatus {
 		State:      "OFFLINE",
 		Target:     "none",
 		Address:    "none",
+		OS:         "unknown",
 		Updated:    "none",
 	}
 
@@ -383,6 +389,9 @@ func (m *Manager) GetStatus() GatewayStatus {
 	if strings.HasPrefix(out, "{") && strings.HasSuffix(out, "}") {
 		var status GatewayStatus
 		if err := json.Unmarshal([]byte(out), &status); err == nil {
+			if strings.TrimSpace(status.OS) == "" {
+				status.OS = "unknown"
+			}
 			return status
 		}
 	}

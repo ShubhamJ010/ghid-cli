@@ -1,6 +1,8 @@
 package combos
 
 import (
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -115,14 +117,14 @@ func TestStoreEnsureDefaultsAndFavorites(t *testing.T) {
 	for _, c := range list {
 		names[c.Name] = c
 	}
-	if c, ok := names["Login"]; !ok || !c.Favorite || c.Emoji != "🔑" || c.Description == "" {
-		t.Errorf("expected Login built-in with emoji and description, got %+v", c)
+	if c, ok := names["Login"]; !ok || !c.Favorite || c.OS != OSWindows || c.Description == "" {
+		t.Errorf("expected Login built-in with OS and description, got %+v", c)
 	}
-	if c, ok := names["Lock"]; !ok || !c.Favorite || c.Emoji != "🔒" || c.Description == "" {
-		t.Errorf("expected Lock built-in with emoji and description, got %+v", c)
+	if c, ok := names["Lock"]; !ok || !c.Favorite || c.OS != OSWindows || c.Description == "" {
+		t.Errorf("expected Lock built-in with OS and description, got %+v", c)
 	}
-	if c, ok := names["Sleep"]; !ok || !c.Favorite || c.Emoji != "🌙" || c.Description == "" {
-		t.Errorf("expected Sleep built-in with emoji and description, got %+v", c)
+	if c, ok := names["Sleep"]; !ok || !c.Favorite || c.OS != OSWindows || c.Description == "" {
+		t.Errorf("expected Sleep built-in with OS and description, got %+v", c)
 	}
 
 	favs, err := store.Favorites()
@@ -148,5 +150,92 @@ func TestStoreEnsureDefaultsAndFavorites(t *testing.T) {
 	updated, _ = store.Find("Login")
 	if !updated.Favorite {
 		t.Errorf("expected Login to be favorite again")
+	}
+}
+
+func TestNormalizeOS(t *testing.T) {
+	cases := []struct {
+		in      string
+		want    string
+		wantErr bool
+	}{
+		{"", OSWindows, false},
+		{"windows", OSWindows, false},
+		{"WIN", OSWindows, false},
+		{"macos", OSMacOS, false},
+		{"Mac", OSMacOS, false},
+		{"darwin", OSMacOS, false},
+		{"ubuntu", OSLinux, false},
+		{"Linux", OSLinux, false},
+		{"beos", "", true},
+	}
+	for _, tc := range cases {
+		got, err := NormalizeOS(tc.in)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("NormalizeOS(%q) expected an error", tc.in)
+			}
+			continue
+		}
+		if err != nil || got != tc.want {
+			t.Errorf("NormalizeOS(%q) = %q, %v; want %q", tc.in, got, err, tc.want)
+		}
+	}
+}
+
+func TestStoreAddKeepsOSAndRejectsUnknown(t *testing.T) {
+	store := NewStore(filepath.Join(t.TempDir(), "combos.json"))
+
+	if _, err := store.Add(Combo{Name: "Terminal", Keys: "ctrl+alt+t", OS: OSMacOS}); err != nil {
+		t.Fatalf("Add failed: %v", err)
+	}
+
+	// An update without an OS keeps the stored tag instead of resetting it.
+	list, err := store.Add(Combo{Name: "Terminal", Keys: "ctrl+alt+t ->{0.5} type:htop"})
+	if err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+	if list[0].OS != OSMacOS {
+		t.Fatalf("expected macOS to be preserved, got %q", list[0].OS)
+	}
+
+	if _, err := store.Add(Combo{Name: "Bogus", Keys: "win+r", OS: "beos"}); err == nil {
+		t.Fatal("expected unknown OS to be rejected")
+	}
+}
+
+func TestStoreMigratesLegacyEmojiCombos(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "combos.json")
+	legacy := `[{"name":"Old","keys":"win+r","emoji":"🚀","favorite":true,"created_at":"2026-10-20T10:00:00Z"}]`
+	if err := os.WriteFile(path, []byte(legacy), 0600); err != nil {
+		t.Fatalf("write legacy file: %v", err)
+	}
+
+	store := NewStore(path)
+	list, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if len(list) != 1 || list[0].OS != OSWindows {
+		t.Fatalf("legacy combo should migrate to windows, got %+v", list)
+	}
+
+	// Saving after migration writes the os field and drops emoji.
+	if _, err := store.Add(list[0]); err != nil {
+		t.Fatalf("Add failed: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	var raw []map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, hasEmoji := raw[0]["emoji"]; hasEmoji {
+		t.Error("emoji should no longer be persisted")
+	}
+	if raw[0]["os"] != OSWindows {
+		t.Errorf("expected os=windows, got %v", raw[0]["os"])
 	}
 }

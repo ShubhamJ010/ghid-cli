@@ -173,11 +173,14 @@ The service writes status snapshots to `/sdcard/Android/data/com.sj010.ghid_head
   "state": "CONNECTED",
   "target": "LP-TZD-0X114650",
   "address": "38:FC:98:E8:E3:87",
+  "os": "windows",
+  "os_confidence": "high",
+  "detection_method": "hid_led_handshake",
   "updated": "2026-03-28 14:15:22.104"
 }
 ```
 
-The host CLI inspects this file with `adb shell cat <path>` to verify readiness before dispatching keystrokes.
+The host CLI inspects this file with `adb shell cat <path>` to verify readiness before dispatching keystrokes. The Android UI also mirrors the passive host OS fingerprint (ADR-007) into its own `status.json`, from which it picks the OS logo, the default combo filter, and the pinned/most-used scoping.
 
 ---
 

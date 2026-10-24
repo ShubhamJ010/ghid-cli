@@ -28,9 +28,18 @@ Inspects live connection status between phone and target computer.
   "state": "CONNECTED",
   "target": "LP-TZD-0X114650",
   "address": "38:FC:98:E8:E3:87",
+  "os": "windows",
+  "os_confidence": "high",
+  "detection_method": "hid_led_handshake",
   "updated": "2026-10-23 01:15:30.122"
 }
 ```
+
+`os` is the passively fingerprinted host (`windows`, `macos`, `linux`, or `unknown`).
+`os_confidence` is `high`, `medium`, `low`, or `none`; `detection_method` is one of
+`apple_oui`, `apple_sdp_uuid`, `hid_led_handshake`, `name_heuristic`, `fallback`,
+or `none`. Older Android builds omit all three fields; treat them as absent, not
+as an error.
 
 Exit code: `0` if `connected == true`, `1` if disconnected.
 
@@ -107,7 +116,10 @@ Returns the complete list of valid key tokens, modifier names, and mouse actions
     "!COMBO:SEND:<name>"
   ],
   "keyboard": ["win", "ctrl", "alt", "shift", "enter", "esc", "tab", "space", "..."],
-  "mouse": ["click-left", "click-right", "click-middle", "double-click", "scroll-up", "scroll-down"]
+  "mouse": ["click-left", "click-right", "click-middle", "double-click", "scroll-up", "scroll-down"],
+  "os_tags": ["windows", "macos", "linux"],
+  "default_os": "windows",
+  "os_note": "The win token is the HID GUI modifier: Windows/Linux Super, macOS Command."
 }
 ```
 
@@ -151,7 +163,7 @@ Returns all saved combos in the local library (`~/.config/ghid/combos.json`).
   {
     "name": "Login",
     "keys": "ctrl+alt+del ->{1.0} esc ->{0.8} $USERNAME ->{0.8} tab ->{0.8} $PASSWORD ->{0.8} enter",
-    "emoji": "🔑",
+    "os": "windows",
     "description": "Windows unlock & credential injection",
     "favorite": true,
     "created_at": "2026-10-23T01:00:00Z"
@@ -159,7 +171,7 @@ Returns all saved combos in the local library (`~/.config/ghid/combos.json`).
   {
     "name": "Lock",
     "keys": "win+l",
-    "emoji": "🔒",
+    "os": "windows",
     "description": "Instant Windows lock screen (Win + L)",
     "favorite": true,
     "created_at": "2026-10-23T01:00:00Z"
@@ -167,13 +179,19 @@ Returns all saved combos in the local library (`~/.config/ghid/combos.json`).
   {
     "name": "Sleep",
     "keys": "win+x ->{0.5} u ->{0.3} s ->{5.0} !DISCONNECT ->{0.5} !EXIT",
-    "emoji": "🌙",
+    "os": "windows",
     "description": "Windows sleep sequence + countdown exit",
     "favorite": true,
     "created_at": "2026-10-23T01:00:00Z"
   }
 ]
 ```
+
+Filter the library by target OS with `ghid combo list --os macos --json`.
+Combos saved before OS tagging existed report `os: "windows"`. Tag a combo at
+save time with `--os windows|macos|linux`; without the flag, updates keep the
+existing tag. The same `os` value selects the matching filters and profile in
+the Android app.
 
 ---
 

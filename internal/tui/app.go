@@ -203,14 +203,11 @@ func (m *Model) refreshMenuItems() {
 	var items []MenuItem
 	idx := 1
 
-	// Pinned favorite combos at the top with emoji & description or fallback
+	// Pinned favorite combos at the top, badged with their target OS and description.
 	if m.combosStore != nil {
 		favs, _ := m.combosStore.Favorites()
 		for _, f := range favs {
-			icon := f.Emoji
-			if icon == "" {
-				icon = "❤️"
-			}
+			icon := "[" + combos.OSShortTag(f.OS) + "]"
 			desc := f.Description
 			if desc == "" {
 				desc = f.Keys
@@ -694,7 +691,7 @@ func (m Model) triggerAction(action string) (tea.Model, tea.Cmd) {
 				return m.executeCombo(combo)
 			}
 		}
-		return m.executeCombo(combos.Combo{Name: "Lock", Keys: combos.DefaultLockKeys, Emoji: "🔒", Description: "Instant Windows lock screen (Win + L)"})
+		return m.executeCombo(combos.Combo{Name: "Lock", Keys: combos.DefaultLockKeys, OS: combos.OSWindows, Description: "Instant Windows lock screen (Win + L)"})
 
 	case "sleep":
 		if m.combosStore != nil {
@@ -702,7 +699,7 @@ func (m Model) triggerAction(action string) (tea.Model, tea.Cmd) {
 				return m.executeCombo(combo)
 			}
 		}
-		return m.executeCombo(combos.Combo{Name: "Sleep", Keys: combos.DefaultSleepKeys, Emoji: "🌙", Description: "Windows sleep sequence + countdown exit"})
+		return m.executeCombo(combos.Combo{Name: "Sleep", Keys: combos.DefaultSleepKeys, OS: combos.OSWindows, Description: "Windows sleep sequence + countdown exit"})
 
 	case "combo":
 		studio := NewComboStudioModel(m.combosStore, func(combo combos.Combo) error {

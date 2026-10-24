@@ -171,14 +171,16 @@ combo, \fBTab\fR focuses the SEND / NEW / DELETE buttons, \fBn\fR creates a
 named combo, and \fBDelete\fR removes one after a Y/N confirmation.
 .PP
 .RS 4
-\fBghid combo list\fR [\fB\-\-json\fR] \- list saved combos.
+\fBghid combo list\fR [\fB\-\-os\fR \fIwindows|macos|linux\fR] [\fB\-\-json\fR] \- list saved combos,
+optionally scoped to one target OS.
 .br
 \fBghid combo schema\fR [\fB\-\-json\fR] \- grammar and every accepted token.
 .br
 \fBghid combo validate\fR \fIkeys...\fR [\fB\-\-json\fR] \- parse without
 saving or sending; exits 1 when invalid.
 .br
-\fBghid combo save\fR \fIname\fR \fIkeys...\fR \- save a named combo.
+\fBghid combo save\fR \fIname\fR \fIkeys...\fR [\fB\-\-os\fR \fIwindows|macos|linux\fR] \- save a
+named combo tagged with its target OS (default \fIwindows\fR).
 .br
 \fBghid combo send\fR \fIname\fR \- send a saved combo.
 .br
@@ -200,6 +202,12 @@ such as \fIsemicolon\fR or \fIslash\fR. Type literal text with a
 with spaces as \fItype:"rust desk"\fR; printable ASCII only). Chain steps with
 \fI->{seconds}\fR, for example \fIwin+r ->{0.6} click-left\fR. macOS-only
 aliases (\fIcmd\fR, \fIsuper\fR, \fIoption\fR) are rejected.
+.PP
+Each combo carries an OS tag instead of an emoji icon: \fIwindows\fR, \fImacos\fR or
+\fIlinux\fR. The \fIwin\fR key token is the HID GUI modifier, so it acts as the
+Super key on Linux and Command on macOS. \fBghid status\fR reports the host OS
+detected passively by the Android app (\fIos\fR, \fIos_confidence\fR,
+\fIdetection_method\fR in \fB\-\-json\fR).
 .PP
 The combo library is stored in \fI~/.config/ghid/combos.json\fR. The mouse uses
 HID report ID 2, so re-pair the phone on Windows after updating the APK.

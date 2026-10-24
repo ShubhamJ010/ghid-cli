@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/ghost-hid/ghid/internal/combos"
 )
 
 func (m Model) View() string {
@@ -286,8 +287,8 @@ func (m Model) renderRegisterGuide() string {
 				"   'Bluetooth devices discovery' and change dropdown from Default to %s.\n"+
 				"2. Clear Stale Pairing: If your phone is listed under 'Other devices', click %s.\n"+
 				"3. Ensure SDP Ready: GhostHID foreground service must be running.\n"+
-				"4. Pair Device: Click %s ➔ %s. If 2 entries show, pick the one\n" +
-				"   with ⌨️ Keyboard icon (%s) [NOT audio/phone icon]. Confirm PIN.\n" +
+				"4. Pair Device: Click %s ➔ %s. If 2 entries show, pick the one\n"+
+				"   with ⌨️ Keyboard icon (%s) [NOT audio/phone icon]. Confirm PIN.\n"+
 				"5. Ready: Windows binds the device under 'Input (Mouse, keyboard & pen)'.",
 			NoticeStyle.Render("✦ CRITICAL WINDOWS CO-EXISTENCE RULE:"),
 			KeyBadgeStyle.Render("✦ STEP-BY-STEP PAIRING:"),
@@ -548,13 +549,11 @@ func (m Model) renderComboCountdown() string {
 		}
 	}
 
-	emoji := "⚡"
+	osTag := "[" + combos.OSShortTag("") + "]"
 	name := "Combo Sequence"
 	desc := ""
 	if m.execCombo != nil {
-		if m.execCombo.Emoji != "" {
-			emoji = m.execCombo.Emoji
-		}
+		osTag = "[" + combos.OSShortTag(m.execCombo.OS) + "]"
 		if m.execCombo.Name != "" {
 			name = m.execCombo.Name
 		}
@@ -583,7 +582,7 @@ func (m Model) renderComboCountdown() string {
 
 	content := fmt.Sprintf(
 		"%s %s\n\n%s\n\n%s\n\n%s\nRemaining: %.1fs\n\n%s",
-		emoji,
+		osTag,
 		TitleStyle.Render(name),
 		SubtitleStyle.Render(desc),
 		lipgloss.NewStyle().Foreground(ColorCyan).Bold(true).Render(stepInfo),

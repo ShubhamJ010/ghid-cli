@@ -161,7 +161,7 @@ func TestComboStudioSendButton(t *testing.T) {
 	}
 }
 
-func TestComboStudioCreateWithEmojiAndDescription(t *testing.T) {
+func TestComboStudioCreateWithOSAndDescription(t *testing.T) {
 	m, store := newTestStudio(t, nil)
 	nm, _ := m.Update(keyRune('n'))
 	m = nm.(ComboStudioModel)
@@ -169,8 +169,8 @@ func TestComboStudioCreateWithEmojiAndDescription(t *testing.T) {
 		t.Fatal("n should open the create form")
 	}
 
-	m.nameInput.SetValue("Login")
-	m.emojiInput.SetValue("🔑")
+	m.nameInput.SetValue("Unlock")
+	m.osInput.SetValue("macos")
 	m.descInput.SetValue("Windows unlock credentials")
 	m.keysInput.SetValue("ctrl+alt+del")
 
@@ -179,12 +179,12 @@ func TestComboStudioCreateWithEmojiAndDescription(t *testing.T) {
 	if len(m.list) != 1 {
 		t.Fatalf("expected 1 combo, got %d", len(m.list))
 	}
-	saved, ok := store.Find("Login")
+	saved, ok := store.Find("Unlock")
 	if !ok {
 		t.Fatal("saved combo not found in store")
 	}
-	if saved.Emoji != "🔑" {
-		t.Fatalf("expected emoji 🔑, got %q", saved.Emoji)
+	if saved.OS != combos.OSMacOS {
+		t.Fatalf("expected macos, got %q", saved.OS)
 	}
 	if saved.Description != "Windows unlock credentials" {
 		t.Fatalf("expected description 'Windows unlock credentials', got %q", saved.Description)
@@ -193,8 +193,8 @@ func TestComboStudioCreateWithEmojiAndDescription(t *testing.T) {
 	// Edit the combo and update description
 	nm, _ = m.Update(keyRune('e'))
 	m = nm.(ComboStudioModel)
-	if m.emojiInput.Value() != "🔑" {
-		t.Fatalf("edit form should populate emoji, got %q", m.emojiInput.Value())
+	if m.osInput.Value() != combos.OSMacOS {
+		t.Fatalf("edit form should populate os, got %q", m.osInput.Value())
 	}
 	if m.descInput.Value() != "Windows unlock credentials" {
 		t.Fatalf("edit form should populate description, got %q", m.descInput.Value())
@@ -204,12 +204,12 @@ func TestComboStudioCreateWithEmojiAndDescription(t *testing.T) {
 	nm, _ = m.saveCombo(false)
 	m = nm.(ComboStudioModel)
 
-	updated, _ := store.Find("Login")
+	updated, _ := store.Find("Unlock")
 	if updated.Description != "Updated credential injection" {
 		t.Fatalf("expected updated description, got %q", updated.Description)
 	}
-	if updated.Emoji != "🔑" {
-		t.Fatalf("emoji should be preserved, got %q", updated.Emoji)
+	if updated.OS != combos.OSMacOS {
+		t.Fatalf("os should be preserved, got %q", updated.OS)
 	}
 }
 
@@ -232,9 +232,9 @@ func TestComboStudioFormTabCycle(t *testing.T) {
 func TestComboStudioTableViewAlignment(t *testing.T) {
 	m, store := newTestStudio(t, nil)
 	store.Add(combos.Combo{Name: "Open RustDesk", Keys: "win+s ->{0.7} type:rustdesk", Favorite: false})
-	store.Add(combos.Combo{Name: "Login", Keys: "ctrl+alt+del ->{1.0} esc", Emoji: "🔑", Description: "Windows unlock & credential injection", Favorite: true})
-	store.Add(combos.Combo{Name: "Lock", Keys: "win+l", Emoji: "🔒", Description: "Instant Windows lock screen (Win + L)", Favorite: true})
-	store.Add(combos.Combo{Name: "Sleep", Keys: "win+x ->{0.5} u ->{0.3} s", Emoji: "🌙", Description: "Windows sleep sequence + countdown exit", Favorite: false})
+	store.Add(combos.Combo{Name: "Login", Keys: "ctrl+alt+del ->{1.0} esc", OS: combos.OSWindows, Description: "Windows unlock & credential injection", Favorite: true})
+	store.Add(combos.Combo{Name: "Lock", Keys: "win+l", OS: combos.OSWindows, Description: "Instant Windows lock screen (Win + L)", Favorite: true})
+	store.Add(combos.Combo{Name: "Sleep", Keys: "win+x ->{0.5} u ->{0.3} s", OS: combos.OSLinux, Description: "Linux sleep sequence + countdown exit", Favorite: false})
 	m.list, _ = store.Load()
 
 	view := m.View()
