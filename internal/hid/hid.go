@@ -91,11 +91,37 @@ func (r KeyReport) HexString() string {
 	return hex.EncodeToString(r[:])
 }
 
-// ValidateRaw validates that a string is a valid 16-character hex HID report.
+// Report ID constants
+const (
+	ReportIDKeyboard = 1
+	ReportIDMouse    = 2
+	ReportIDSystem   = 3
+	ReportIDConsumer = 4
+)
+
+// ReportIDForLength maps payload byte length to the appropriate HID report ID.
+func ReportIDForLength(byteLen int) (int, error) {
+	switch byteLen {
+	case 1:
+		return ReportIDSystem, nil
+	case 2:
+		return ReportIDConsumer, nil
+	case 4:
+		return ReportIDMouse, nil
+	case 8:
+		return ReportIDKeyboard, nil
+	default:
+		return 0, fmt.Errorf("invalid HID report size: %d bytes (supported: 1=System, 2=Consumer, 4=Mouse, 8=Keyboard)", byteLen)
+	}
+}
+
+// ValidateRaw validates that a string is a valid hex HID report (1, 2, 4, or 8 bytes).
 func ValidateRaw(hexStr string) ([]byte, error) {
 	trimmed := strings.TrimSpace(hexStr)
-	if len(trimmed) != 16 {
-		return nil, fmt.Errorf("raw report must be exactly 16 hex characters (8 bytes), got %d", len(trimmed))
+	switch len(trimmed) {
+	case 2, 4, 8, 16:
+	default:
+		return nil, fmt.Errorf("raw report must be 2 hex chars (1-byte system), 4 (2-byte consumer), 8 (4-byte mouse), or 16 (8-byte keyboard), got %d", len(trimmed))
 	}
 	bytes, err := hex.DecodeString(trimmed)
 	if err != nil {
@@ -273,6 +299,7 @@ type ComboStep struct {
 	Text      string        // Non-empty when this step types a literal string
 	Variable  string        // Non-empty when this step references a snippet variable, e.g. "USERNAME"
 	Directive string        // Non-empty when this step is an event directive, e.g. "!EXIT", "!DISCONNECT"
+	Raw       string        // Non-empty hex string when this step is a raw HID report
 	Delay     time.Duration // Pause duration after transmitting this step
 }
 

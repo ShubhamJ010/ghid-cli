@@ -26,9 +26,9 @@ Communication between the Android phone and the host computer uses two Logical L
 +-------------------------------------------------------------+
 ```
 
-### Dual-Report Input Structures
+### Composite Multi-Report Input Structures
 
-GhostHID registers a composite SDP descriptor (`SUBCLASS1_COMBO`, 0x50) that multiplexes keyboard and mouse reports using 1-byte Report IDs.
+GhostHID registers a composite SDP descriptor (`SUBCLASS1_COMBO`, 0x50) that multiplexes keyboard, mouse, system control, and consumer control reports using 1-byte Report IDs.
 
 #### Keyboard Input Report (Report ID 1)
 Total payload size: 8 bytes.
@@ -82,6 +82,47 @@ Examples:
 - Scroll wheel up: `00 00 00 01`
 - Scroll wheel down: `00 00 00 FF` (two's complement -1)
 - Release all mouse buttons: `00 00 00 00`
+
+#### System Control Input Report (Report ID 3)
+Total payload size: 1 byte. Usage Page 0x01 (Generic Desktop), Usage 0x80 (System Control).
+
+```text
+Byte 0: System Control Bitfield
+  Bit 0: System Power Down (0x01)
+  Bit 1: System Sleep      (0x02)
+  Bit 2: System Wake Up    (0x04)
+  Bits 3 to 7: Padding     (0x00)
+```
+
+Examples:
+- Instant System Sleep press: `02`
+- Release: `00`
+- Complete Sleep Sequence: `raw:02 ->{0.06} raw:00`
+
+#### Consumer Control Input Report (Report ID 4)
+Total payload size: 2 bytes (16-bit little-endian HID usage code). Usage Page 0x0C (Consumer), Usage 0x01 (Consumer Control).
+
+```text
+Bytes 0-1: 16-bit Consumer Usage Code (Little-Endian)
+```
+
+Examples:
+- Play/Pause toggle: `raw:cd00 ->{0.06} raw:0000` (Usage 0x00CD)
+- Scan Next Track: `raw:b500 ->{0.06} raw:0000` (Usage 0x00B5)
+- Scan Previous Track: `raw:b600 ->{0.06} raw:0000` (Usage 0x00B6)
+- Volume Increment: `raw:e900 ->{0.06} raw:0000` (Usage 0x00E9)
+- Volume Decrement: `raw:ea00 ->{0.06} raw:0000` (Usage 0x00EA)
+- Mute: `raw:e200 ->{0.06} raw:0000` (Usage 0x00E2)
+
+#### Auto-Inferred Length-Based Raw Report Routing
+Raw HID report payloads automatically infer the target Report ID from their byte length:
+
+| Byte Length | Hex Digits | Target Report ID | Target Collection | Typical Usage |
+|:---|:---|:---|:---|:---|
+| **1 byte** | 2 hex | **3** | System Control | Instant Sleep (`02`), Wake (`04`), Release (`00`) |
+| **2 bytes** | 4 hex | **4** | Consumer Control | Play/Pause (`cd00`), Volume (`e900`), Release (`0000`) |
+| **4 bytes** | 8 hex | **2** | Mouse Pointer | Mouse buttons and relative movement (`01000000`) |
+| **8 bytes** | 16 hex | **1** | Keyboard | Key modifiers and codes (`08000f0000000000`) |
 
 #### Keyboard LED Output Report
 The target host transmits 1-byte output reports to report lock key statuses:
@@ -211,10 +252,14 @@ Transmits a pointer gesture using Report ID 2.
 - Behavior: Sends a 4-byte button report, holds it for 48 ms, then sends a release report. `double-click` is two complete press/release cycles separated by a 90 ms gap, so Windows and macOS both synthesize a native double click instead of receiving a vendor-specific gesture. Relative motion is coalesced and split into ≤127-count reports, so fast drags are never clipped by the 8-bit HID field.
 
 #### `raw`
-Transmits an explicit 8-byte hexadecimal report.
-- Extras: `--es hex "<16_hex_characters>"`
-- Example: `--es hex "08000F0000000000"` (Win + L)
-- Behavior: Parses byte array and dispatches directly via `BluetoothHidDevice.sendReport(target, 1, bytes)`.
+Transmits an explicit hexadecimal raw HID report. The Report ID is auto-inferred from length (or overridden via `--ei id <N>`).
+- Extras: `--es hex "<hex>"` (2, 4, 8, or 16 hex characters), optional `--ei id <report_id>`
+- Examples:
+  - System Sleep: `--es hex "02"` (inferred Report ID 3)
+  - Play/Pause: `--es hex "cd00"` (inferred Report ID 4)
+  - Mouse Click: `--es hex "01000000"` (inferred Report ID 2)
+  - Win/Cmd + L: `--es hex "08000F0000000000"` (inferred Report ID 1)
+- Behavior: Dispatches report via `BluetoothHidDevice.sendReport(target, reportId, bytes)`.
 
 #### `stop`
 Gracefully cleans up Bluetooth resources and kills the Android foreground service.

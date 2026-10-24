@@ -201,12 +201,37 @@ func ParseActionSequence(input string) ([]ComboStep, error) {
 	return parseSequence(input, parseActionSegment)
 }
 
+func parseRawStep(segment string) (string, bool, error) {
+	trimmed := strings.TrimSpace(segment)
+	lower := strings.ToLower(trimmed)
+	if !strings.HasPrefix(lower, "raw:") {
+		return "", false, nil
+	}
+	hexPart := strings.TrimSpace(trimmed[4:])
+	if strings.Contains(hexPart, ":") {
+		parts := strings.SplitN(hexPart, ":", 2)
+		hexPart = strings.TrimSpace(parts[1])
+	}
+	cleanHex := strings.ReplaceAll(hexPart, " ", "")
+	if _, err := ValidateRaw(cleanHex); err != nil {
+		return "", true, err
+	}
+	return cleanHex, true, nil
+}
+
 func parseActionSegment(segment string) (ComboStep, error) {
 	if dir, ok, err := parseDirectiveStep(segment); ok {
 		if err != nil {
 			return ComboStep{}, err
 		}
 		return ComboStep{Combo: dir, Directive: dir}, nil
+	}
+
+	if raw, ok, err := parseRawStep(segment); ok {
+		if err != nil {
+			return ComboStep{}, err
+		}
+		return ComboStep{Combo: segment, Raw: raw}, nil
 	}
 
 	if varName, ok := parseVariableStep(segment); ok {
@@ -385,6 +410,9 @@ func DescribeSequence(input string) ([]StepDescription, error) {
 		case step.Text != "":
 			desc.Type = "text"
 			desc.Value = step.Text
+		case step.Raw != "":
+			desc.Type = "raw"
+			desc.Value = step.Raw
 		case step.Mouse != nil:
 			desc.Type = "mouse"
 			desc.Value = step.Mouse.Name

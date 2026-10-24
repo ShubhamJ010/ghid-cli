@@ -76,6 +76,35 @@ func TestComboRejectsMacOnlyKeys(t *testing.T) {
 	}
 }
 
+func TestComboAllowsMacKeysWhenTargetIsMacOS(t *testing.T) {
+	app, _, _, _, _, stderr := setupTestApp(t)
+	if code := app.Run([]string{"combo", "save", "Spotlight", "cmd+space", "--os", "macos", "--json"}); code != 0 {
+		t.Fatalf("saving macOS combo failed: %s", stderr.String())
+	}
+	c, found := app.comboStore().Find("Spotlight")
+	if !found {
+		t.Fatalf("expected Spotlight to be found in store")
+	}
+	if c.Keys != "cmd+space" || c.OS != "macos" {
+		t.Fatalf("unexpected combo stored: %+v", c)
+	}
+}
+
+func TestComboAllowsRawSequences(t *testing.T) {
+	app, _, _, _, _, stderr := setupTestApp(t)
+	keys := "raw:cd00 ->{0.06} raw:0000"
+	if code := app.Run([]string{"combo", "save", "PlayPause", keys, "--json"}); code != 0 {
+		t.Fatalf("saving raw combo failed: %s", stderr.String())
+	}
+	c, found := app.comboStore().Find("PlayPause")
+	if !found {
+		t.Fatalf("expected PlayPause to be found in store")
+	}
+	if c.Keys != keys {
+		t.Fatalf("unexpected combo stored: %+v", c)
+	}
+}
+
 func TestComboBareFallsBackToListingWithoutTTY(t *testing.T) {
 	app, _, _, _, stdout, _ := setupTestApp(t)
 	if code := app.Run([]string{"combo"}); code != 0 {

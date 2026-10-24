@@ -210,17 +210,24 @@ ghid lock
 ghid sleep --countdown 5
 ```
 
-### Quick Send: Keystroke Typing and Raw Reports (`quick`)
-Unified entry point for ad-hoc text typing and raw HID hex reports:
+### Quick Send: Keystroke Typing, Raw Reports & Media Control (`quick`)
+Unified entry point for ad-hoc text typing, composite action sequences, and raw HID reports.
+Target HID collection (Report ID) is automatically inferred from the payload length:
 
 ```bash
 # Type text through the virtual keyboard (default)
 ghid quick "git status"
 ghid quick "Administrator" --json
 
-# Transmit raw 8-byte HID report (16 hex chars)
-ghid quick --raw "08000f0000000000"
-ghid quick "raw:08000f0000000000" --json
+# Send composite sequences containing raw steps
+ghid quick "raw:cd00 ->{0.06} raw:0000" --json  # Consumer Play/Pause toggle
+ghid quick "raw:02 ->{0.06} raw:00" --json      # System Control Sleep
+
+# Transmit length-inferred raw HID reports directly
+ghid quick --raw "02"               # 1 byte  -> Report ID 3 (System Control: Sleep)
+ghid quick --raw "cd00"             # 2 bytes -> Report ID 4 (Consumer: Play/Pause)
+ghid quick --raw "01000000"         # 4 bytes -> Report ID 2 (Mouse: Left Click)
+ghid quick --raw "08000f0000000000" # 8 bytes -> Report ID 1 (Keyboard: Win/Cmd + L)
 ```
 
 ### Combo Macros and Mouse Gestures (`combo`)
@@ -250,12 +257,19 @@ ghid combo validate "win+s ->{0.7} type:rustdesk ->{0.4} enter" --json
 
 # Save a named combo for a host OS (updates if already exists)
 ghid combo save "Open RustDesk" "win+s ->{0.7} type:rustdesk ->{0.4} enter" --os windows --json
+ghid combo save "Spotlight" "cmd+space" --os macos --json
+ghid combo save "PlayPause" "raw:cd00 ->{0.06} raw:0000" --os macos --json
 
 # List saved combos, optionally scoped to one OS
 ghid combo list --json
 ghid combo list --os macos --json
 
-# Send a saved combo by name
+# Built-in macOS shortcuts
+ghid combo send "MacSleep" --json      # cmd+ctrl+q ->{0.5} esc (Locks screen & sleeps display)
+ghid combo send "ForceQuit" --json     # cmd+opt+esc ->{0.4} enter ->{0.3} enter (Force quits frontmost app)
+ghid combo send "PlayPause" --json     # raw:cd00 ->{0.06} raw:0000 (Consumer Control toggle)
+
+# Send any saved combo by name
 ghid combo send "Open RustDesk" --json
 
 # Delete a saved combo

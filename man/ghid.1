@@ -192,16 +192,18 @@ named combo tagged with its target OS (default \fIwindows\fR).
 \fIclick-middle\fR, \fIdouble-click\fR, \fIscroll-up\fR, \fIscroll-down\fR.
 .RE
 .PP
-Keyboard tokens cover real Windows keys: \fIwin\fR, \fIctrl\fR, \fIalt\fR,
-\fIshift\fR, \fIa\fR\(en\fIz\fR, \fI0\fR\(en\fI9\fR, \fIf1\fR\(en\fIf12\fR,
+Keyboard tokens cover standard keys across operating systems: \fIwin\fR, \fIcmd\fR,
+\fIcommand\fR, \fIctrl\fR, \fIalt\fR, \fIopt\fR, \fIoption\fR, \fIshift\fR,
+\fIa\fR\(en\fIz\fR, \fI0\fR\(en\fI9\fR, \fIf1\fR\(en\fIf12\fR,
 \fIenter\fR, \fIesc\fR, \fItab\fR, \fIspace\fR, \fIbackspace\fR, \fIdel\fR,
 \fIinsert\fR, navigation keys, \fIprintscreen\fR, \fIcapslock\fR,
 \fInumlock\fR, \fIscrolllock\fR, \fIpause\fR, \fImenu\fR and punctuation names
 such as \fIsemicolon\fR or \fIslash\fR. Type literal text with a
 \fBtype:\fR step: \fIwin+s ->{0.7} type:rustdesk ->{0.3} enter\fR (quote text
-with spaces as \fItype:"rust desk"\fR; printable ASCII only). Chain steps with
-\fI->{seconds}\fR, for example \fIwin+r ->{0.6} click-left\fR. macOS-only
-aliases (\fIcmd\fR, \fIsuper\fR, \fIoption\fR) are rejected.
+with spaces as \fItype:"rust desk"\fR; printable ASCII only). Chain raw HID reports
+with \fIraw:<hex>\fR, such as \fIraw:cd00 ->{0.06} raw:0000\fR (Play/Pause).
+Chain steps with \fI->{seconds}\fR. macOS modifier aliases (\fIcmd\fR, \fIopt\fR)
+are accepted for macOS targets and mapped to native GUI and Alt masks.
 .PP
 Each combo carries an OS tag instead of an emoji icon: \fIwindows\fR, \fImacos\fR or
 \fIlinux\fR. The \fIwin\fR key token is the HID GUI modifier, so it acts as the
@@ -217,10 +219,11 @@ errors are emitted as JSON on stdout with exit code 1, and \fBcombo delete\fR
 skips the confirmation prompt. Use \fBcombo schema \-\-json\fR to enumerate
 supported keys and gestures, then \fBcombo validate\fR before \fBcombo save\fR.
 .TP
-.B raw \fIhex16\fR
-Send raw 8-byte (16 hex character) USB HID keyboard report.
-Byte 0 is modifier bitmap, Byte 1 is reserved (0x00), Bytes 2\(en7
-are keycode array.
+.B quick \fB\-\-raw\fR \fIhex\fR
+Send a raw HID report. The target HID Report ID is automatically inferred
+from payload byte length: 1 byte (2 hex) for System Control (Report ID 3),
+2 bytes (4 hex) for Consumer Control (Report ID 4), 4 bytes (8 hex) for
+Mouse (Report ID 2), and 8 bytes (16 hex) for Keyboard (Report ID 1).
 .TP
 .B creds \fR{\fBstatus\fR|\fBset\fR|\fBclear\fR} [\fB\-u\fR \fIuser\fR] [\fB\-p\fR \fIpass\fR]
 Manage stored login credentials inside secure macOS Keychain

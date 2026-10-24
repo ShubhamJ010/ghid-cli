@@ -30,9 +30,6 @@ func TestValidate(t *testing.T) {
 
 	invalid := []string{
 		"",
-		"cmd+space",
-		"super+l",
-		"option+tab",
 		"hyper+q",
 		"click:left",
 		"type:",
@@ -110,8 +107,8 @@ func TestStoreEnsureDefaultsAndFavorites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnsureDefaults failed: %v", err)
 	}
-	if len(list) != 3 {
-		t.Fatalf("expected 3 default combos (Login, Lock, Sleep), got %d", len(list))
+	if len(list) != 6 {
+		t.Fatalf("expected 6 default combos (3 Windows + 3 macOS), got %d", len(list))
 	}
 	names := map[string]Combo{}
 	for _, c := range list {
@@ -126,10 +123,19 @@ func TestStoreEnsureDefaultsAndFavorites(t *testing.T) {
 	if c, ok := names["Sleep"]; !ok || !c.Favorite || c.OS != OSWindows || c.Description == "" {
 		t.Errorf("expected Sleep built-in with OS and description, got %+v", c)
 	}
+	if c, ok := names["MacSleep"]; !ok || !c.Favorite || c.OS != OSMacOS || c.Description == "" {
+		t.Errorf("expected MacSleep built-in with OS and description, got %+v", c)
+	}
+	if c, ok := names["ForceQuit"]; !ok || !c.Favorite || c.OS != OSMacOS || c.Description == "" {
+		t.Errorf("expected ForceQuit built-in with OS and description, got %+v", c)
+	}
+	if c, ok := names["PlayPause"]; !ok || !c.Favorite || c.OS != OSMacOS || c.Description == "" {
+		t.Errorf("expected PlayPause built-in with OS and description, got %+v", c)
+	}
 
 	favs, err := store.Favorites()
-	if err != nil || len(favs) != 3 {
-		t.Errorf("expected 3 favorites, got %d: %+v", len(favs), favs)
+	if err != nil || len(favs) != 6 {
+		t.Errorf("expected 6 favorites, got %d: %+v", len(favs), favs)
 	}
 
 	// Toggle favorite
@@ -237,5 +243,20 @@ func TestStoreMigratesLegacyEmojiCombos(t *testing.T) {
 	}
 	if raw[0]["os"] != OSWindows {
 		t.Errorf("expected os=windows, got %v", raw[0]["os"])
+	}
+}
+
+func TestValidateForOS(t *testing.T) {
+	macKeys := []string{
+		"cmd+space",
+		"super+l",
+		"option+tab",
+		"raw:cd00 ->{0.06} raw:0000",
+		"ctrl+cmd+q",
+	}
+	for _, keys := range macKeys {
+		if err := ValidateForOS(keys, OSMacOS); err != nil {
+			t.Errorf("ValidateForOS(%q, macos) unexpected error: %v", keys, err)
+		}
 	}
 }

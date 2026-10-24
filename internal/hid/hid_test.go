@@ -186,21 +186,40 @@ func TestParseComboSequence(t *testing.T) {
 }
 
 func TestValidateRaw(t *testing.T) {
-	valid := "08000f0000000000"
-	b, err := ValidateRaw(valid)
-	if err != nil {
-		t.Fatalf("ValidateRaw(%q) unexpected error: %v", valid, err)
-	}
-	if len(b) != 8 {
-		t.Errorf("expected 8 bytes, got %d", len(b))
-	}
-	if b[0] != 0x08 || b[2] != 0x0F {
-		t.Errorf("byte contents mismatch: %v", b)
+	tests := []struct {
+		hexStr   string
+		wantLen  int
+		wantID   int
+	}{
+		{"02", 1, ReportIDSystem},
+		{"cd00", 2, ReportIDConsumer},
+		{"01000000", 4, ReportIDMouse},
+		{"08000f0000000000", 8, ReportIDKeyboard},
 	}
 
-	// Invalid length
-	if _, err := ValidateRaw("08000f"); err == nil {
-		t.Errorf("expected error for short hex string")
+	for _, tt := range tests {
+		b, err := ValidateRaw(tt.hexStr)
+		if err != nil {
+			t.Fatalf("ValidateRaw(%q) unexpected error: %v", tt.hexStr, err)
+		}
+		if len(b) != tt.wantLen {
+			t.Errorf("ValidateRaw(%q) got %d bytes, want %d", tt.hexStr, len(b), tt.wantLen)
+		}
+		id, err := ReportIDForLength(len(b))
+		if err != nil {
+			t.Fatalf("ReportIDForLength(%d) unexpected error: %v", len(b), err)
+		}
+		if id != tt.wantID {
+			t.Errorf("ReportIDForLength(%d) = %d, want %d", len(b), id, tt.wantID)
+		}
+	}
+
+	// Invalid lengths (3 bytes = 6 hex, 5 bytes = 10 hex, etc.)
+	invalidLengths := []string{"08000f", "08000f0000", "010"}
+	for _, inv := range invalidLengths {
+		if _, err := ValidateRaw(inv); err == nil {
+			t.Errorf("expected error for invalid hex length %q", inv)
+		}
 	}
 
 	// Invalid characters

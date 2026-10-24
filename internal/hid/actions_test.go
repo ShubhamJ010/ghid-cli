@@ -50,6 +50,28 @@ func TestWindowsKeyTokens(t *testing.T) {
 	}
 }
 
+func TestParseActionSequenceRaw(t *testing.T) {
+	steps, err := ParseActionSequence("raw:02 ->{0.06} raw:00 -> raw:cd00 ->{0.05} raw:0000")
+	if err != nil {
+		t.Fatalf("ParseActionSequence raw failed: %v", err)
+	}
+	if len(steps) != 4 {
+		t.Fatalf("expected 4 steps, got %d", len(steps))
+	}
+	if steps[0].Raw != "02" {
+		t.Errorf("expected raw:02, got %q", steps[0].Raw)
+	}
+	if steps[1].Raw != "00" {
+		t.Errorf("expected raw:00, got %q", steps[1].Raw)
+	}
+	if steps[2].Raw != "cd00" {
+		t.Errorf("expected raw:cd00, got %q", steps[2].Raw)
+	}
+	if steps[3].Raw != "0000" {
+		t.Errorf("expected raw:0000, got %q", steps[3].Raw)
+	}
+}
+
 func TestParseWindowsPunctuation(t *testing.T) {
 	tests := map[string]byte{
 		"capslock":    KeyCapsLock,

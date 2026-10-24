@@ -16,11 +16,11 @@ import (
 const (
 	PackageName      = "com.sj010.ghid_headless"
 	ServiceName      = "com.sj010.ghid_headless/.HidService"
-	ReceiverName     = "com.sj010.ghid_headless/.HidCommandReceiver"
-	ActionCmd        = "com.sj010.ghid_headless.ACTION_CMD"
-	ActionLock       = "com.sj010.ghid_headless.ACTION_LOCK"
+	ReceiverName     = "com.sj010.ghid/.service.HidCommandReceiver"
+	ActionCmd        = "com.sj010.ghid.ACTION_CMD"
+	ActionLock       = "com.sj010.ghid.ACTION_LOCK"
 	StatusFileRemote = "/sdcard/Android/data/com.sj010.ghid_headless/files/status.json"
-	LogFileRemote    = "/sdcard/Android/data/com.sj010.ghid_headless/files/gateway.log"
+	LogFileRemote    = "/sdcard/Android/data/com.sj010.ghid/files/gateway.log"
 )
 
 type Device struct {
@@ -381,8 +381,18 @@ func (m *Manager) GetStatus() GatewayStatus {
 	}
 
 	out, err := m.Run("shell", "cat", StatusFileRemote)
-	if err != nil {
-		return fallback
+	if err != nil || !strings.HasPrefix(strings.TrimSpace(out), "{") {
+		// Try active modernized app path if headless path didn't return json
+		altPath := "/sdcard/Android/data/com.sj010.ghid/files/status.json"
+		if StatusFileRemote == altPath {
+			altPath = "/sdcard/Android/data/com.sj010.ghid_headless/files/status.json"
+		}
+		if altOut, altErr := m.Run("shell", "cat", altPath); altErr == nil && strings.HasPrefix(strings.TrimSpace(altOut), "{") {
+			out = altOut
+			err = nil
+		} else if err != nil {
+			return fallback
+		}
 	}
 
 	out = strings.TrimSpace(out)
@@ -480,6 +490,10 @@ func (m *Manager) SendComboWithResolver(keys string, resolver func(string) (stri
 			if err := m.TypeText(val); err != nil {
 				return err
 			}
+		} else if step.Raw != "" {
+			if err := m.SendRaw(step.Raw); err != nil {
+				return err
+			}
 		} else if step.Text != "" {
 			text := step.Text
 			if resolver != nil {
@@ -563,10 +577,21 @@ func (m *Manager) TypeText(text string) error {
 }
 
 func (m *Manager) SendRaw(hexReport string) error {
-	if len(hexReport) != 16 {
-		return fmt.Errorf("raw report must be exactly 16 hex characters (8 bytes), got %d", len(hexReport))
+	cleanHex := strings.ReplaceAll(hexReport, " ", "")
+	if _, err := hid.ValidateRaw(cleanHex); err != nil {
+		return err
 	}
-	_, err := m.Run("shell", "am", "broadcast", "-n", ReceiverName, "-a", ActionCmd, "--es", "cmd", "raw", "--es", "hex", hexReport)
+	_, err := m.Run("shell", "am", "broadcast", "-n", ReceiverName, "-a", ActionCmd, "--es", "cmd", "raw", "--es", "hex", cleanHex)
+	return err
+}
+
+func (m *Manager) SendInstantSleep() error {
+	_, err := m.Run("shell", "am", "broadcast", "-n", ReceiverName, "-a", ActionCmd, "--es", "cmd", "sleep")
+	return err
+}
+
+func (m *Manager) SendMediaKey(key string) error {
+	_, err := m.Run("shell", "am", "broadcast", "-n", ReceiverName, "-a", ActionCmd, "--es", "cmd", "media", "--es", "key", key)
 	return err
 }
 

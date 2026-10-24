@@ -313,13 +313,24 @@ public class HidService extends Service {
     }
 
     public void sendRawReport(byte[] report) {
+        int reportId = 1;
+        if (report != null) {
+            if (report.length == 1) reportId = 3;
+            else if (report.length == 2) reportId = 4;
+            else if (report.length == 4) reportId = 2;
+            else if (report.length == 8) reportId = 1;
+        }
+        sendRawReport(reportId, report);
+    }
+
+    public void sendRawReport(int reportId, byte[] report) {
         if (mHidDevice == null || mTargetDevice == null || report == null) {
             log("Cannot send raw report: device not ready");
             return;
         }
         mExecutor.execute(() -> {
-            boolean ok = mHidDevice.sendReport(mTargetDevice, 1, report);
-            log("sendRawReport(" + bytesToHex(report) + ") -> " + ok);
+            boolean ok = mHidDevice.sendReport(mTargetDevice, reportId, report);
+            log("sendRawReport(id=" + reportId + ", " + bytesToHex(report) + ") -> " + ok);
         });
     }
 
@@ -632,8 +643,16 @@ public class HidService extends Service {
                 sendMouse(intent.getStringExtra("action"));
             } else if ("raw".equalsIgnoreCase(cmd)) {
                 String hex = intent.getStringExtra("hex");
-                if (hex != null && hex.length() == 16) {
-                    sendRawReport(hexToBytes(hex));
+                if (hex != null) {
+                    String cleanHex = hex.replace(" ", "");
+                    if (cleanHex.length() % 2 == 0) {
+                        byte[] bytes = hexToBytes(cleanHex);
+                        if (intent.hasExtra("id")) {
+                            sendRawReport(intent.getIntExtra("id", 1), bytes);
+                        } else {
+                            sendRawReport(bytes);
+                        }
+                    }
                 }
             } else if ("connect".equalsIgnoreCase(cmd)) {
                 connectTarget(intent.getStringExtra("address"));

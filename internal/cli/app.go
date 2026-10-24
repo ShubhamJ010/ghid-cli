@@ -496,6 +496,64 @@ func (a *App) handleSleep(serial string, args []string, jsonOutput bool) int {
 	return a.dispatchCombo(serial, "Sleep", sleepKeys, jsonOutput)
 }
 
+func (a *App) handleRaw(serial string, args []string, jsonOutput bool) int {
+	if len(args) == 0 {
+		if jsonOutput {
+			res, _ := json.Marshal(map[string]interface{}{"status": "error", "error": "usage: ghid raw <hex>"})
+			fmt.Fprintln(a.Stdout, string(res))
+		} else {
+			fmt.Fprintf(a.Stderr, "Usage: ghid raw <hex>\n  2 hex chars (1 byte)  -> Report 3 (System Control / Sleep)\n  4 hex chars (2 bytes) -> Report 4 (Consumer / Media)\n  8 hex chars (4 bytes) -> Report 2 (Mouse)\n  16 hex chars (8 bytes)-> Report 1 (Keyboard)\n")
+		}
+		return 1
+	}
+	cleanHex := strings.ReplaceAll(strings.Join(args, ""), " ", "")
+	rawBytes, err := hid.ValidateRaw(cleanHex)
+	if err != nil {
+		if jsonOutput {
+			res, _ := json.Marshal(map[string]interface{}{"status": "error", "error": err.Error()})
+			fmt.Fprintln(a.Stdout, string(res))
+		} else {
+			fmt.Fprintf(a.Stderr, "Error: %v\n", err)
+		}
+		return 1
+	}
+	reportID, _ := hid.ReportIDForLength(len(rawBytes))
+
+	gw, err := a.GatewayFactory(serial)
+	if err != nil {
+		if jsonOutput {
+			res, _ := json.Marshal(map[string]interface{}{"status": "error", "error": err.Error()})
+			fmt.Fprintln(a.Stdout, string(res))
+		} else {
+			fmt.Fprintf(a.Stderr, "Error: %v\n", err)
+		}
+		return 1
+	}
+
+	if err := gw.Raw(cleanHex); err != nil {
+		if jsonOutput {
+			res, _ := json.Marshal(map[string]interface{}{"status": "error", "error": err.Error()})
+			fmt.Fprintln(a.Stdout, string(res))
+		} else {
+			fmt.Fprintf(a.Stderr, "Raw report failed: %v\n", err)
+		}
+		return 1
+	}
+
+	if jsonOutput {
+		res, _ := json.Marshal(map[string]interface{}{
+			"status":    "success",
+			"raw":       cleanHex,
+			"report_id": reportID,
+			"bytes":     len(rawBytes),
+		})
+		fmt.Fprintln(a.Stdout, string(res))
+	} else {
+		fmt.Fprintf(a.Stdout, "✔ Dispatched raw HID report %s (Report ID %d, %d bytes)\n", cleanHex, reportID, len(rawBytes))
+	}
+	return 0
+}
+
 func (a *App) handleQuick(serial string, args []string, jsonOutput bool) int {
 	if len(args) == 0 {
 		fmt.Fprintf(a.Stderr, "Usage: ghid quick <text...> or ghid quick --raw <16-hex-chars>\n")
@@ -518,6 +576,9 @@ func (a *App) handleQuick(serial string, args []string, jsonOutput bool) int {
 	}
 
 	payload := strings.Join(filtered, " ")
+	if !isRaw && strings.Contains(payload, "->") {
+		return a.dispatchCombo(serial, "", payload, jsonOutput)
+	}
 	if !isRaw && strings.HasPrefix(strings.ToLower(payload), "raw:") {
 		isRaw = true
 		payload = strings.TrimSpace(payload[4:])
@@ -539,15 +600,17 @@ func (a *App) handleQuick(serial string, args []string, jsonOutput bool) int {
 
 	if isRaw {
 		cleanHex := strings.ReplaceAll(payload, " ", "")
-		if len(cleanHex) != 16 {
+		rawBytes, valErr := hid.ValidateRaw(cleanHex)
+		if valErr != nil {
 			if jsonOutput {
-				res, _ := json.Marshal(map[string]interface{}{"status": "error", "error": "raw HID report must be exactly 16 hexadecimal characters (8 bytes)"})
+				res, _ := json.Marshal(map[string]interface{}{"status": "error", "error": valErr.Error()})
 				fmt.Fprintln(a.Stdout, string(res))
 			} else {
-				fmt.Fprintf(a.Stderr, "Error: Raw HID report must be exactly 16 hexadecimal characters (8 bytes), got %d: %q\n", len(cleanHex), cleanHex)
+				fmt.Fprintf(a.Stderr, "Error: %v\n", valErr)
 			}
 			return 1
 		}
+		reportID, _ := hid.ReportIDForLength(len(rawBytes))
 		err = gw.Raw(cleanHex)
 		if err != nil {
 			if jsonOutput {
@@ -559,10 +622,16 @@ func (a *App) handleQuick(serial string, args []string, jsonOutput bool) int {
 			return 1
 		}
 		if jsonOutput {
-			res, _ := json.Marshal(map[string]interface{}{"status": "success", "mode": "raw", "raw": cleanHex})
+			res, _ := json.Marshal(map[string]interface{}{
+				"status":    "success",
+				"mode":      "raw",
+				"raw":       cleanHex,
+				"report_id": reportID,
+				"bytes":     len(rawBytes),
+			})
 			fmt.Fprintln(a.Stdout, string(res))
 		} else {
-			fmt.Fprintf(a.Stdout, "✔ Dispatched raw HID report: %s\n", cleanHex)
+			fmt.Fprintf(a.Stdout, "✔ Dispatched raw HID report: %s (Report ID %d, %d bytes)\n", cleanHex, reportID, len(rawBytes))
 		}
 		return 0
 	}
@@ -1674,7 +1743,8 @@ Commands:
   combo delete <name> [-f]      Delete a combo (--json skips confirmation)
   combo <keys>      Send a one-shot shortcut (e.g. 'win+d', 'ctrl+alt+del')
   combo mouse       Send a mouse gesture (click-left, scroll-up, double-click)
-  quick <text...>   Quick send keystrokes (default: type; use --raw for 16-hex HID report)
+  raw <hex>         Send raw HID report with auto-inferred Report ID (1B, 2B, 4B, 8B)
+  quick <text...>   Quick send keystrokes (default: type; use --raw for hex HID report)
   connect [addr]    Connect Bluetooth to target laptop MAC
   disconnect        Disconnect Bluetooth HID
   unpair            Unpair phone Bluetooth bond

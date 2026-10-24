@@ -19,6 +19,10 @@ const (
 	DefaultLoginKeys = "ctrl+alt+del ->{1.0} esc ->{0.8} $USERNAME ->{0.8} tab ->{0.8} $PASSWORD ->{0.8} enter"
 	DefaultLockKeys  = "win+l"
 	DefaultSleepKeys = "win+x ->{0.5} u ->{0.3} s ->{5.0} !DISCONNECT ->{0.5} !EXIT"
+
+	DefaultMacSleepKeys     = "cmd+ctrl+q ->{0.5} esc"
+	DefaultMacForceQuitKeys = "cmd+opt+esc ->{0.4} enter ->{0.3} enter"
+	DefaultMacPlayPauseKeys = "raw:cd00 ->{0.06} raw:0000"
 )
 
 // Target operating systems a combo is written for. The tag drives the combo
@@ -117,6 +121,27 @@ var DefaultCombos = []Combo{
 		Keys:        DefaultSleepKeys,
 		OS:          OSWindows,
 		Description: "Windows sleep sequence + countdown exit",
+		Favorite:    true,
+	},
+	{
+		Name:        "MacSleep",
+		Keys:        DefaultMacSleepKeys,
+		OS:          OSMacOS,
+		Description: "Instant macOS lock and display sleep",
+		Favorite:    true,
+	},
+	{
+		Name:        "ForceQuit",
+		Keys:        DefaultMacForceQuitKeys,
+		OS:          OSMacOS,
+		Description: "Force quit frontmost unresponsive app",
+		Favorite:    true,
+	},
+	{
+		Name:        "PlayPause",
+		Keys:        DefaultMacPlayPauseKeys,
+		OS:          OSMacOS,
+		Description: "Consumer media play/pause toggle",
 		Favorite:    true,
 	},
 }
@@ -287,9 +312,16 @@ func ValidateName(name string) (string, error) {
 	return clean, nil
 }
 
-// Validate checks that every step is a real Windows keyboard chord, variable,
-// or one of the supported mouse gestures. macOS-only aliases are rejected on purpose.
+// Validate checks that every step is a real keyboard chord, variable, raw report,
+// or one of the supported mouse gestures. When validating without an explicit OS,
+// it validates against the default Windows keyboard layout (rejecting macOS-only aliases).
 func Validate(keys string) error {
+	return ValidateForOS(keys, OSWindows)
+}
+
+// ValidateForOS validates a combo sequence against a specific target operating system.
+// On macOS, aliases such as cmd, command, opt, and option are recognized as valid modifiers.
+func ValidateForOS(keys string, osName string) error {
 	steps, err := hid.ParseActionSequence(keys)
 	if err != nil {
 		if strings.Contains(err.Error(), "unknown key token") {
@@ -300,6 +332,8 @@ func Validate(keys string) error {
 	if len(steps) == 0 {
 		return errors.New("combo has no steps")
 	}
+
+	isMac := NormalizeOSDefault(osName) == OSMacOS
 
 	for _, step := range steps {
 		if step.Directive != "" {
@@ -316,15 +350,18 @@ func Validate(keys string) error {
 			}
 			continue
 		}
+		if step.Raw != "" {
+			continue
+		}
 		if step.Mouse != nil {
 			continue
 		}
 		for _, token := range strings.Split(step.Combo, "+") {
-			if !hid.IsWindowsKeyToken(token) {
-				trimmed := strings.TrimSpace(token)
-				if isMacAlias(trimmed) {
-					return fmt.Errorf("%q is a macOS key name; use a Windows key such as win, ctrl or alt", trimmed)
-				}
+			trimmed := strings.TrimSpace(token)
+			if !isMac && isMacAlias(trimmed) {
+				return fmt.Errorf("%q is a macOS key name; use a Windows key such as win, ctrl or alt", trimmed)
+			}
+			if !hid.IsWindowsKeyToken(trimmed) && !(isMac && isMacAlias(trimmed)) {
 				return fmt.Errorf("unknown Windows key %q", trimmed)
 			}
 		}
@@ -347,12 +384,12 @@ func (s *Store) Add(c Combo) ([]Combo, error) {
 	if err != nil {
 		return nil, err
 	}
-	keys := strings.TrimSpace(c.Keys)
-	if err := Validate(keys); err != nil {
-		return nil, err
-	}
 	osName, err := NormalizeOS(c.OS)
 	if err != nil {
+		return nil, err
+	}
+	keys := strings.TrimSpace(c.Keys)
+	if err := ValidateForOS(keys, osName); err != nil {
 		return nil, err
 	}
 	osSpecified := strings.TrimSpace(c.OS) != ""
