@@ -264,7 +264,8 @@ flowchart TD
 6. **`internal/vault`:** Abstracts credential storage. Uses `/usr/bin/security` on macOS with service name `ghost-hid` to save, fetch, and purge passwords securely.
 7. **`internal/config`:** Manages configuration parameters in `~/.config/ghid/config.json`, including registered target devices, active target device selection, and delay timings.
 8. **`internal/tui`:** Renders full-screen interactive consoles, full-screen **Combo Studio**, full-screen **Snippet Studio**, and the unified **Quick Send** modal using Bubble Tea, Bubbles text inputs, and Lip Gloss styling. Pins favorite combos at the top of the action list with heart badges (`❤️`).
-9. **`internal/cli`:** Command-line argument parser supporting dual execution modes: interactive TUI when invoked without arguments, and direct CLI subcommands (`quick`, `combo`, `snippets`, `doctor`, etc.) with comprehensive `--json` output. Root `type` and `raw` commands are cleanly superseded by `quick`.
+9. **`internal/cli`:** Command-line argument parser supporting dual execution modes: interactive TUI when invoked without arguments, and direct CLI subcommands (`quick`, `combo`, `snippets`, `sync`, `doctor`, etc.) with comprehensive `--json` output. Root `type` and `raw` commands are cleanly superseded by `quick`.
+10. **`internal/syncer`:** Manages bi-directional synchronization between the host workstation and Android device over ADB. Enforces Android as the Single Source of Truth (SSOT). Pulls remote state into local stores, strips secrets to preserve Android Keystore boundaries during push, and triggers non-disruptive app restarts followed by automatic Bluetooth reconnection.
 
 ---
 

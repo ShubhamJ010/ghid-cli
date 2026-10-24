@@ -42,6 +42,11 @@ GhostHID is built for headless operation and AI agents:
   - [ADR-002: Dual-Report HID Descriptor for Keyboard and Mouse](docs/decisions/ADR-002-dual-report-descriptor-for-keyboard-and-mouse.md)
   - [ADR-003: Charm TUI with Structured JSON API and Native Credential Vault](docs/decisions/ADR-003-charm-tui-with-json-agent-api-and-keychain-vault.md)
   - [ADR-004: Snippets Subsystem, Dynamic Combo Variables, and Unified Quick Send](docs/decisions/ADR-004-snippets-subsystem-and-quick-send.md)
+  - [ADR-005: Combo Metadata Directives and Unified Stepper Engine](docs/decisions/ADR-005-combo-metadata-directives-and-unified-stepper.md)
+  - [ADR-006: Standalone Android Material 3 Expressive UI with Bi-directional Shared State](docs/decisions/ADR-006-material3-expressive-android-ui-and-shared-state.md)
+  - [ADR-007: Passive Target Host OS Fingerprinting](docs/decisions/ADR-007-host-os-fingerprinting.md)
+  - [ADR-008: Composite HID Report Descriptor and Auto-Inferred Raw Dispatch](docs/decisions/ADR-008-composite-descriptor-and-auto-inferred-raw-dispatch.md)
+  - [ADR-009: Bi-directional Synchronization and Android as Single Source of Truth](docs/decisions/ADR-009-bidirectional-sync-and-android-ssot.md)
 
 ## Quick Start
 
@@ -208,6 +213,24 @@ ghid lock
 
 # Sleep sequence with 5-second countdown and zero-battery exit
 ghid sleep --countdown 5
+```
+
+### Bi-directional Sync (`sync`) & Android Single Source of Truth (SSOT)
+Android flash storage (`/sdcard/Android/data/com.sj010.ghid/files/`) is the authoritative Single Source of Truth (SSOT) for all combos and snippets.
+The CLI automatically pulls changes from the phone on startup (<15ms check), and any CLI modifications (`combo save/delete`, `snippets set/delete`) push directly to the phone, restart the app to reload in-memory state, and restore Bluetooth connectivity:
+
+```bash
+# Full bi-directional sync (pull from phone, merge additions, push back, restart & reconnect)
+ghid sync
+
+# Pull only (replaces local combo/snippet cache with phone state)
+ghid sync --pull
+
+# Push only (pushes local cache to phone, scrubs secrets, restarts app, reconnects)
+ghid sync --push
+
+# Machine-readable automation output
+ghid sync --json
 ```
 
 ### Quick Send: Keystroke Typing, Raw Reports & Media Control (`quick`)

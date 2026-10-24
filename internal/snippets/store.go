@@ -109,6 +109,13 @@ func (s *Store) List() ([]Snippet, error) {
 	return s.Load()
 }
 
+// SaveAll persists a complete list of snippets to disk, properly delegating secure values.
+func (s *Store) SaveAll(list []Snippet) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.save(list)
+}
+
 func (s *Store) save(list []Snippet) error {
 	if list == nil {
 		list = []Snippet{}

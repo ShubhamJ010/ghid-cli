@@ -194,6 +194,11 @@ func (s *Store) Load() ([]Combo, error) {
 	return list, nil
 }
 
+// SaveAll persists a complete list of combos to disk.
+func (s *Store) SaveAll(list []Combo) error {
+	return s.save(list)
+}
+
 func (s *Store) save(list []Combo) error {
 	if list == nil {
 		list = []Combo{}
