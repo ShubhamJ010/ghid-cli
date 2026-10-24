@@ -44,7 +44,7 @@ When controlling a target host (such as a MacBook Air or Windows workstation) vi
      - `ic_os_windows.xml` (Windows 4-pane logo)
      - `ic_os_linux.xml` (Linux penguin)
    - Encapsulated within `com.sj010.ghid.ui.common.os.OsGlyph(os: TargetOs, modifier, tint)`.
-   - Used consistently across Quick Send modal header, Trackpad Gestures Gallery header, Gestures Shade morphing dock, and Dashboard Pinned items.
+   - Used consistently across Quick Send modal header, Gestures Shade morphing dock, and Dashboard Pinned items.
 
 3. **Inset-Aware Shade Docking (`PullDownShade.kt` & `GesturesShade.kt`)**:
    - **Navigation Bar Inset Accounting**:
@@ -60,6 +60,6 @@ When controlling a target host (such as a MacBook Air or Windows workstation) vi
 ## Consequences
 
 - Full gesture support when targeting macOS (MacBook Air/Pro) without manual keycode remapping.
-- Cards in the Gestures Gallery dynamically display platform-accurate labels, descriptions, and shortcut chips (e.g. `Ctrl + ↑` vs `Win + Tab`).
+- Cards in the Gestures Gallery lead with the swipe the user performs (`Swipe Up`) and one platform-accurate action label (`Mission Control` vs `Task View`). Keyboard shortcut notation and prose descriptions are never rendered — the gallery only needs to answer "what does this swipe do".
 - Zero visual clipping or overlap on phones running edge-to-edge Android gesture navigation (e.g. OnePlus, Pixel, Samsung).
 - High-fidelity vector logos for macOS, Windows, and Linux across all application surfaces.
