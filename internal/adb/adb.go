@@ -14,13 +14,17 @@ import (
 )
 
 const (
-	PackageName      = "com.sj010.ghid_headless"
-	ServiceName      = "com.sj010.ghid_headless/.HidService"
-	ReceiverName     = "com.sj010.ghid/.service.HidCommandReceiver"
-	ActionCmd        = "com.sj010.ghid.ACTION_CMD"
-	ActionLock       = "com.sj010.ghid.ACTION_LOCK"
-	StatusFileRemote = "/sdcard/Android/data/com.sj010.ghid_headless/files/status.json"
-	LogFileRemote    = "/sdcard/Android/data/com.sj010.ghid/files/gateway.log"
+	PackageName           = "com.sj010.ghid_headless"
+	ServiceName           = "com.sj010.ghid_headless/.HidService"
+	ReceiverName          = "com.sj010.ghid/.service.HidCommandReceiver"
+	ActionCmd             = "com.sj010.ghid.ACTION_CMD"
+	ActionLock            = "com.sj010.ghid.ACTION_LOCK"
+	StatusFileRemote      = "/sdcard/Android/data/com.sj010.ghid_headless/files/status.json"
+	LogFileRemote         = "/sdcard/Android/data/com.sj010.ghid/files/gateway.log"
+	AppPackageName        = "com.sj010.ghid"
+	AppMainActivity       = "com.sj010.ghid/.MainActivity"
+	AppCombosFileRemote   = "/sdcard/Android/data/com.sj010.ghid/files/combos.json"
+	AppSnippetsFileRemote = "/sdcard/Android/data/com.sj010.ghid/files/snippets.json"
 )
 
 type Device struct {
@@ -354,6 +358,14 @@ func (m *Manager) StopGateway() error {
 	_, _ = m.Run("shell", "dumpsys", "deviceidle", "whitelist", "+"+PackageName)
 	_, _ = m.Run("shell", "am", "broadcast", "-n", ReceiverName, "-a", ActionCmd, "--es", "cmd", "stop")
 	_, err := m.Run("shell", "am", "stopservice", "-n", ServiceName)
+	return err
+}
+
+func (m *Manager) RestartAppAndReconnect() error {
+	_, _ = m.Run("shell", "am", "force-stop", AppPackageName)
+	_, _ = m.Run("shell", "am", "start", "-n", AppMainActivity)
+	time.Sleep(1500 * time.Millisecond)
+	_, err := m.Run("shell", "am", "broadcast", "-a", ActionCmd, "-n", ReceiverName, "--es", "cmd", "connect")
 	return err
 }
 

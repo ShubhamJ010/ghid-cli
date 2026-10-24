@@ -18,6 +18,7 @@ import (
 	"github.com/ghost-hid/ghid/internal/gateway"
 	"github.com/ghost-hid/ghid/internal/hid"
 	"github.com/ghost-hid/ghid/internal/snippets"
+	"github.com/ghost-hid/ghid/internal/syncer"
 	"github.com/ghost-hid/ghid/internal/tui"
 	"github.com/ghost-hid/ghid/internal/vault"
 	"github.com/mattn/go-runewidth"
@@ -42,9 +43,7 @@ func NewApp(version string) *App {
 	store := config.NewStore("")
 	vlt := vault.NewKeychainVault("")
 	cStore := combos.NewStore("")
-	_, _ = cStore.EnsureDefaults()
 	sStore := snippets.NewStore("", vlt)
-	_, _ = sStore.EnsureDefaults()
 
 	return &App{
 		Version:      version,
@@ -105,6 +104,15 @@ func (a *App) Run(args []string) int {
 		}
 	}
 
+	// Android is Single Source of Truth: if connected, auto-pull latest phone state on start
+	if mgr, err := adb.NewManager(serial); err == nil {
+		pulled := syncer.AutoPullIfConnected(mgr, a.ComboStore, a.SnippetStore)
+		if !pulled {
+			_, _ = a.ComboStore.EnsureDefaults()
+			_, _ = a.SnippetStore.EnsureDefaults()
+		}
+	}
+
 	if len(filteredArgs) == 0 {
 		return a.runInteractive(cfg, serial)
 	}
@@ -146,7 +154,7 @@ func (a *App) Run(args []string) int {
 		return a.handleQuick(serial, cmdArgs, jsonOutput)
 
 	case "snippets", "snippet":
-		return a.handleSnippets(cmdArgs, jsonOutput)
+		return a.handleSnippets(serial, cmdArgs, jsonOutput)
 
 	case "devices", "device":
 		return a.handleDevices(cfg, serial, cmdArgs, jsonOutput)
@@ -174,6 +182,9 @@ func (a *App) Run(args []string) int {
 
 	case "filelog":
 		return a.handleFileLog(serial)
+
+	case "sync":
+		return a.handleSync(serial, cmdArgs, jsonOutput)
 
 	case "build":
 		return a.handleBuild()
@@ -701,6 +712,9 @@ func (a *App) handleCombo(serial string, args []string, jsonOutput bool) int {
 				break
 			}
 		}
+		if mgr, err := adb.NewManager(serial); err == nil {
+			_ = syncer.AutoPushIfConnected(mgr, a.ComboStore, a.SnippetStore)
+		}
 		if jsonOutput {
 			writeJSONIndent(a.Stdout, map[string]interface{}{
 				"status":   "success",
@@ -712,7 +726,7 @@ func (a *App) handleCombo(serial string, args []string, jsonOutput bool) int {
 			if c.Favorite {
 				status = "pinned to favorites (❤️)"
 			}
-			fmt.Fprintf(a.Stdout, "✔ Combo %q is now %s\n", c.Name, status)
+			fmt.Fprintf(a.Stdout, "✔ Combo %q is now %s (synced to Android)\n", c.Name, status)
 		}
 		return 0
 
@@ -781,6 +795,9 @@ func (a *App) handleCombo(serial string, args []string, jsonOutput bool) int {
 		if err != nil {
 			return a.comboFail(jsonOutput, "%v", err)
 		}
+		if mgr, err := adb.NewManager(serial); err == nil {
+			_ = syncer.AutoPushIfConnected(mgr, a.ComboStore, a.SnippetStore)
+		}
 		if jsonOutput {
 			saved := combos.Combo{Name: name, Keys: keys, OS: normalizedOS, Description: description, Favorite: isFav}
 			for _, c := range list {
@@ -800,7 +817,7 @@ func (a *App) handleCombo(serial string, args []string, jsonOutput bool) int {
 				favMsg = " [pinned ❤️]"
 			}
 			osMsg := "[" + combos.OSLabel(normalizedOS) + "] "
-			fmt.Fprintf(a.Stdout, "✔ Saved combo %s%q (%s)%s\n", osMsg, name, keys, favMsg)
+			fmt.Fprintf(a.Stdout, "✔ Saved combo %s%q (%s)%s (synced to Android)\n", osMsg, name, keys, favMsg)
 		}
 		return 0
 
@@ -1120,7 +1137,7 @@ func (a *App) listCombos(store *combos.Store, jsonOutput bool, osFilter string) 
 	return 0
 }
 
-func (a *App) handleSnippets(args []string, jsonOutput bool) int {
+func (a *App) handleSnippets(serial string, args []string, jsonOutput bool) int {
 	store := a.snippetStore()
 	if len(args) == 0 {
 		args = []string{"list"}
@@ -1199,6 +1216,9 @@ func (a *App) handleSnippets(args []string, jsonOutput bool) int {
 			fmt.Fprintf(a.Stderr, "Error: %v\n", err)
 			return 1
 		}
+		if mgr, err := adb.NewManager(serial); err == nil {
+			_ = syncer.AutoPushIfConnected(mgr, a.ComboStore, a.SnippetStore)
+		}
 		if jsonOutput {
 			writeJSONIndent(a.Stdout, sn)
 		} else {
@@ -1229,10 +1249,13 @@ func (a *App) handleSnippets(args []string, jsonOutput bool) int {
 			fmt.Fprintf(a.Stderr, "Snippet %q not found.\n", name)
 			return 1
 		}
+		if mgr, err := adb.NewManager(serial); err == nil {
+			_ = syncer.AutoPushIfConnected(mgr, a.ComboStore, a.SnippetStore)
+		}
 		if jsonOutput {
 			writeJSONIndent(a.Stdout, map[string]interface{}{"status": "deleted", "name": name})
 		} else {
-			fmt.Fprintf(a.Stdout, "✔ Deleted snippet %q\n", name)
+			fmt.Fprintf(a.Stdout, "✔ Deleted snippet %q (synced to Android)\n", name)
 		}
 		return 0
 
@@ -1714,6 +1737,81 @@ func (a *App) handleMan() int {
 	return 0
 }
 
+func (a *App) syncFail(jsonOutput bool, format string, args ...interface{}) int {
+	message := fmt.Sprintf(format, args...)
+	if jsonOutput {
+		writeJSONIndent(a.Stdout, map[string]interface{}{
+			"status": "error",
+			"error":  message,
+		})
+	} else {
+		fmt.Fprintf(a.Stderr, "Error: %s\n", message)
+	}
+	return 1
+}
+
+func (a *App) handleSync(serial string, args []string, jsonOutput bool) int {
+	mgr, err := adb.NewManager(serial)
+	if err != nil {
+		return a.syncFail(jsonOutput, "%v", err)
+	}
+	dev, err := mgr.SelectDevice()
+	if err != nil {
+		return a.syncFail(jsonOutput, "no device connected for sync: %v", err)
+	}
+
+	mode := "full"
+	for _, arg := range args {
+		switch arg {
+		case "--pull":
+			mode = "pull"
+		case "--push":
+			mode = "push"
+		}
+	}
+
+	var report *syncer.SyncReport
+	switch mode {
+	case "pull":
+		report, err = syncer.Pull(mgr, a.ComboStore, a.SnippetStore)
+	case "push":
+		report, err = syncer.Push(mgr, a.ComboStore, a.SnippetStore)
+	default:
+		report, err = syncer.Sync(mgr, a.ComboStore, a.SnippetStore)
+	}
+
+	if err != nil {
+		return a.syncFail(jsonOutput, "sync error: %v", err)
+	}
+
+	if jsonOutput {
+		writeJSONIndent(a.Stdout, map[string]interface{}{
+			"status": "success",
+			"mode":   mode,
+			"device": dev.Serial,
+			"report": report,
+		})
+		return 0
+	}
+
+	fmt.Fprintf(a.Stdout, "\n🔄 GHOST-HID SYNC COMPLETE (%s)\n", dev.Serial)
+	fmt.Fprintf(a.Stdout, "  Mode:             %s\n", mode)
+	if report.CombosPulled > 0 || report.SnippetsPulled > 0 {
+		fmt.Fprintf(a.Stdout, "  Pulled (Android): %d combos, %d snippets\n", report.CombosPulled, report.SnippetsPulled)
+	}
+	if report.CombosPushed > 0 || report.SnippetsPushed > 0 {
+		fmt.Fprintf(a.Stdout, "  Pushed (Android): %d combos, %d snippets\n", report.CombosPushed, report.SnippetsPushed)
+	}
+	if report.AppRestarted {
+		fmt.Fprintf(a.Stdout, "  App Restarted:    ✔ com.sj010.ghid\n")
+	}
+	if report.Reconnected {
+		fmt.Fprintf(a.Stdout, "  Bluetooth Link:   ✔ Reconnect broadcast dispatched\n")
+	}
+	fmt.Fprintln(a.Stdout)
+	return 0
+}
+
 func (a *App) printHelp() {
 	fmt.Fprintln(a.Stdout, `GhostHID - Headless Android Bluetooth HID Keyboard Controller (Go/Charm TUI)
 
@@ -1744,6 +1842,7 @@ Commands:
   combo <keys>      Send a one-shot shortcut (e.g. 'win+d', 'ctrl+alt+del')
   combo mouse       Send a mouse gesture (click-left, scroll-up, double-click)
   raw <hex>         Send raw HID report with auto-inferred Report ID (1B, 2B, 4B, 8B)
+  sync [--pull|--push] Bi-directional sync with Android device (pull, push, restart app, reconnect)
   quick <text...>   Quick send keystrokes (default: type; use --raw for hex HID report)
   connect [addr]    Connect Bluetooth to target laptop MAC
   disconnect        Disconnect Bluetooth HID

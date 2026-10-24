@@ -219,6 +219,18 @@ errors are emitted as JSON on stdout with exit code 1, and \fBcombo delete\fR
 skips the confirmation prompt. Use \fBcombo schema \-\-json\fR to enumerate
 supported keys and gestures, then \fBcombo validate\fR before \fBcombo save\fR.
 .TP
+.B sync \fR[\fB\-\-pull\fR | \fB\-\-push\fR] [\fB\-\-json\fR]
+Synchronize combos and snippets between host and Android device over ADB.
+Android is treated as the Single Source of Truth (SSOT).
+.RS
+.IP \(bu 2
+\fB(default)\fR: Pulls latest items from Android into local cache, pushes back merged additions (scrubbing secrets to protect Android Keystore), restarts the Android app, and restores Bluetooth connection.
+.IP \(bu 2
+\fB\-\-pull\fR: Only pulls remote items from Android, replacing local entries.
+.IP \(bu 2
+\fB\-\-push\fR: Pushes local entries to Android, restarts the app, and reconnects Bluetooth.
+.RE
+.TP
 .B quick \fB\-\-raw\fR \fIhex\fR
 Send a raw HID report. The target HID Report ID is automatically inferred
 from payload byte length: 1 byte (2 hex) for System Control (Report ID 3),

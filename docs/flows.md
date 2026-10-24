@@ -362,3 +362,48 @@ flowchart TD
     class PromptUser,CaptureInput,SaveSnippets,ResumeCombo prompt
     class ExecDirect exec
 ```
+
+
+## 8. Bi-directional Synchronization and Reconnect Flow (Android SSOT)
+
+The synchronization pipeline enforces the Android smartphone as the Single Source of Truth (SSOT). Remote phone combos and snippets are pulled into the local cache on startup. Local mutations automatically push back to Android, restart the application to invalidate in-memory repositories, and restore the active Bluetooth link.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Operator as Operator / CLI Command
+    participant CLI as ghid CLI (syncer)
+    participant Local as Local Store (~/.config/ghid/)
+    participant Keychain as macOS Keychain
+    participant ADB as ADB Transport
+    participant PhoneDisk as Android Flash (/sdcard/.../files/)
+    participant App as GhostHID App (com.sj010.ghid)
+    participant Target as Target Computer (Bluetooth)
+
+    Note over CLI,PhoneDisk: Phase 1: Pull from SSOT (Android)
+    CLI->>ADB: shell cat combos.json & snippets.json
+    ADB->>PhoneDisk: Read JSON files
+    PhoneDisk-->>CLI: Return remote JSON
+    CLI->>Keychain: Resolve local secrets for secure snippets
+    CLI->>Local: Overwrite local stores (SaveAll)
+
+    opt When Push or Mutation Triggered
+        Note over CLI,PhoneDisk: Phase 2: Push Sanitized State
+        CLI->>Local: Load active combos & snippets
+        CLI->>CLI: Sanitize snippets (strip secrets: Value = "")
+        CLI->>ADB: push combos.json & snippets.json
+        ADB->>PhoneDisk: Write updated JSON files
+
+        Note over CLI,Target: Phase 3: Reload Memory & Restore Connection
+        CLI->>ADB: shell am force-stop com.sj010.ghid
+        ADB->>App: Process terminated
+        Target-->>Target: Bluetooth link momentarily dropped
+        CLI->>ADB: shell am start -n com.sj010.ghid/.MainActivity
+        ADB->>App: Process started, load() reads fresh JSON
+        CLI->>CLI: Sleep 1500ms (Compose UI & service init)
+        CLI->>ADB: broadcast ACTION_CMD --es cmd connect
+        ADB->>App: HidCommandReceiver -> HidService.connectTarget()
+        App->>Target: Bluetooth HID connect (L2CAP PSM 0x11/0x13)
+        Target-->>App: Reconnected to active laptop
+    end
+```
