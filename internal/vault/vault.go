@@ -5,7 +5,6 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
-	"sync"
 )
 
 const DefaultServiceName = "ghost-hid"
@@ -72,67 +71,5 @@ func (k *KeychainVault) Delete(username string) error {
 	}
 	cmd := exec.Command("/usr/bin/security", "delete-generic-password", "-a", username, "-s", k.ServiceName)
 	_ = cmd.Run()
-	return nil
-}
-
-// MemoryVault provides an in-memory test stand-in for Vault.
-type MemoryVault struct {
-	mu        sync.RWMutex
-	store     map[string]string
-	available bool
-}
-
-func NewMemoryVault() *MemoryVault {
-	return &MemoryVault{
-		store:     make(map[string]string),
-		available: true,
-	}
-}
-
-func (m *MemoryVault) SetAvailable(avail bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.available = avail
-}
-
-func (m *MemoryVault) IsAvailable() bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.available
-}
-
-func (m *MemoryVault) Get(username string) (string, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	if !m.available {
-		return "", errors.New("vault not available")
-	}
-	if username == "" {
-		return "", errors.New("empty username")
-	}
-	pass, ok := m.store[username]
-	if !ok {
-		return "", errors.New("password not found")
-	}
-	return pass, nil
-}
-
-func (m *MemoryVault) Set(username, password string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if !m.available {
-		return errors.New("vault not available")
-	}
-	if username == "" || password == "" {
-		return errors.New("username or password cannot be empty")
-	}
-	m.store[username] = password
-	return nil
-}
-
-func (m *MemoryVault) Delete(username string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	delete(m.store, username)
 	return nil
 }

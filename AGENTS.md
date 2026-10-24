@@ -3,7 +3,7 @@
 GhostHID = Android phone as Bluetooth HID keyboard + mouse.
 `ghid` (Go, this Mac) → ADB → `com.sj010.ghid_headless` on phone → Bluetooth HID → target PC.
 
-Status: alpha. Big refactors welcome. Run tests, update docs, keep JSON contract stable in same change.
+Status: alpha. Big refactors welcome. **No tests (unit or integration) — this repo has none, do not add any.** Verify by building, then exercising the CLI/JSON contract and the real device. Update docs, keep JSON contract stable in same change.
 
 ## Repo map
 
@@ -12,7 +12,7 @@ Status: alpha. Big refactors welcome. Run tests, update docs, keep JSON contract
 | `cmd/ghid` | binary entry |
 | `internal/cli` | arg parsing, commands, JSON output, TUI launch |
 | `internal/gateway` | `Controller` interface, validation, ADB calls |
-| `internal/adb` | adb transport, broadcasts, `FakeRunner` for tests |
+| `internal/adb` | adb transport, broadcasts |
 | `internal/hid` | key tokens, combo/mouse/text parsers, step descriptions |
 | `internal/combos` | combo library at `~/.config/ghid/combos.json` |
 | `internal/tui` | bubbletea dashboard + Combo Studio |
@@ -30,7 +30,7 @@ cd /Users/sj/Desktop/ws/ghost-hid
 
 gofmt -w cmd internal
 go vet ./...
-go test ./... -count=1
+go build ./...
 ./build.sh          # APK only
 ```
 
@@ -39,7 +39,7 @@ go test ./... -count=1
 ```bash
 cd /Users/sj/Desktop/ws/ghost-hid
 gofmt -w cmd internal
-go test ./... -count=1
+go vet ./...
 go build -o ghid ./cmd/ghid
 go install ./cmd/ghid
 ./ghid install-bin
@@ -79,7 +79,7 @@ If HID descriptor, report IDs, subclass, or mouse support changed:
 ```bash
 cd /Users/sj/Desktop/ws/ghost-hid
 gofmt -w cmd internal
-go test ./... -count=1
+go vet ./...
 ./build.sh
 ghid install-apk
 ghid restart
@@ -118,14 +118,13 @@ Typed text = printable US-ASCII. Go validator + Java `keyForChar` must stay in s
 
 ## Engineering rules
 
-- New behavior → test first. Table-driven where possible.
-- Tests use `adb.FakeRunner` + `vault.MemoryVault`; never touch real phone/ADB.
+- **No tests, unit or integration.** Do not write `_test.go`, `src/test`, `src/androidTest`, mocks/fakes for tests, or test dependencies. Verify behavior by building and running the real thing (CLI, JSON output, ADB device).
 - One source of truth per concept. Tokens in `hid`, storage in `combos`, transport in `adb`.
 - Prefer pure parsers/validators. Side effects at edges.
 - Keep `gateway.Controller` small. Add method only when CLI truly needs it.
 - New command → update `printHelp`, `man/ghid.1`, `README.md`, and `docs/agent-integration.md` if JSON shape changes.
 - Preserve one-shot `ghid combo "win+d"`.
-- Commit style: `feat:`, `fix:`, `refactor:`, `docs:`, `test:`.
+- Commit style: `feat:`, `fix:`, `refactor:`, `docs:`.
 - Alpha means large refactors OK. Do not leave half-migrated layers, dead code, or duplicate parsers.
 
 ## Android app design & iteration rules
@@ -147,7 +146,7 @@ Typed text = printable US-ASCII. Go validator + Java `keyForChar` must stay in s
 ## Done checklist
 
 - [ ] `gofmt` clean
-- [ ] `go test ./... -count=1` green
+- [ ] `go vet ./...` + `go build ./...` clean
 - [ ] CLI rebuilt + installed in both paths
 - [ ] APK rebuilt + installed if Java/res changed
 - [ ] service restarted + reconnected

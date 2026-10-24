@@ -125,10 +125,6 @@ func (s *Store) Save(cfg Config) error {
 	return os.WriteFile(s.Path, data, 0600)
 }
 
-func LoadConfig() Config {
-	return NewStore("").Load()
-}
-
 func SaveConfig(cfg Config) error {
 	path := cfg.storePath
 	if path == "" {
