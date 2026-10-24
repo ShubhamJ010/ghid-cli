@@ -115,6 +115,7 @@ Returns the complete list of valid key tokens, modifier names, and mouse actions
   "mouse": ["click-left", "click-right", "click-middle", "double-click", "scroll-up", "scroll-down"],
   "os_tags": ["windows", "macos", "linux"],
   "default_os": "windows",
+  "emoji": "optional single emoji shown as the combo icon on Android and instead of the OS badge in the CLI",
   "os_note": "The win token is the HID GUI modifier: Windows/Linux Super, macOS Command."
 }
 ```
@@ -160,6 +161,7 @@ Returns all saved combos in the local library (`~/.config/ghid/combos.json`).
     "name": "Login",
     "keys": "ctrl+alt+del ->{1.0} esc ->{0.8} $USERNAME ->{0.8} tab ->{0.8} $PASSWORD ->{0.8} enter",
     "os": "windows",
+    "emoji": "🔑",
     "description": "Windows unlock & credential injection",
     "favorite": true,
     "created_at": "2026-10-23T01:00:00Z"
@@ -168,6 +170,7 @@ Returns all saved combos in the local library (`~/.config/ghid/combos.json`).
     "name": "Lock",
     "keys": "win+l",
     "os": "windows",
+    "emoji": "🔒",
     "description": "Instant Windows lock screen (Win + L)",
     "favorite": true,
     "created_at": "2026-10-23T01:00:00Z"
@@ -176,6 +179,7 @@ Returns all saved combos in the local library (`~/.config/ghid/combos.json`).
     "name": "Sleep",
     "keys": "win+x ->{0.5} u ->{0.3} s ->{5.0} !DISCONNECT ->{0.5} !EXIT",
     "os": "windows",
+    "emoji": "😴",
     "description": "Windows sleep sequence + countdown exit",
     "favorite": true,
     "created_at": "2026-10-23T01:00:00Z"
@@ -188,6 +192,13 @@ Combos saved before OS tagging existed report `os: "windows"`. Tag a combo at
 save time with `--os windows|macos|linux`; without the flag, updates keep the
 existing tag. The same `os` value selects the matching filters and profile in
 the Android app.
+
+The optional `emoji` string is combo icon metadata. When present it overrides the
+OS logo on the Android card and replaces the `[win]` / `[mac]` / `[linux]` badge
+in `ghid combo list` and the TUI. Set it at save time with `--emoji <e>`; without
+the flag, updates keep the existing emoji. Values must be an emoji (no ASCII
+letters, digits or spaces, at most 12 code points) or the save fails with
+`{"status":"error","error":"..."}` and exit 1.
 
 ---
 

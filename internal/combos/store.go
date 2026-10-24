@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/ghost-hid/ghid/internal/hid"
 )
@@ -75,6 +76,31 @@ func NormalizeOSDefault(osName string) string {
 	return normalized
 }
 
+// MaxEmojiRunes caps a combo icon. Zero-width joiners and variation selectors
+// make multi-codepoint emoji long, so the limit is generous.
+const MaxEmojiRunes = 12
+
+// ValidateEmoji trims an optional combo icon and rejects plain ASCII text so the
+// stored value really is an emoji. An empty value clears the custom icon.
+func ValidateEmoji(emoji string) (string, error) {
+	clean := strings.TrimSpace(emoji)
+	if clean == "" {
+		return "", nil
+	}
+	if len([]rune(clean)) > MaxEmojiRunes {
+		return "", fmt.Errorf("combo emoji must be %d characters or fewer", MaxEmojiRunes)
+	}
+	for _, r := range clean {
+		if unicode.IsSpace(r) {
+			return "", errors.New("combo emoji cannot contain spaces")
+		}
+		if r < 0x80 && (unicode.IsLetter(r) || unicode.IsDigit(r)) {
+			return "", errors.New("combo emoji must be an emoji, not text")
+		}
+	}
+	return clean, nil
+}
+
 // OSShortTag is the compact ASCII badge used in terminal listings.
 func OSShortTag(osName string) string {
 	switch NormalizeOSDefault(osName) {
@@ -90,14 +116,25 @@ func OSShortTag(osName string) string {
 // Combo is a named, replayable sequence of keyboard chords, mouse gestures,
 // typed text and directives. Keys uses the ghid sequence grammar, e.g.
 // "win+r ->{0.6} type:rustdesk ->{0.3} enter". OS tags which host the combo was
-// authored for; the visual identity is the target OS logo, not an emoji.
+// authored for. Emoji is an optional custom icon that overrides the OS logo in
+// the Android app and the OS badge in the CLI and TUI.
 type Combo struct {
 	Name        string    `json:"name"`
 	Keys        string    `json:"keys"`
 	OS          string    `json:"os"`
+	Emoji       string    `json:"emoji,omitempty"`
 	Description string    `json:"description,omitempty"`
 	Favorite    bool      `json:"favorite,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
+}
+
+// Badge is the short icon used in terminal listings: the custom emoji when set,
+// otherwise the bracketed target OS tag.
+func (c Combo) Badge() string {
+	if emoji := strings.TrimSpace(c.Emoji); emoji != "" {
+		return emoji
+	}
+	return "[" + OSShortTag(c.OS) + "]"
 }
 
 // DefaultCombos defines the built-in system combos with their target OS and descriptions.
@@ -106,6 +143,7 @@ var DefaultCombos = []Combo{
 		Name:        "Login",
 		Keys:        DefaultLoginKeys,
 		OS:          OSWindows,
+		Emoji:       "🔑",
 		Description: "Windows unlock & credential injection",
 		Favorite:    true,
 	},
@@ -113,6 +151,7 @@ var DefaultCombos = []Combo{
 		Name:        "Lock",
 		Keys:        DefaultLockKeys,
 		OS:          OSWindows,
+		Emoji:       "🔒",
 		Description: "Instant Windows lock screen (Win + L)",
 		Favorite:    true,
 	},
@@ -120,6 +159,7 @@ var DefaultCombos = []Combo{
 		Name:        "Sleep",
 		Keys:        DefaultSleepKeys,
 		OS:          OSWindows,
+		Emoji:       "😴",
 		Description: "Windows sleep sequence + countdown exit",
 		Favorite:    true,
 	},
@@ -127,6 +167,7 @@ var DefaultCombos = []Combo{
 		Name:        "MacSleep",
 		Keys:        DefaultMacSleepKeys,
 		OS:          OSMacOS,
+		Emoji:       "🌙",
 		Description: "Instant macOS lock and display sleep",
 		Favorite:    true,
 	},
@@ -134,6 +175,7 @@ var DefaultCombos = []Combo{
 		Name:        "ForceQuit",
 		Keys:        DefaultMacForceQuitKeys,
 		OS:          OSMacOS,
+		Emoji:       "⚡",
 		Description: "Force quit frontmost unresponsive app",
 		Favorite:    true,
 	},
@@ -141,6 +183,7 @@ var DefaultCombos = []Combo{
 		Name:        "PlayPause",
 		Keys:        DefaultMacPlayPauseKeys,
 		OS:          OSMacOS,
+		Emoji:       "⏯️",
 		Description: "Consumer media play/pause toggle",
 		Favorite:    true,
 	},
@@ -251,6 +294,10 @@ func (s *Store) EnsureDefaults() ([]Combo, error) {
 				}
 				if list[i].Description == "" && def.Description != "" {
 					list[i].Description = def.Description
+					modified = true
+				}
+				if list[i].Emoji == "" && def.Emoji != "" {
+					list[i].Emoji = def.Emoji
 					modified = true
 				}
 				break
@@ -393,6 +440,10 @@ func (s *Store) Add(c Combo) ([]Combo, error) {
 	if err != nil {
 		return nil, err
 	}
+	emoji, err := ValidateEmoji(c.Emoji)
+	if err != nil {
+		return nil, err
+	}
 	keys := strings.TrimSpace(c.Keys)
 	if err := ValidateForOS(keys, osName); err != nil {
 		return nil, err
@@ -407,6 +458,7 @@ func (s *Store) Add(c Combo) ([]Combo, error) {
 	c.Name = name
 	c.Keys = keys
 	c.OS = osName
+	c.Emoji = emoji
 	if c.CreatedAt.IsZero() {
 		c.CreatedAt = time.Now().UTC()
 	}
@@ -422,6 +474,9 @@ func (s *Store) Add(c Combo) ([]Combo, error) {
 			}
 			if c.Description == "" && list[i].Description != "" {
 				c.Description = list[i].Description
+			}
+			if c.Emoji == "" && list[i].Emoji != "" {
+				c.Emoji = list[i].Emoji
 			}
 			list[i] = c
 			replaced = true
