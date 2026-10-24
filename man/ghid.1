@@ -1,6 +1,6 @@
 .TH GHID 1 "2026-10-22" "GhostHID 1.0.0" "User Commands"
 .SH NAME
-ghid \- Headless Android Bluetooth HID Keyboard Controller & Automation Gateway
+ghid \- Android Bluetooth HID Keyboard & Mouse Controller and Automation Gateway
 .SH SYNOPSIS
 .B ghid
 [\fB\-\-json\fR] [\fB\-s\fR \fIserial\fR] [\fIcommand\fR] [\fIarguments...\fR]
@@ -8,8 +8,9 @@ ghid \- Headless Android Bluetooth HID Keyboard Controller & Automation Gateway
 .B ghid
 is the command-line interface for the GhostHID platform. It converts
 a rooted or standard Android phone connected via USB or Wireless ADB
-into a fully programmatic, headless Bluetooth HID (Human Interface
-Device) keyboard for a target Windows laptop or PC.
+into a fully programmable Bluetooth HID (Human Interface
+Device) keyboard and mouse for a target Windows, macOS, or Linux
+computer.
 .PP
 Unlike software-based remote-control agents, GhostHID operates at the
 Bluetooth hardware host controller layer (Bluetooth HID Device Profile
@@ -50,8 +51,8 @@ Wireless ADB endpoints, scan for USB devices, or pair a new device
 using an Android pairing code.
 .IP 2. 4
 .B APK Validation:
-Checks if \fIcom.sj010.ghid_headless\fR is installed on the device. If missing,
-prompts to install the pre-compiled APK or build it directly from
+Checks if \fIcom.sj010.ghid\fR is installed on the device. If missing,
+prompts to install the built release APK or build it directly from
 source via \fIbuild.sh\fR.
 .IP 3. 4
 .B Bluetooth HID Gateway:
@@ -246,11 +247,16 @@ Run comprehensive diagnostic sweep checking ADB availability, device
 connection, package installation, phone Bluetooth state, SDP profile
 registration, target laptop connectivity, and macOS Keychain accessibility.
 .TP
-.B install-apk \fR[\fB\-\-path\fR \fIapk\fR] [\fB\-\-build\fR]
-Install or update GhostHID application APK onto target Android device.
+.B install-apk \fR[\fIapk\-path\fR]
+Install or update the GhostHID release APK onto the target Android
+device with \fBadb install \-r\fR. Without an argument it installs
+\fIbuild/ghost-hid.apk\fR, then
+\fIandroid/app/build/outputs/apk/release/app-release.apk\fR.
 .TP
 .B build
-Compile Android APK from source using standalone toolchain in \fIbuild.sh\fR.
+Assemble the Android release APK from source (Gradle
+\fI:app:assembleRelease\fR via \fIbuild.sh\fR), publishing
+\fIbuild/ghost-hid.apk\fR.
 .TP
 .B logs \fR[\fB\-n\fR \fIlines\fR]
 Dump most recent log entries filtered for GhostHID from device \fIlogcat\fR.
@@ -260,7 +266,7 @@ Stream real-time GhostHID logs from phone.
 .TP
 .B filelog
 Display persistent event log written to
-\fI/sdcard/Android/data/com.sj010.ghid_headless/files/gateway.log\fR on phone.
+\fI/sdcard/Android/data/com.sj010.ghid/files/gateway.log\fR on phone.
 .TP
 .B install-bin \fR[\fB\-\-dir\fR \fIpath\fR]
 Symlink \fBghid\fR into \fI~/.local/bin\fR and install man page into

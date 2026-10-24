@@ -1,7 +1,13 @@
 # AGENTS.md
 
 GhostHID = Android phone as Bluetooth HID keyboard + mouse.
-`ghid` (Go, this Mac) → ADB → `com.sj010.ghid_headless` on phone → Bluetooth HID → target PC.
+`ghid` (Go, this Mac) → ADB → `com.sj010.ghid` on phone → Bluetooth HID → target PC.
+
+One Android app only: the non-headless Material 3 app in `android/` (launcher UI + always-on
+`HidService`). The old `com.sj010.ghid_headless` app, its `src/`, `res/`, root
+`AndroidManifest.xml` and the zero-Gradle build were deleted with no backward compatibility —
+Go, docs and build all speak `com.sj010.ghid` only. Want a UI-less gateway? Code your own from
+`docs/prompts/headless-android-app.md`.
 
 Status: alpha. Big refactors welcome. **No tests (unit or integration) — this repo has none, do not add any.** Verify by building, then exercising the CLI/JSON contract and the real device. Update docs, keep JSON contract stable in same change.
 
@@ -17,11 +23,11 @@ Status: alpha. Big refactors welcome. **No tests (unit or integration) — this 
 | `internal/combos` | combo library at `~/.config/ghid/combos.json` |
 | `internal/tui` | bubbletea dashboard + Combo Studio |
 | `internal/config`, `vault`, `keychain` | config, credential storage |
-| `src/com.sj010/ghid_headless` | Android `HidService` + `HidCommandReceiver` |
-| `res/`, `AndroidManifest.xml`, `build.sh` | APK resources + zero-Gradle build |
-| `docs/` | architecture, flows, protocol, agent integration, ADRs |
+| `android/app/src/main/java/com/sj010/ghid` | Android app: Compose UI + `service/HidService` + `service/HidCommandReceiver` |
+| `build.sh`, `android/` | Gradle release build (`:app:assembleRelease` → `build/ghost-hid.apk`) |
+| `docs/` | architecture, flows, protocol, agent integration, ADRs, prompts (`docs/prompts/`) |
 
-Layer rule: `cli → gateway → adb → broadcast → Java`. No direct `adb` calls from CLI/TUI. No business logic in `cmd/ghid`.
+Layer rule: `cli → gateway → adb → broadcast → Kotlin`. No direct `adb` calls from CLI/TUI. No business logic in `cmd/ghid`.
 
 ## Core commands
 
@@ -31,7 +37,7 @@ cd /Users/sj/Desktop/ws/ghost-hid
 gofmt -w cmd internal
 go vet ./...
 go build ./...
-./build.sh          # APK only
+./build.sh          # release APK -> build/ghost-hid.apk (Gradle; first run needs network)
 ```
 
 ## Update CLI on this Mac
@@ -72,7 +78,7 @@ ghid status
 Want `SDP Registered: true` and `Connection: CONNECTED`.
 
 If HID descriptor, report IDs, subclass, or mouse support changed:
-**unpair GhostHID on Windows, then pair again.** Old pairing caches old descriptor. Java-only changes need install + restart, not re-pair.
+**unpair GhostHID on Windows, then pair again.** Old pairing caches old descriptor. Kotlin-only or UI changes need install + restart, not re-pair.
 
 ## Update both
 
@@ -114,7 +120,7 @@ ghid combo delete "Open RustDesk" --json
 Combo grammar: `step ->{seconds} step`.
 Steps: keyboard chord, mouse gesture, `type:<text>` / `text:<text>`.
 Windows only. Reject `cmd`, `super`, `option`.
-Typed text = printable US-ASCII. Go validator + Java `keyForChar` must stay in sync.
+Typed text = printable US-ASCII. Go validator + Android `keyForChar` must stay in sync.
 
 ## Engineering rules
 
@@ -138,7 +144,7 @@ Typed text = printable US-ASCII. Go validator + Java `keyForChar` must stay in s
 
 - Flags stripped globally (`--json`, `-s`). Text containing those tokens can break.
 - Combo timestamps stored UTC. Local clock may show behind.
-- `build.sh` hard-codes Homebrew Android SDK + JDK 17 paths. Check before editing.
+- `build.sh` only shells out to `android/gradlew :app:assembleRelease` and copies the release APK to `build/ghost-hid.apk`. `ghid install-apk` deploys release builds only (never debug).
 - TUI is one bubbletea app. `esc` returns to dashboard, `ctrl+c` exits.
 - Mouse needs report ID `2`; keyboard report ID `1`. Wrong descriptor = no mouse.
 - `ghid combo` bare is interactive only on a TTY. Non-TTY falls back to list.
@@ -148,7 +154,7 @@ Typed text = printable US-ASCII. Go validator + Java `keyForChar` must stay in s
 - [ ] `gofmt` clean
 - [ ] `go vet ./...` + `go build ./...` clean
 - [ ] CLI rebuilt + installed in both paths
-- [ ] APK rebuilt + installed if Java/res changed
+- [ ] APK rebuilt + installed if Kotlin/res/manifest changed
 - [ ] service restarted + reconnected
 - [ ] docs/man/help updated
 - [ ] JSON output still parseable, exit codes unchanged

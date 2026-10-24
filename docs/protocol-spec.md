@@ -216,10 +216,20 @@ The host triggers commands by dispatching Android broadcast intents via `adb she
 
 ```bash
 adb shell am broadcast \
-  -a com.sj010.ghid_headless.ACTION_CMD \
-  -n com.sj010.ghid_headless/.HidCommandReceiver \
+  -a com.sj010.ghid.ACTION_CMD \
+  -n com.sj010.ghid/.service.HidCommandReceiver \
   --es cmd "<command>" \
   [optional arguments]
+```
+
+Two action-only variants carry no `cmd` extra:
+- `com.sj010.ghid.ACTION_LOCK` — instant screen lock.
+- `com.sj010.ghid.ACTION_TYPE` — type `--es text "<string>"`.
+
+Service lifecycle uses the component directly, with no extras:
+```bash
+adb shell am start-foreground-service -n com.sj010.ghid/.service.HidService   # ghid start
+adb shell am stopservice -n com.sj010.ghid/.service.HidService                # ghid stop
 ```
 
 ### Command Specifications
@@ -240,10 +250,12 @@ Types an ASCII string with automatic key down and key up delays.
 - Behavior: Iterates through characters, maps to modifier + keycode, sleeps 25 ms down, sleeps 25 ms up.
 
 #### `combo`
-Executes a single keyboard chord.
+Executes a keyboard chord, or a full `step ->{seconds} step` sequence.
 - Extras: `--es keys "<modifiers+keys>"`
 - Example: `--es keys "ctrl+shift+esc"`
-- Behavior: Sends down report, sleeps 60 ms, sends release report.
+- Behavior: Sends down report, sleeps 60 ms, sends release report. The host CLI parses chained
+  sequences itself and dispatches each step as its own broadcast, applying the delays locally;
+  the phone-side parser exists for the on-device Combo Studio.
 
 #### `mouse`
 Transmits a pointer gesture using Report ID 2.
@@ -253,7 +265,7 @@ Transmits a pointer gesture using Report ID 2.
 
 #### `raw`
 Transmits an explicit hexadecimal raw HID report. The Report ID is auto-inferred from length (or overridden via `--ei id <N>`).
-- Extras: `--es hex "<hex>"` (2, 4, 8, or 16 hex characters), optional `--ei id <report_id>`
+- Extras: `--es hex "<hex>"` (even-length, 1–8 bytes), optional `--ei id <report_id>`
 - Examples:
   - System Sleep: `--es hex "02"` (inferred Report ID 3)
   - Play/Pause: `--es hex "cd00"` (inferred Report ID 4)
@@ -270,7 +282,7 @@ Gracefully cleans up Bluetooth resources and kills the Android foreground servic
 
 ## 4. Filesystem State and Logging Protocol
 
-The Android gateway writes state and log files directly to external application storage (`/sdcard/Android/data/com.sj010.ghid_headless/files/`).
+The Android gateway writes state and log files directly to external application storage (`/sdcard/Android/data/com.sj010.ghid/files/`). This is the only location the CLI reads; there is no legacy fallback path.
 
 ### Status File (`status.json`)
 The service overwrites this file on every state transition (SDP registration, connection change, disconnect).
@@ -300,23 +312,22 @@ Field definitions:
 - `detection_method` (string): `apple_oui`, `apple_sdp_uuid`, `hid_led_handshake`, `name_heuristic`, `fallback`, or `none`.
 - `updated` (string): Timestamp formatted as `yyyy-MM-dd HH:mm:ss.SSS`.
 
-The OS fields are additive: older gateway builds omit them, and the CLI treats a
-missing `os` as `unknown` rather than failing to parse the file.
+The OS fields are part of the schema: the CLI fills a missing `os` with `unknown` rather than
+failing to parse the file.
 
 ### Gateway Log File (`gateway.log`)
 Appended line by line on each service operation.
 
 Example content:
 ```text
-[2026-10-23 01:15:20.001] GhostHID Gateway Service started (Headless Mode).
+[2026-10-23 01:15:20.001] GhostHID Service started.
 [2026-10-23 01:15:20.015] Bluetooth enabled=true, LocalName=KB2001
 [2026-10-23 01:15:20.040] BluetoothHidDevice proxy connected.
 [2026-10-23 01:15:20.052] registerApp() returned: true
 [2026-10-23 01:15:20.089] onAppStatusChanged: registered=true
-[2026-10-23 01:15:21.100] Target laptop matched: LP-TZD-0X114650 [38:FC:98:E8:E3:87]
+[2026-10-23 01:15:21.100] Target explicitly selected: LP-TZD-0X114650 [38:FC:98:E8:E3:87]
 [2026-10-23 01:15:21.105] Connecting to LP-TZD-0X114650 [38:FC:98:E8:E3:87]...
-[2026-10-23 01:15:21.112] connect() returned: true
 [2026-10-23 01:15:22.340] onConnectionStateChanged: [LP-TZD-0X114650] -> CONNECTED
-[2026-10-23 01:15:25.410] >>> Executing combo: ctrl+alt+del
-[2026-10-23 01:15:25.480] Combo sent: mod=5, key=76
+[2026-10-23 01:15:25.410] >>> Executing sequence (win+l)
+[2026-10-23 01:15:25.480] >>> Sequence finished.
 ```

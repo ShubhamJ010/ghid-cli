@@ -56,6 +56,7 @@ Runs a complete hardware, transport, and credentials health check.
   "adb_available": true,
   "device_connected": true,
   "device_model": "KB2001",
+  "device_name": "SJ's OnePlus 8T",
   "device_serial": "192.168.1.80:41839",
   "apk_installed": true,
   "bluetooth_on": true,
@@ -74,19 +75,14 @@ Runs a complete hardware, transport, and credentials health check.
   "keychain_available": true,
   "cached_user": "Administrator",
   "has_cached_password": true,
-  "checks": [
-    {"name": "ADB Host Binary", "pass": true, "detail": "/opt/homebrew/bin/adb"},
-    {"name": "Device Transport", "pass": true, "detail": "KB2001 (192.168.1.80:41839)"},
-    {"name": "Gateway Package", "pass": true, "detail": "com.sj010.ghid_headless installed"},
-    {"name": "Phone Bluetooth Radio", "pass": true, "detail": "Radio active"},
-    {"name": "HID SDP Registration", "pass": true, "detail": "SDP registered"},
-    {"name": "Host Connection", "pass": true, "detail": "Connected to LP-TZD-0X114650"},
-    {"name": "macOS Keychain Vault", "pass": true, "detail": "Vault accessible, user Administrator cached"}
-  ]
+  "snippets_count": 3
 }
 ```
 
-Exit code: `0` if all essential checks pass, `1` if any critical component is missing.
+`apk_installed` reflects package `com.sj010.ghid`. Exit code: `0` whenever a report is
+produced (judge health from the booleans), `2` if the ADB gateway cannot be constructed — then
+stdout carries `{"error": "..."}` instead. The human-readable `ghid doctor` run prints the
+per-check list; the JSON form carries the same facts as flat booleans.
 
 ---
 

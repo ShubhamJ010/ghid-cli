@@ -6,7 +6,7 @@ GhostHID turns an Android smartphone into a hardware Bluetooth Human Interface D
 
 The system comprises three physical or logical tiers:
 1. **Host Workstation:** Runs the Go CLI (`ghid`), automation scripts, or AI agent workloads.
-2. **Android Gateway Phone:** Runs the headless `com.sj010.ghid_headless` foreground service and handles Bluetooth HID profile communications.
+2. **Android Gateway Phone:** Runs the `com.sj010.ghid` app (Material 3 Compose UI + `HidService` foreground service) and handles Bluetooth HID profile communications.
 3. **Target Computer:** Any computer running Windows, macOS, or Linux paired with the phone over Bluetooth Classic.
 
 ```mermaid
@@ -53,7 +53,7 @@ flowchart TB
 
 ## Android Gateway Subsystem
 
-The Android package `com.sj010.ghid_headless` runs headlessly without a permanent graphical activity.
+The Android package `com.sj010.ghid` is the single shipping app. It has a launcher activity (`MainActivity`, Material 3 Expressive dashboard, Combo Studio, trackpad), but the gateway itself never depends on the UI: `HidService` is an always-on foreground service that can be started, stopped, and commanded entirely over ADB with the screen off. A separate headless build is no longer maintained — see `docs/prompts/headless-android-app.md` if you want to code your own.
 
 ### Service Lifecycle and Notification Channel
 The gateway implements `android.app.Service` as an ongoing foreground service:
@@ -65,9 +65,10 @@ The gateway implements `android.app.Service` as an ongoing foreground service:
 The gateway exposes the HID profile through `android.bluetooth.BluetoothHidDevice`.
 
 #### SDP Service Record
-- **Service Name:** `GhostHID Gateway`
-- **Provider Name:** `sj010`
-- **Subclass:** `0x40` (Peripheral / Keyboard)
+- **Service Name:** `GhostHID Keyboard & Mouse`
+- **Description:** `Virtual HID Keyboard + Mouse Gateway`
+- **Provider Name:** `Android`
+- **Subclass:** `BluetoothHidDevice.SUBCLASS1_COMBO` (`0xC0` — keyboard + mouse composite)
 
 #### HID Report Descriptor
 GhostHID uses a standard composite keyboard and mouse report descriptor (ADR-002, ADR-008):
@@ -103,13 +104,13 @@ Total keyboard input report size: 8 bytes.
 - Bytes 2-7: Up to 6 simultaneous HID usage codes.
 
 ### ADB IPC and Intent Routing
-The Android application defines `HidCommandReceiver` in `AndroidManifest.xml` with `exported="true"`.
+The Android application defines `HidCommandReceiver` in `android/app/src/main/AndroidManifest.xml` with `exported="true"`.
 The host triggers actions by sending broadcast intents through ADB:
 
 ```bash
 adb shell am broadcast \
-  -a com.sj010.ghid_headless.ACTION_CMD \
-  -n com.sj010.ghid_headless/.HidCommandReceiver \
+  -a com.sj010.ghid.ACTION_CMD \
+  -n com.sj010.ghid/.service.HidCommandReceiver \
   --es cmd "<action>" \
   [--es <param> "<value>"]
 ```
@@ -121,16 +122,24 @@ Supported intent actions and parameters:
 | `disconnect` | none | Closes Bluetooth connection |
 | `unpair` | `--es address <MAC>` | Invokes hidden `removeBond` reflection on bonded device |
 | `register` | none | Re-registers the Bluetooth SDP application record |
-| `lock` | none | Dispatches `Win + L` keyboard sequence |
-| `type` | `--es text "<string>"` | Translates ASCII characters into down/up report pairs |
+| `lock` (or action `ACTION_LOCK`) | none | Dispatches `Win + L` (`cmd+ctrl+q` on macOS targets) |
+| `sleep` | none | System Control Sleep (macOS targets run the sleep combo instead) |
+| `type` (or action `ACTION_TYPE`) | `--es text "<string>"` | Translates ASCII characters into down/up report pairs |
 | `combo` | `--es keys "<tokens>"` | Parses chord tokens and dispatches timed reports |
 | `mouse` | `--es action "<token>"` | Emits mouse button or wheel reports (Report ID 2) |
-| `raw` | `--es hex "<16-hex-chars>"`| Sends an explicit 8-byte raw HID report |
+| `media` | `--es key "<token>"` | Consumer-control keys: play/pause, next, prev, volup, voldown, mute |
+| `raw` | `--es hex "<hex>"` `[--es id <n>]` | Sends an explicit raw report; Report ID inferred from length when omitted |
 | `status` | none | Forces immediate write of current status to flash |
 | `stop` | none | Cleans up connections, unregisters SDP, and kills service |
 
+The service itself is started with no extras at all:
+
+```bash
+adb shell am start-foreground-service -n com.sj010.ghid/.service.HidService
+```
+
 ### State Persistence Protocol
-The service writes status snapshots to `/sdcard/Android/data/com.sj010.ghid_headless/files/status.json` whenever connection, pairing, or registration state changes:
+The service writes status snapshots to `/sdcard/Android/data/com.sj010.ghid/files/status.json` whenever connection, pairing, or registration state changes:
 
 ```json
 {
@@ -146,7 +155,7 @@ The service writes status snapshots to `/sdcard/Android/data/com.sj010.ghid_head
 }
 ```
 
-The host CLI inspects this file with `adb shell cat <path>` to verify readiness before dispatching keystrokes. The Android UI also mirrors the passive host OS fingerprint (ADR-007) into its own `status.json`, from which it picks the OS logo, the default combo filter, and the pinned/most-used scoping.
+The host CLI inspects this file with `adb shell cat <path>` to verify readiness before dispatching keystrokes — it reads exactly one path and falls back to an offline status if the file is missing or malformed (no compatibility probing of legacy locations). The Android UI mirrors the passive host OS fingerprint (ADR-007) into the same `status.json`, from which it picks the OS logo, the default combo filter, and the pinned/most-used scoping.
 
 ---
 

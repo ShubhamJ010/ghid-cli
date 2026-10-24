@@ -1,14 +1,14 @@
 # GhostHID
 
-Headless Android Bluetooth HID controller and automation gateway.
+Android Bluetooth HID controller, Material 3 app and automation gateway.
 
 GhostHID turns an Android phone into a physical Bluetooth Human Interface Device (HID) composite peripheral. It injects keyboard keystrokes, pointer gestures, text strings, and automated login sequences into any paired Windows, macOS, or Linux computer.
 
-The phone runs a background Android service controlled locally or over Wi-Fi via ADB and the `ghid` command-line utility.
+The phone runs a background Android service plus a Material 3 Expressive dashboard, controlled locally or over Wi-Fi via ADB and the `ghid` command-line utility.
 
 ```mermaid
 flowchart LR
-    Host["Host Machine (macOS / Linux)<br/><code>ghid</code> CLI / Automation Scripts"] -- ADB USB or Wi-Fi --> Phone["Android Phone (API 28+)<br/>Headless Foreground Service"]
+    Host["Host Machine (macOS / Linux)<br/><code>ghid</code> CLI / Automation Scripts"] -- ADB USB or Wi-Fi --> Phone["Android Phone (API 28+)<br/>GhostHID App: Material 3 UI + <code>HidService</code>"]
     Phone -- Bluetooth Classic HID<br/>(L2CAP PSM 0x11 / 0x13) --> Target["Target Computer<br/>(Windows / macOS / Linux)"]
 
     classDef node fill:#F4F6F7,stroke:#34495E,stroke-width:2px,color:#1C2833
@@ -36,7 +36,7 @@ GhostHID is built for headless operation and AI agents:
 - [Wire and Report Protocol Specification](docs/protocol-spec.md): Binary report payloads, L2CAP channels, USB HID scancode translation table, and ADB intent extras.
 - [Troubleshooting and Operational Runbook](docs/troubleshooting.md): Step-by-step diagnosis for ADB transport drops, Windows audio-vs-HID driver binding, Bluetooth state desync, and macOS Keychain in SSH.
 - [Automation and Agent Integration Guide](docs/agent-integration.md): Machine-readable `--json` schemas, exit code definitions, and integration recipes for Bash, Python, and Node.js.
-- [Standalone Android Toolchain (Zero Gradle)](docs/build-and-toolchain.md): Technical breakdown of the 1.8-second APK compilation pipeline using `aapt2`, `javac`, `d8`, `zipalign`, and `apksigner`.
+- [Standalone Android Toolchain (Gradle Release Pipeline)](docs/build-and-toolchain.md): How `build.sh` and `ghid build` drive `:app:assembleRelease`, R8 shrinking, and publishing of `build/ghost-hid.apk`.
 - [Architecture Decision Records](docs/decisions/):
   - [ADR-001: Headless Android Service with BroadcastReceiver IPC over ADB](docs/decisions/ADR-001-headless-android-service-adb-ipc.md)
   - [ADR-002: Dual-Report HID Descriptor for Keyboard and Mouse](docs/decisions/ADR-002-dual-report-descriptor-for-keyboard-and-mouse.md)
@@ -47,6 +47,10 @@ GhostHID is built for headless operation and AI agents:
   - [ADR-007: Passive Target Host OS Fingerprinting](docs/decisions/ADR-007-host-os-fingerprinting.md)
   - [ADR-008: Composite HID Report Descriptor and Auto-Inferred Raw Dispatch](docs/decisions/ADR-008-composite-descriptor-and-auto-inferred-raw-dispatch.md)
   - [ADR-009: Bi-directional Synchronization and Android as Single Source of Truth](docs/decisions/ADR-009-bidirectional-sync-and-android-ssot.md)
+  - [ADR-010: macOS & Cross-Platform Gestures Adaptation, Vector Iconography, and Inset-Aware Shade Docking](docs/decisions/ADR-010-macos-and-cross-platform-gesture-adaptation.md)
+  - [ADR-011: Quick Send Unified Iconography and Device-Driven Host Coupling](docs/decisions/ADR-011-quick-send-unified-iconography-and-host-coupling.md)
+  - [ADR-012: Single Non-Headless Android App and Release-Only Deployment](docs/decisions/ADR-012-single-android-app-and-release-only-deployment.md)
+- [Prompt: Build Your Own Headless Android App](docs/prompts/headless-android-app.md): the complete ADB broadcast, status and file contract for coding a UI-less gateway app from scratch.
 
 ## Quick Start
 
@@ -79,12 +83,14 @@ adb connect 192.168.1.80:41839
 ```
 
 ### 3. Build and Install the Phone APK
-The build script compiles directly with Android SDK tools (`aapt2`, `javac`, `d8`, `zipalign`, `apksigner`) without Gradle:
+The build script drives the Gradle wrapper in `android/` and always produces a **release** APK:
 
 ```bash
 ./build.sh
 ghid install-apk
 ```
+
+`ghid build` runs the same script, and `ghid install-apk` installs `build/ghost-hid.apk` (package `com.sj010.ghid`) via `adb install -r`.
 
 ### 4. Pair Phone to Target Computer
 Pair the phone and target computer over Bluetooth before first use. See [Bluetooth Pairing Setup](#bluetooth-pairing-setup) for the required Windows settings.
@@ -106,7 +112,7 @@ ghid
 ### Startup Diagnostics
 On startup, `ghid` runs through environment checks:
 1. Checks for connected USB or wireless ADB devices. If disconnected, an interactive menu allows entering custom IP addresses, ports, or pairing codes.
-2. Checks whether package `com.sj010.ghid_headless` is installed. Offers to install pre-built APK or compile from source.
+2. Checks whether package `com.sj010.ghid` is installed. Offers to install the built APK or compile from source.
 3. Checks whether phone Bluetooth is enabled.
 4. Starts the Android foreground service and waits for SDP profile registration.
 5. Connects Bluetooth to the active target computer.
@@ -158,31 +164,31 @@ ghid doctor --json
 Example output:
 ```json
 {
-  "version": "1.0.0",
-  "adb_path": "/opt/homebrew/bin/adb",
   "adb_available": true,
-  "device_connected": true,
-  "device_model": "KB2001",
-  "device_serial": "192.168.1.80:41839",
+  "adb_path": "/opt/homebrew/bin/adb",
   "apk_installed": true,
   "bluetooth_on": true,
-  "gateway_registered": true,
-  "gateway_connected": true,
-  "target_laptop": "LP-TZD-0X114650",
-  "target_address": "38:FC:98:E8:E3:87",
-  "registered_devices": 1,
-  "keychain_available": true,
   "cached_user": "Administrator",
+  "device_connected": true,
+  "device_model": "KB2001",
+  "device_name": "SJ's OnePlus 8T",
+  "device_serial": "192.168.1.80:41839",
+  "gateway_connected": true,
+  "gateway_registered": true,
   "has_cached_password": true,
-  "checks": [
-    {"name": "ADB Host Binary", "pass": true, "detail": "/opt/homebrew/bin/adb"},
-    {"name": "Device Transport", "pass": true, "detail": "KB2001 (192.168.1.80:41839)"},
-    {"name": "Gateway Package", "pass": true, "detail": "com.sj010.ghid_headless installed"},
-    {"name": "Phone Bluetooth Radio", "pass": true, "detail": "Radio active"},
-    {"name": "HID SDP Registration", "pass": true, "detail": "SDP registered"},
-    {"name": "Host Connection", "pass": true, "detail": "Connected to LP-TZD-0X114650"},
-    {"name": "macOS Keychain Vault", "pass": true, "detail": "Vault accessible, user Administrator cached"}
-  ]
+  "keychain_available": true,
+  "registered_devices": 1,
+  "selected_device": {
+    "id": "dev-1",
+    "name": "LP-TZD-0X114650",
+    "address": "38:FC:98:E8:E3:87",
+    "platform": "windows",
+    "selected": true
+  },
+  "snippets_count": 3,
+  "target_address": "38:FC:98:E8:E3:87",
+  "target_laptop": "LP-TZD-0X114650",
+  "version": "1.0.0"
 }
 ```
 
@@ -406,18 +412,22 @@ To ensure Windows binds the phone as a Bluetooth HID keyboard rather than an aud
 
 Prerequisites:
 - OpenJDK 17
-- Android SDK command-line tools (`aapt2`, `d8`, `zipalign`, `apksigner`)
-- Android target platform android-34 (`platforms/android-34/android.jar`)
+- Android SDK with platform `android-35` and `android/local.properties` pointing at it
+- Network access on the first build (Gradle resolves AGP/Kotlin/AndroidX)
 
-Build the APK:
+Build the **release** APK:
 ```bash
-./build.sh
+./build.sh        # android/gradlew :app:assembleRelease -> build/ghost-hid.apk
+# or
+ghid build
 ```
 
 Install to connected phone:
 ```bash
 ghid install-apk
 ```
+
+See [Android Build Toolchain](docs/build-and-toolchain.md) for the full pipeline.
 
 ### CLI Binary (`ghid`)
 
