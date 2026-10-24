@@ -285,9 +285,12 @@ ghid combo schema --json
 ghid combo validate "win+s ->{0.7} type:rustdesk ->{0.4} enter" --json
 
 # Save a named combo for a host OS (updates if already exists)
-ghid combo save "Open RustDesk" "win+s ->{0.7} type:rustdesk ->{0.4} enter" --os windows --json
-ghid combo save "Spotlight" "cmd+space" --os macos --json
+ghid combo save "Open RustDesk" "win+s ->{0.7} type:rustdesk ->{0.4} enter" --os windows --emoji "🚀" --json
+ghid combo save "Spotlight" "cmd+space" --os macos --emoji "🔎" --json
 ghid combo save "PlayPause" "raw:cd00 ->{0.06} raw:0000" --os macos --json
+
+# --emoji is optional metadata: it overrides the OS logo on the Android combo card
+# and replaces the [win] / [mac] / [linux] badge in 'ghid combo list'
 
 # List saved combos, optionally scoped to one OS
 ghid combo list --json

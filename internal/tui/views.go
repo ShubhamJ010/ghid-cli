@@ -553,7 +553,7 @@ func (m Model) renderComboCountdown() string {
 	name := "Combo Sequence"
 	desc := ""
 	if m.execCombo != nil {
-		osTag = "[" + combos.OSShortTag(m.execCombo.OS) + "]"
+		osTag = m.execCombo.Badge()
 		if m.execCombo.Name != "" {
 			name = m.execCombo.Name
 		}

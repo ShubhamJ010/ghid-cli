@@ -194,11 +194,11 @@ func (m *Model) refreshMenuItems() {
 	var items []MenuItem
 	idx := 1
 
-	// Pinned favorite combos at the top, badged with their target OS and description.
+	// Pinned favorite combos at the top, badged with their emoji or target OS.
 	if m.combosStore != nil {
 		favs, _ := m.combosStore.Favorites()
 		for _, f := range favs {
-			icon := "[" + combos.OSShortTag(f.OS) + "]"
+			icon := f.Badge()
 			desc := f.Description
 			if desc == "" {
 				desc = f.Keys

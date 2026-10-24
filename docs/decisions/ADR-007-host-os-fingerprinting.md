@@ -104,6 +104,6 @@ The Go gateway and CLI consume this field to:
 - Distinguishes macOS, Windows, and Linux reliably even if hostnames or physical keyboards change.
 - `status.json` schema extended with `os`, `os_confidence`, and `detection_method` without breaking backward compatibility.
 - CLI, TUI, and combo execution can dynamically adapt keys to target OS platform.
-- The per-combo emoji introduced by ADR-005 is replaced by a single `os` tag (`windows`, `macos`, `linux`). It drives the OS logo, the combo filters, and dashboard scoping; legacy combos migrate to `windows`.
+- The per-combo emoji introduced by ADR-005 is replaced by a single `os` tag (`windows`, `macos`, `linux`). It drives the OS logo, the combo filters, and dashboard scoping; legacy combos migrate to `windows`. The OS tag stays authoritative; ADR-013 later reintroduces an optional emoji that only overrides the drawn icon.
 - The `win` key token remains the HID GUI modifier, so existing sequences stay portable: Windows/Linux Super, macOS Command.
 

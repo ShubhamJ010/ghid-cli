@@ -180,8 +180,12 @@ optionally scoped to one target OS.
 \fBghid combo validate\fR \fIkeys...\fR [\fB\-\-json\fR] \- parse without
 saving or sending; exits 1 when invalid.
 .br
-\fBghid combo save\fR \fIname\fR \fIkeys...\fR [\fB\-\-os\fR \fIwindows|macos|linux\fR] \- save a
-named combo tagged with its target OS (default \fIwindows\fR).
+\fBghid combo save\fR \fIname\fR \fIkeys...\fR
+[\fB\-\-os\fR \fIwindows|macos|linux\fR] [\fB\-\-emoji\fR \fIe\fR]
+[\fB\-\-desc\fR \fId\fR] [\fB\-\-fav\fR] \- save a named combo tagged with its
+target OS (default \fIwindows\fR). An optional emoji becomes the combo icon: it
+overrides the OS logo in the Android app and replaces the OS badge in
+\fBcombo list\fR.
 .br
 \fBghid combo send\fR \fIname\fR \- send a saved combo.
 .br
@@ -206,8 +210,10 @@ with \fIraw:<hex>\fR, such as \fIraw:cd00 ->{0.06} raw:0000\fR (Play/Pause).
 Chain steps with \fI->{seconds}\fR. macOS modifier aliases (\fIcmd\fR, \fIopt\fR)
 are accepted for macOS targets and mapped to native GUI and Alt masks.
 .PP
-Each combo carries an OS tag instead of an emoji icon: \fIwindows\fR, \fImacos\fR or
-\fIlinux\fR. The \fIwin\fR key token is the HID GUI modifier, so it acts as the
+Each combo carries an OS tag: \fIwindows\fR, \fImacos\fR or \fIlinux\fR. The tag
+drives the OS logo and the \fI[win]\fR / \fI[mac]\fR / \fI[linux]\fR badge
+unless the combo has an emoji set with \fB\-\-emoji\fR, which then shows
+instead. The \fIwin\fR key token is the HID GUI modifier, so it acts as the
 Super key on Linux and Command on macOS. \fBghid status\fR reports the host OS
 detected passively by the Android app (\fIos\fR, \fIos_confidence\fR,
 \fIdetection_method\fR in \fB\-\-json\fR).

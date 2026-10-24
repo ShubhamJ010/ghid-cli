@@ -744,6 +744,7 @@ func (a *App) handleCombo(serial string, args []string, jsonOutput bool) int {
 		isFav := false
 		osName := ""
 		description := ""
+		emoji := ""
 
 		for i := 1; i < len(args); i++ {
 			arg := args[i]
@@ -764,6 +765,13 @@ func (a *App) handleCombo(serial string, args []string, jsonOutput bool) int {
 					description = args[i+1]
 					i++
 				}
+			case arg == "--emoji" || arg == "-e":
+				if i+1 < len(args) {
+					emoji = args[i+1]
+					i++
+				}
+			case strings.HasPrefix(arg, "--emoji="):
+				emoji = strings.TrimPrefix(arg, "--emoji=")
 			case strings.HasPrefix(arg, "--desc="):
 				description = strings.TrimPrefix(arg, "--desc=")
 			case strings.HasPrefix(arg, "--description="):
@@ -776,7 +784,7 @@ func (a *App) handleCombo(serial string, args []string, jsonOutput bool) int {
 		}
 
 		if len(positional) < 2 {
-			return a.comboFail(jsonOutput, "usage: ghid combo save <name> <keys...> [--os windows|macos|linux] [--desc <d>] [--fav]")
+			return a.comboFail(jsonOutput, "usage: ghid combo save <name> <keys...> [--os windows|macos|linux] [--emoji <e>] [--desc <d>] [--fav]")
 		}
 		name := positional[0]
 		keys := strings.Join(positional[1:], " ")
@@ -789,6 +797,7 @@ func (a *App) handleCombo(serial string, args []string, jsonOutput bool) int {
 			Name:        name,
 			Keys:        keys,
 			OS:          normalizedOS,
+			Emoji:       emoji,
 			Description: description,
 			Favorite:    isFav,
 		})
@@ -799,7 +808,7 @@ func (a *App) handleCombo(serial string, args []string, jsonOutput bool) int {
 			_ = syncer.AutoPushIfConnected(mgr, a.ComboStore, a.SnippetStore)
 		}
 		if jsonOutput {
-			saved := combos.Combo{Name: name, Keys: keys, OS: normalizedOS, Description: description, Favorite: isFav}
+			saved := combos.Combo{Name: name, Keys: keys, OS: normalizedOS, Emoji: emoji, Description: description, Favorite: isFav}
 			for _, c := range list {
 				if strings.EqualFold(c.Name, name) {
 					saved = c
@@ -817,6 +826,9 @@ func (a *App) handleCombo(serial string, args []string, jsonOutput bool) int {
 				favMsg = " [pinned ❤️]"
 			}
 			osMsg := "[" + combos.OSLabel(normalizedOS) + "] "
+			if emoji != "" {
+				osMsg = emoji + " "
+			}
 			fmt.Fprintf(a.Stdout, "✔ Saved combo %s%q (%s)%s (synced to Android)\n", osMsg, name, keys, favMsg)
 		}
 		return 0
@@ -923,12 +935,13 @@ func (a *App) handleComboSchema(store *combos.Store, jsonOutput bool) int {
 		"text_prefixes": []string{"type:", "text:", "type ", "text "},
 		"os_tags":       combos.OSTokens(),
 		"default_os":    combos.OSWindows,
+		"emoji":         "optional single emoji shown as the combo icon on Android and instead of the OS badge in the CLI",
 		"os_note":       "The win token is the HID GUI modifier: Windows/Linux Super, macOS Command.",
 		"example":       "ctrl+alt+del ->{1.0} esc ->{0.8} $USERNAME ->{0.8} tab ->{0.8} $PASSWORD ->{0.8} enter",
 		"commands": map[string]string{
 			"list":     "ghid combo list --json",
 			"fav":      "ghid combo fav <name> --json",
-			"save":     "ghid combo save \"Name\" \"keys\" [--os windows|macos|linux] [--desc <d>] [--fav] --json",
+			"save":     "ghid combo save \"Name\" \"keys\" [--os windows|macos|linux] [--emoji <e>] [--desc <d>] [--fav] --json",
 			"send":     "ghid combo send \"Name\" --json",
 			"delete":   "ghid combo delete \"Name\" --json",
 			"validate": "ghid combo validate \"keys\" --json",
@@ -1120,7 +1133,7 @@ func (a *App) listCombos(store *combos.Store, jsonOutput bool, osFilter string) 
 		if c.Favorite {
 			favIcon = "❤️ "
 		}
-		osTag := "[" + combos.OSShortTag(c.OS) + "]"
+		osTag := c.Badge()
 		nameWithOS := osTag + " " + c.Name
 		nameWidth := runewidth.StringWidth(nameWithOS)
 		namePad := ""
@@ -1850,7 +1863,7 @@ Commands:
   combo fav <name>  Toggle favorite (pin with ❤️ to top of dashboard action list)
   combo schema      Grammar + every accepted token (JSON for AI agents)
   combo validate <keys>  Validate without saving or sending
-  combo save <name> <keys...> [--os windows|macos|linux] [--desc <d>] [--fav]   Save a named combo (keyboard + mouse + text + $VAR)
+  combo save <name> <keys...> [--os windows|macos|linux] [--emoji <e>] [--desc <d>] [--fav]   Save a named combo (keyboard + mouse + text + $VAR)
   combo send <name> Send a saved combo
   combo delete <name> [-f]      Delete a combo (--json skips confirmation)
   combo <keys>      Send a one-shot shortcut (e.g. 'win+d', 'ctrl+alt+del')

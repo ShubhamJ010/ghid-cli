@@ -264,6 +264,7 @@ Generic system/laptop icons are superseded by branded vector silhouettes:
 - `ic_os_windows.xml`: Canonical 4-pane silhouette for Windows targets.
 - `ic_os_linux.xml`: Canonical silhouette for Linux targets.
 - Uniformly rendered via `OsGlyph(os = targetOs, modifier, tint)`.
+- Combo identity uses `ComboGlyph(combo, size, tint)`: the combo's optional `emoji` metadata wins, otherwise it delegates to the target OS logo. The same emoji replaces the `[win]` / `[mac]` / `[linux]` badge in `ghid combo list` and the TUI.
 - Quick Send header merges the previous toggle pill and lightning bolt into a single 44dp clover container (`MaterialShapes.ShapeClover4`) holding the active `OsGlyph` or `ic_notification_ghost`.
 
 ### Inset-Aware PullDownShade Architecture

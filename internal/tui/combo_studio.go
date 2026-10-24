@@ -38,8 +38,9 @@ type ComboStudioModel struct {
 	index      int
 	focus      int // 0 = list, 1 = SEND, 2 = NEW, 3 = DELETE
 	mode       studioMode
-	formFocus  int // 0 = name, 1 = os, 2 = desc, 3 = keys, 4 = save, 5 = save & send
+	formFocus  int // 0 = name, 1 = emoji, 2 = os, 3 = desc, 4 = keys, 5 = save, 6 = save & send
 	nameInput  textinput.Model
+	emojiInput textinput.Model
 	osInput    textinput.Model
 	descInput  textinput.Model
 	keysInput  textinput.Model
@@ -59,6 +60,11 @@ func NewComboStudioModel(store *combos.Store, send ComboSendFunc) ComboStudioMod
 	name.Placeholder = "e.g. Open Run dialog"
 	name.CharLimit = 40
 	name.Width = 46
+
+	emojiInput := textinput.New()
+	emojiInput.Placeholder = "e.g. 🔑 (optional, overrides the OS icon)"
+	emojiInput.CharLimit = combos.MaxEmojiRunes
+	emojiInput.Width = 46
 
 	osInput := textinput.New()
 	osInput.Placeholder = "windows, macos or linux (default windows)"
@@ -82,13 +88,14 @@ func NewComboStudioModel(store *combos.Store, send ComboSendFunc) ComboStudioMod
 	}
 
 	m := ComboStudioModel{
-		store:     store,
-		send:      send,
-		list:      list,
-		nameInput: name,
-		osInput:   osInput,
-		descInput: desc,
-		keysInput: keys,
+		store:      store,
+		send:       send,
+		list:       list,
+		nameInput:  name,
+		emojiInput: emojiInput,
+		osInput:    osInput,
+		descInput:  desc,
+		keysInput:  keys,
 	}
 	if err != nil {
 		m.notice = fmt.Sprintf("Could not read combos: %v", err)
@@ -292,14 +299,17 @@ func (m ComboStudioModel) openCreate(existing combos.Combo) (tea.Model, tea.Cmd)
 	m.editing = existing.Name
 	m.formFocus = 0
 	m.nameInput.SetValue(existing.Name)
+	m.emojiInput.SetValue(existing.Emoji)
 	m.osInput.SetValue(combos.NormalizeOSDefault(existing.OS))
 	m.descInput.SetValue(existing.Description)
 	m.keysInput.SetValue(existing.Keys)
 	m.nameInput.CursorEnd()
+	m.emojiInput.CursorEnd()
 	m.osInput.CursorEnd()
 	m.descInput.CursorEnd()
 	m.keysInput.CursorEnd()
 	m.nameInput.Focus()
+	m.emojiInput.Blur()
 	m.osInput.Blur()
 	m.descInput.Blur()
 	m.keysInput.Blur()
@@ -314,6 +324,7 @@ func (m ComboStudioModel) updateCreate(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = studioList
 		m.editing = ""
 		m.nameInput.Blur()
+		m.emojiInput.Blur()
 		m.osInput.Blur()
 		m.descInput.Blur()
 		m.keysInput.Blur()
@@ -332,14 +343,14 @@ func (m ComboStudioModel) updateCreate(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "enter":
 		switch m.formFocus {
-		case 0, 1, 2:
+		case 0, 1, 2, 3:
 			m.focusFormField(1)
 			return m, textinput.Blink
-		case 3:
-			return m.saveCombo(false)
 		case 4:
 			return m.saveCombo(false)
 		case 5:
+			return m.saveCombo(false)
+		case 6:
 			return m.saveCombo(true)
 		}
 	}
@@ -349,17 +360,19 @@ func (m ComboStudioModel) updateCreate(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case 0:
 		m.nameInput, cmd = m.nameInput.Update(msg)
 	case 1:
-		m.osInput, cmd = m.osInput.Update(msg)
+		m.emojiInput, cmd = m.emojiInput.Update(msg)
 	case 2:
-		m.descInput, cmd = m.descInput.Update(msg)
+		m.osInput, cmd = m.osInput.Update(msg)
 	case 3:
+		m.descInput, cmd = m.descInput.Update(msg)
+	case 4:
 		m.keysInput, cmd = m.keysInput.Update(msg)
 	}
 	return m, cmd
 }
 
 func (m *ComboStudioModel) focusFormField(delta int) {
-	order := []int{0, 1, 2, 3, 4, 5}
+	order := []int{0, 1, 2, 3, 4, 5, 6}
 	current := 0
 	for i, v := range order {
 		if v == m.formFocus {
@@ -371,6 +384,7 @@ func (m *ComboStudioModel) focusFormField(delta int) {
 	m.formFocus = order[next]
 
 	m.nameInput.Blur()
+	m.emojiInput.Blur()
 	m.osInput.Blur()
 	m.descInput.Blur()
 	m.keysInput.Blur()
@@ -378,10 +392,12 @@ func (m *ComboStudioModel) focusFormField(delta int) {
 	case 0:
 		m.nameInput.Focus()
 	case 1:
-		m.osInput.Focus()
+		m.emojiInput.Focus()
 	case 2:
-		m.descInput.Focus()
+		m.osInput.Focus()
 	case 3:
+		m.descInput.Focus()
+	case 4:
 		m.keysInput.Focus()
 	}
 }
@@ -393,6 +409,19 @@ func (m ComboStudioModel) saveCombo(andSend bool) (tea.Model, tea.Cmd) {
 		m.isError = true
 		m.formFocus = 0
 		m.nameInput.Focus()
+		m.emojiInput.Blur()
+		m.osInput.Blur()
+		m.descInput.Blur()
+		m.keysInput.Blur()
+		return m, textinput.Blink
+	}
+	emoji, err := combos.ValidateEmoji(m.emojiInput.Value())
+	if err != nil {
+		m.notice = "✖ " + err.Error()
+		m.isError = true
+		m.formFocus = 1
+		m.emojiInput.Focus()
+		m.nameInput.Blur()
 		m.osInput.Blur()
 		m.descInput.Blur()
 		m.keysInput.Blur()
@@ -402,9 +431,10 @@ func (m ComboStudioModel) saveCombo(andSend bool) (tea.Model, tea.Cmd) {
 	if err := combos.Validate(keys); err != nil {
 		m.notice = fmt.Sprintf("✖ %v", err)
 		m.isError = true
-		m.formFocus = 3
+		m.formFocus = 4
 		m.keysInput.Focus()
 		m.nameInput.Blur()
+		m.emojiInput.Blur()
 		m.osInput.Blur()
 		m.descInput.Blur()
 		return m, textinput.Blink
@@ -414,9 +444,10 @@ func (m ComboStudioModel) saveCombo(andSend bool) (tea.Model, tea.Cmd) {
 	if err != nil {
 		m.notice = fmt.Sprintf("✖ %v", err)
 		m.isError = true
-		m.formFocus = 1
+		m.formFocus = 2
 		m.osInput.Focus()
 		m.nameInput.Blur()
+		m.emojiInput.Blur()
 		m.descInput.Blur()
 		m.keysInput.Blur()
 		return m, textinput.Blink
@@ -434,6 +465,7 @@ func (m ComboStudioModel) saveCombo(andSend bool) (tea.Model, tea.Cmd) {
 		Name:        name,
 		Keys:        keys,
 		OS:          osName,
+		Emoji:       emoji,
 		Description: desc,
 		Favorite:    isFav,
 	}
@@ -455,6 +487,7 @@ func (m ComboStudioModel) saveCombo(andSend bool) (tea.Model, tea.Cmd) {
 	m.mode = studioList
 	m.editing = ""
 	m.nameInput.Blur()
+	m.emojiInput.Blur()
 	m.osInput.Blur()
 	m.descInput.Blur()
 	m.keysInput.Blur()
@@ -645,7 +678,7 @@ func (m ComboStudioModel) renderComboTable(innerWidth int) string {
 			favNumCol = padRight(fmt.Sprintf("   %-2d", i+1), colFavNum)
 		}
 
-		osStr := "[" + combos.OSShortTag(c.OS) + "] "
+		osStr := c.Badge() + " "
 		fullName := osStr + c.Name
 		nameCol := padRight(truncate(fullName, nameWidth), nameWidth)
 		keysCol := padRight(truncate(c.Keys, keysWidth), keysWidth)
@@ -701,6 +734,7 @@ func (m ComboStudioModel) renderButtons() string {
 func (m ComboStudioModel) renderCreateForm() string {
 	labelStyle := lipgloss.NewStyle().Foreground(ColorFgMuted).Width(13)
 	nameLabel := labelStyle.Render("Name")
+	emojiLabel := labelStyle.Render("Emoji")
 	osLabel := labelStyle.Render("OS")
 	descLabel := labelStyle.Render("Description")
 	keysLabel := labelStyle.Render("Keys")
@@ -713,8 +747,16 @@ func (m ComboStudioModel) renderCreateForm() string {
 		}
 		nameField = SubtitleStyle.Render(nameVal)
 	}
-	osField := m.osInput.View()
+	emojiField := m.emojiInput.View()
 	if m.formFocus != 1 {
+		emojiVal := m.emojiInput.Value()
+		if emojiVal == "" {
+			emojiVal = "(none — target OS icon)"
+		}
+		emojiField = SubtitleStyle.Render(emojiVal)
+	}
+	osField := m.osInput.View()
+	if m.formFocus != 2 {
 		osVal := m.osInput.Value()
 		if osVal == "" {
 			osVal = combos.OSWindows
@@ -722,7 +764,7 @@ func (m ComboStudioModel) renderCreateForm() string {
 		osField = SubtitleStyle.Render(osVal)
 	}
 	descField := m.descInput.View()
-	if m.formFocus != 2 {
+	if m.formFocus != 3 {
 		descVal := m.descInput.Value()
 		if descVal == "" {
 			descVal = "(none)"
@@ -730,7 +772,7 @@ func (m ComboStudioModel) renderCreateForm() string {
 		descField = SubtitleStyle.Render(descVal)
 	}
 	keysField := m.keysInput.View()
-	if m.formFocus != 3 {
+	if m.formFocus != 4 {
 		keysVal := m.keysInput.Value()
 		if keysVal == "" {
 			keysVal = "(empty)"
@@ -738,13 +780,14 @@ func (m ComboStudioModel) renderCreateForm() string {
 		keysField = SubtitleStyle.Render(keysVal)
 	}
 
-	save := m.formButton("SAVE", 4)
-	sendSave := m.formButton("SAVE & SEND", 5)
+	save := m.formButton("SAVE", 5)
+	sendSave := m.formButton("SAVE & SEND", 6)
 
 	form := fmt.Sprintf(
-		"%s\n\n%s  %s\n%s  %s\n%s  %s\n%s  %s\n\n%s",
+		"%s\n\n%s  %s\n%s  %s\n%s  %s\n%s  %s\n%s  %s\n\n%s",
 		TitleStyle.Render("CREATE / EDIT COMBO"),
 		nameLabel, nameField,
+		emojiLabel, emojiField,
 		osLabel, osField,
 		descLabel, descField,
 		keysLabel, keysField,
