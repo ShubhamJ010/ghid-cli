@@ -279,7 +279,7 @@ Android is treated as the Single Source of Truth (SSOT).
 .IP \(bu 2
 \fB\-\-pull\fR: Only pulls remote items from Android. The phone wins name conflicts; local-only combos and non-secure payloads are preserved for the next push.
 .IP \(bu 2
-\fB\-\-push\fR: Pushes local entries to Android, restarts the app, and reconnects Bluetooth. Secure payloads never sync; they are counted as \fIpayloads_skipped_secure\fR. A combination of `combo save`/`delete` also reports whether an attached phone was actually synced.
+\fB\-\-push\fR: Pushes local entries to Android, restarts the app, and reconnects Bluetooth. Secure payload entries push with their value scrubbed (ADR\-009) and are counted as \fIpayloads_skipped_secure\fR; secret values never leave the Mac. A combination of `combo save`/`delete` also reports whether an attached phone was actually synced.
 .RE
 .TP
 .B quick \fB\-\-raw\fR \fIhex\fR

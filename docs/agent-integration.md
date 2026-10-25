@@ -459,9 +459,11 @@ ghid payload delete api_token --json
 ```
 
 #### Secure payload synchronization
-Secure payloads never sync in either direction. `sync --push` reports them as
-`payloads_skipped_secure`; create phone-only secrets on the phone. `ghid status --json`
-always reports `secure_payloads: "device_only"`.
+Secure payload values never sync in either direction: `sync --push` sends secure
+entries with `Value` scrubbed (ADR-009) so phone-side references resolve, counts
+them as `payloads_skipped_secure`, and keeps the secret in the local Keychain
+only. Create phone-only secrets on the phone. `ghid status --json` always
+reports `secure_payloads: "device_only"`.
 
 ---
 

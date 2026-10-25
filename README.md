@@ -236,7 +236,7 @@ The CLI automatically pulls changes from the phone on startup (<15ms check), and
 ```bash
 # Full bi-directional sync (pull from phone, merge additions, push back, restart & reconnect)
 ghid sync
-# Secure payloads never cross the link; the report counts them as payloads_skipped_secure
+# Secure payload values never cross the link; entries push with Value scrubbed and are counted as payloads_skipped_secure
 
 # Pull only (phone wins name conflicts; local-only entries are kept for the next push)
 ghid sync --pull
@@ -432,7 +432,7 @@ and `value` only for non-secure entries — so an absent Keychain item is visibl
 `present: false` instead of an empty string. Secure items live under service
 `ghost-hid` and account `ghid_payload_<lowercase-name>`.
 
-When combos with bundled payloads are saved or synchronized, referenced raw reports (e.g. `{WIN_SLEEP}`, `{PLAY_PAUSE}`) are automatically provisioned in the recipient's local payload store. Secure payloads never sync: they stay device-only, and `sync` reports them as `payloads_skipped_secure`.
+When combos with bundled payloads are saved or synchronized, referenced raw reports (e.g. `{WIN_SLEEP}`, `{PLAY_PAUSE}`) are automatically provisioned in the recipient's local payload store. Secure payload entries sync with `Value` scrubbed so phone-side references resolve (ADR-009) while the secret values stay device-only in the Keychain; `sync` counts them as `payloads_skipped_secure`.
 
 ## Bluetooth Pairing Setup
 

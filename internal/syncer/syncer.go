@@ -25,7 +25,8 @@ type SyncReport struct {
 // Pull merges combos and non-secure payloads from Android into the local stores.
 // The phone wins name conflicts (Android is SSOT), but local-only entries are
 // preserved: a CLI edit made while the phone was away must not disappear on the
-// next startup pull. Secure payloads are never shared and remain local.
+// next startup pull. Secure payload values never cross: remote entries arrive
+// Value-scrubbed and never overwrite the local Keychain-backed originals.
 func Pull(mgr *adb.Manager, cStore *combos.Store, pStore *payloads.Store) (*SyncReport, error) {
 	report := &SyncReport{}
 
@@ -41,8 +42,9 @@ func Pull(mgr *adb.Manager, cStore *combos.Store, pStore *payloads.Store) (*Sync
 	}
 
 	// 2. Pull remote payloads - phone wins conflicts for non-secure payloads.
-	// Secure payloads are never shared and remain securely stored locally;
-	// non-secure payloads that only exist locally are preserved for the next push.
+	// Remote secure entries arrive Value-scrubbed (ADR-009) and are ignored:
+	// the local Keychain-backed originals stay untouched, and local-only
+	// non-secure payloads are preserved for the next push.
 	remotePayloadsRaw, err := mgr.Run("shell", "cat", adb.AppPayloadsFileRemote)
 	if err == nil && strings.HasPrefix(strings.TrimSpace(remotePayloadsRaw), "[") {
 		var remotePayloads []payloads.Payload
@@ -102,10 +104,11 @@ func mergePayloads(local, remote []payloads.Payload) []payloads.Payload {
 	return merged
 }
 
-// Push pushes local combos and non-secure payloads to Android,
-// restarts the app and broadcasts reconnect to target device.
-// Secure payloads are never saved by the CLI to the application.
-// Non-secure payloads always keep their value when moving to the phone.
+// Push pushes local combos and all payloads to Android, restarts the app and
+// broadcasts reconnect to the target device. Secure payloads are pushed with
+// Value scrubbed per ADR-009: the entry (name, type, secure flag) lands on the
+// phone so referencing combos resolve, but the secret stays in the Keychain
+// and never crosses the transport. Non-secure payloads keep their full value.
 func Push(mgr *adb.Manager, cStore *combos.Store, pStore *payloads.Store) (*SyncReport, error) {
 	report := &SyncReport{}
 
@@ -133,19 +136,20 @@ func Push(mgr *adb.Manager, cStore *combos.Store, pStore *payloads.Store) (*Sync
 	}
 	report.CombosPushed = len(localCombos)
 
-	// 2. Push payloads: secure payloads are NEVER saved by CLI to the application.
-	// Only non-secure payloads are saved to the application, preserving their values.
+	// 2. Push payloads: every payload travels so phone-side combos resolve,
+	// but secure payloads are scrubbed first (Value = "", ADR-009). The secret
+	// never leaves the macOS Keychain; PayloadsSkippedSecure counts the scrub.
 	localPayloads, err := pStore.Load()
 	if err != nil {
 		return nil, fmt.Errorf("load payloads: %w", err)
 	}
 	toPush := make([]payloads.Payload, 0, len(localPayloads))
 	for _, p := range localPayloads {
-		if !p.Secure {
-			toPush = append(toPush, p)
-		} else {
+		if p.Secure {
+			p.Value = ""
 			report.PayloadsSkippedSecure++
 		}
+		toPush = append(toPush, p)
 	}
 	payloadsData, err := json.MarshalIndent(toPush, "", "  ")
 	if err != nil {
@@ -177,8 +181,8 @@ func Push(mgr *adb.Manager, cStore *combos.Store, pStore *payloads.Store) (*Sync
 }
 
 // Sync performs a full two-way synchronization:
-// 1. Pulls from Android (non-secure payloads and combos).
-// 2. Pushes back to Android (excluding secure payloads).
+// 1. Pulls from Android (combos and non-secure payload values).
+// 2. Pushes back to Android (secure payloads included with Value scrubbed).
 // 3. Restarts app and reconnects Bluetooth.
 func Sync(mgr *adb.Manager, cStore *combos.Store, pStore *payloads.Store) (*SyncReport, error) {
 	pullRep, err := Pull(mgr, cStore, pStore)

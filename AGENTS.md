@@ -110,7 +110,7 @@ ghid status
 - `combo send <name> --dry-run --json` = resolved HID steps, nothing dispatched.
 - `combo delete --json` = no confirmation.
 - `payload get --json` = `source`/`present`/`has_value`; a missing Keychain item exits 1.
-- Secure payloads are device-only: never synced, reported as `payloads_skipped_secure`; `status` carries `secure_payloads: "device_only"`.
+- Secure payload values are device-only and never cross the link: push sends their entries with `Value` scrubbed (ADR-009) and counts them as `payloads_skipped_secure`; `status` carries `secure_payloads: "device_only"`.
 - `status --json` splits `gateway` (ADB) from `hid_link`; gate sends on `can_send`.
 
 ```bash
