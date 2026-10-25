@@ -357,7 +357,7 @@ func (a *App) handleStatus(cfg config.Config, serial string, jsonOutput bool) in
 	} else {
 		fmt.Fprintln(a.Stdout, "  Can send:     no (HID link not connected; run 'ghid connect')")
 	}
-	fmt.Fprintln(a.Stdout, "  Secure:       secure payloads are device-only (never synced)")
+	fmt.Fprintln(a.Stdout, "  Secure:       secure values are device-only (entries sync with value scrubbed)")
 	fmt.Fprintln(a.Stdout)
 	if !status.Connected {
 		return 1
@@ -1150,7 +1150,7 @@ func (a *App) handleComboSchema(store *combos.Store, jsonOutput bool) int {
 		"default_os":         combos.OSWindows,
 		"emoji":              "optional single emoji shown as the combo icon on Android and instead of the OS badge in the CLI",
 		"mod_note":           "The 'mod' modifier maps dynamically to Cmd on macOS, and Ctrl on Windows/Linux.",
-		"payload_note":       "Secure payloads are stored in the macOS Keychain and never sync to Android; create phone-only secrets on the phone.",
+		"payload_note":       "Secure payload values live in the macOS Keychain and never cross to Android; pushed entries carry a scrubbed value (ADR-009). Create phone-only secrets on the phone.",
 		"example":            "user{Tab}{PASSWORD}{Enter}{500ms}{mod+s}",
 		"commands": map[string]string{
 			"list":     "ghid combo list --json",
@@ -2493,7 +2493,7 @@ func (a *App) handleSync(serial string, args []string, jsonOutput bool) int {
 		fmt.Fprintf(a.Stdout, "  Pushed (Android): %d combos, %d payloads\n", report.CombosPushed, report.PayloadsPushed)
 	}
 	if report.PayloadsSkippedSecure > 0 {
-		fmt.Fprintf(a.Stdout, "  Secure skipped:   %d payloads (device-only, never synced)\n", report.PayloadsSkippedSecure)
+		fmt.Fprintf(a.Stdout, "  Secure skipped:   %d payloads (values scrubbed; secrets stay device-only)\n", report.PayloadsSkippedSecure)
 	}
 	if report.AppRestarted {
 		fmt.Fprintf(a.Stdout, "  App Restarted:    ✔ com.sj010.ghid\n")
