@@ -181,11 +181,11 @@ func isStandardKey(token string) bool {
 // Grammar:
 // - Plain text outside {} is emitted as virtual typing steps.
 // - Inside {}:
-//   1. {{ -> Literal "{" (escaped bracket in typed text).
-//   2. Number + ms or s ({500ms}, {1s}) -> Delay step.
-//   3. Contains "+" ({mod+s}, {ctrl+alt+del}) -> Keyboard chord step.
-//   4. Standard W3C / HID key name or consumer key or mouse action -> Single key / raw / mouse step.
-//   5. Alphanumeric / Identifier ({PASSWORD}, {WIN_SLEEP}) -> Named Payload reference step.
+//  1. {{ -> Literal "{" (escaped bracket in typed text).
+//  2. Number + ms or s ({500ms}, {1s}) -> Delay step.
+//  3. Contains "+" ({mod+s}, {ctrl+alt+del}) -> Keyboard chord step.
+//  4. Standard W3C / HID key name or consumer key or mouse action -> Single key / raw / mouse step.
+//  5. Alphanumeric / Identifier ({PASSWORD}, {WIN_SLEEP}) -> Named Payload reference step.
 func ParseSequence(input string) ([]ComboStep, error) {
 	trimmed := strings.TrimSpace(input)
 	if trimmed == "" {

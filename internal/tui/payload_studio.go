@@ -21,23 +21,23 @@ const (
 // PayloadStudioModel allows viewing, creating, editing, and deleting payloads
 // ({USERNAME}, {PASSWORD}, and any custom text or secrets).
 type PayloadStudioModel struct {
-	store        *payloads.Store
-	list         []payloads.Payload
-	index        int
-	focus        int // 0 = list, 1 = NEW, 2 = EDIT, 3 = DELETE
-	mode         payloadStudioMode
-	formFocus    int // 0 = name, 1 = value, 2 = type toggle, 3 = secure toggle, 4 = save
-	nameInput    textinput.Model
-	valueInput   textinput.Model
-	payloadType  string // "type" or "raw"
-	isSecure     bool
-	editing      string // non-empty if editing existing payload
-	notice       string
-	isError      bool
-	pendingDel   *payloads.Payload
-	width        int
-	height       int
-	quitting     bool
+	store       *payloads.Store
+	list        []payloads.Payload
+	index       int
+	focus       int // 0 = list, 1 = NEW, 2 = EDIT, 3 = DELETE
+	mode        payloadStudioMode
+	formFocus   int // 0 = name, 1 = value, 2 = type toggle, 3 = secure toggle, 4 = save
+	nameInput   textinput.Model
+	valueInput  textinput.Model
+	payloadType string // "type" or "raw"
+	isSecure    bool
+	editing     string // non-empty if editing existing payload
+	notice      string
+	isError     bool
+	pendingDel  *payloads.Payload
+	width       int
+	height      int
+	quitting    bool
 }
 
 // NewPayloadStudioModel initializes the Payload Studio.
