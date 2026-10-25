@@ -711,9 +711,9 @@ func describeStep(step hid.ComboStep) string {
 		return "{" + step.Payload + "}"
 	case step.Text != "":
 		if len(step.Text) > 20 {
-			return fmt.Sprintf("type: %q...", step.Text[:17])
+			return fmt.Sprintf("%q...", step.Text[:17])
 		}
-		return fmt.Sprintf("type: %q", step.Text)
+		return fmt.Sprintf("%q", step.Text)
 	case step.Mouse != nil:
 		return step.Mouse.Name
 	case step.Raw != "":

@@ -70,7 +70,7 @@ Provides numbered actions:
 .IP \(bu 2
 \fBlock\fR: Sends instant Win+L keystroke sequence.
 .IP \(bu 2
-\fBsleep\fR: Dispatches hardware ACPI sleep sequence (\fIraw:02 ->{0.06} raw:00\fR).
+\fBsleep\fR: Dispatches hardware ACPI sleep sequence (Report 3 \fI02\fR with automatic 60ms auto-release).
 .IP \(bu 2
 \fBtype\fR: Prompts for arbitrary text and injects it character-by-character.
 .IP \(bu 2
@@ -156,7 +156,7 @@ it will prompt for missing values and offer to cache them.
 Instantly send Windows lock shortcut (\fIWin + L\fR).
 .TP
 .B sleep \fR[\fB\-\-countdown\fR \fIsecs\fR] [\fB\-\-no-exit\fR]
-Dispatches native hardware ACPI sleep sequence (\fIraw:02 ->{0.06} raw:00\fR)
+Dispatches native hardware ACPI sleep sequence (Report 3 \fI02\fR with automatic 60ms auto-release)
 triggering S3/Modern Standby at the kernel level.
 .TP
 .B type \fItext...\fR
@@ -205,9 +205,7 @@ where text outside braces is typed literally, chords use braces (e.g. \fI{mod+s}
 delays use milliseconds or seconds (e.g. \fI{500ms}\fR, \fI{1s}\fR), and dynamic payloads
 use identifiers (e.g. \fI{PASSWORD}\fR, \fI{WIN_SLEEP}\fR). For example:
 \fIsamxn81@gmail.com{Tab}{PASSWORD}{Enter}{500ms}{mod+s}{100ms}{WIN_SLEEP}\fR.
-with \fIraw:<hex>\fR, such as \fIraw:cd00 ->{0.06} raw:0000\fR (Play/Pause).
-Chain steps with \fI->{seconds}\fR. macOS modifier aliases (\fIcmd\fR, \fIopt\fR)
-are accepted for macOS targets and mapped to native GUI and Alt masks.
+Momentary raw reports (Consumer Control Report 4 like \fIcd00\fR for Play/Pause, System Control Report 3 like \fI02\fR for Sleep) are automatically released with a zero report after 60ms. macOS modifier aliases (\fIcmd\fR, \fIopt\fR) are accepted for macOS targets and mapped to native GUI and Alt masks.
 .PP
 Each combo carries an OS tag: \fIwindows\fR, \fImacos\fR or \fIlinux\fR. The tag
 drives the OS logo and the \fI[win]\fR / \fI[mac]\fR / \fI[linux]\fR badge

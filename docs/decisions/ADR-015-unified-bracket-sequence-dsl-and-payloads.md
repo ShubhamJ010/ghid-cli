@@ -40,7 +40,16 @@ Macro sequences were previously split across ad-hoc, divergent syntax tokens: ar
    - Combos now store `sequence` (replacing legacy `keys`) and bundle `payloads: map[string]Payload`.
    - When saving or syncing combos, if a referenced payload (such as raw report `{WIN_SLEEP}` or `{PLAY_PAUSE}`) does not exist in the recipient's local payload store, it is automatically provisioned into the `PayloadStore`/`PayloadRepository`.
 
-4. **Synchronizer and ADB Transport**:
+5. **Momentary HID Raw Report Auto-Release**:
+   - HID reports are stateful switch states. Unlike keystroke chords which have an explicit down-settle-up cycle, single-shot raw reports previously sent only the down state.
+   - For Report ID 4 (Consumer Control, 2 bytes, e.g. `cd00` Play/Pause) and Report ID 3 (System Control, 1 byte, e.g. `02` System Sleep), `HidService.sendRawReport` automatically transmits an all-zero release report (`0000` or `00`) after a 60ms settle delay for non-zero reports.
+   - Prevents host OS from registering stuck media keys or missed toggle events.
+
+6. **Process Lifecycle on Deployment**:
+   - When deploying via `adb install -r`, the Android Package Manager keeps the running process in memory.
+   - Tooling and deployment scripts MUST issue `adb shell am force-stop com.sj010.ghid` before starting or testing to prevent stale in-memory code execution.
+
+7. **Synchronizer and ADB Transport**:
    - Gateway and syncer endpoints transport `Payload` structures and `sequence` fields.
    - Synchronization pushes and pulls payload files (`payloads.json`) while maintaining strict local security enclave boundaries for sensitive credentials.
 
