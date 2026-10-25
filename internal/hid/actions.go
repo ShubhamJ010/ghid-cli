@@ -109,13 +109,50 @@ func mouseActionFor(canonical string) MouseAction {
 }
 
 // ConsumerKeyReports maps standard consumer/media keys to raw 2-byte reports.
+// Aliases intentionally match the Android KeyTokens table so a sequence that
+// validates on the CLI resolves to the same report on the phone.
 var ConsumerKeyReports = map[string]string{
-	"volumeup":   "e900",
-	"volumedown": "ea00",
-	"mute":       "e200",
-	"playpause":  "cd00",
-	"play_pause": "cd00",
-	"play-pause": "cd00",
+	"volumeup":    "e900",
+	"volume_up":   "e900",
+	"volup":       "e900",
+	"volumedown":  "ea00",
+	"volume_down": "ea00",
+	"voldown":     "ea00",
+	"mute":        "e200",
+	"playpause":   "cd00",
+}
+
+// consumerTokenFor returns the primary grammar token for a consumer report.
+func consumerTokenFor(canonical string) string {
+	switch canonical {
+	case "VOLUME_UP":
+		return "volumeup"
+	case "VOLUME_DOWN":
+		return "volumedown"
+	case "MUTE":
+		return "mute"
+	case "PLAY_PAUSE":
+		return "playpause"
+	default:
+		return strings.ToLower(canonical)
+	}
+}
+
+// CanonicalConsumerName maps a consumer alias to the stable display name used
+// in JSON output and the Android preview.
+func CanonicalConsumerName(token string) string {
+	switch strings.ToLower(strings.TrimSpace(token)) {
+	case "volumeup", "volume_up", "volup":
+		return "VOLUME_UP"
+	case "volumedown", "volume_down", "voldown":
+		return "VOLUME_DOWN"
+	case "mute":
+		return "MUTE"
+	case "playpause":
+		return "PLAY_PAUSE"
+	default:
+		return strings.ToUpper(strings.TrimSpace(token))
+	}
 }
 
 var (
@@ -162,7 +199,7 @@ func isStandardKey(token string) bool {
 		"minus", "equal", "equals", "leftbracket", "lbracket", "rightbracket", "rbracket",
 		"backslash", "semicolon", "quote", "apostrophe", "grave", "backtick", "tilde",
 		"comma", "period", "dot", "slash", "forwardslash",
-		"win", "ctrl", "alt", "shift", "mod", "cmd", "opt", "option", "super", "gui", "meta", "control":
+		"win", "ctrl", "alt", "shift", "mod", "cmd", "command", "opt", "option", "super", "gui", "meta", "control":
 		return true
 	}
 	if strings.HasPrefix(lower, "f") && len(lower) >= 2 && len(lower) <= 3 {
@@ -275,8 +312,15 @@ func ParseSequence(input string) ([]ComboStep, error) {
 			}
 		}
 
-		// 3. Contains '+' -> Keyboard chord
+		// 3. Contains '+' -> Keyboard chord. Consumer keys cannot carry keyboard
+		// modifiers (they are a different HID report), so reject the mix loudly
+		// instead of silently dropping the consumer usage.
 		if strings.Contains(tokenBody, "+") {
+			for _, part := range strings.Split(tokenBody, "+") {
+				if canonical, isConsumer := ConsumerToken(part); isConsumer {
+					return nil, fmt.Errorf("consumer key %q cannot be combined with modifiers (use {%s})", strings.TrimSpace(part), consumerTokenFor(canonical))
+				}
+			}
 			mod, code, err := ParseCombo(tokenBody)
 			if err != nil {
 				return nil, fmt.Errorf("invalid chord %q: %w", inner, err)
@@ -360,7 +404,7 @@ func IsWindowsKeyToken(token string) bool {
 	}
 
 	switch p {
-	case "win", "gui", "ctrl", "control", "alt", "shift", "mod":
+	case "win", "gui", "cmd", "command", "meta", "super", "ctrl", "control", "alt", "shift", "mod", "opt", "option":
 		return true
 	case "backspace", "esc", "escape", "enter", "return", "tab", "space":
 		return true
@@ -418,12 +462,18 @@ func WindowsKeyboardTokens() []string {
 	return tokens
 }
 
-// StepDescription is a machine-readable view of one parsed combo step.
+// StepDescription is a machine-readable view of one parsed combo step. The
+// HID fields let agents verify exactly what would go over the wire.
 type StepDescription struct {
-	Type    string `json:"type"` // keyboard, mouse, text, payload, delay, or raw
-	Value   string `json:"value"`
-	DelayMS int64  `json:"delay_ms"`
-	HoldMS  int64  `json:"hold_ms,omitempty"`
+	Type      string `json:"type"` // keyboard, mouse, text, payload, delay, or raw
+	Value     string `json:"value"`
+	DelayMS   int64  `json:"delay_ms"`
+	HoldMS    int64  `json:"hold_ms,omitempty"`
+	Modifier  byte   `json:"modifier,omitempty"`
+	Keycode   byte   `json:"keycode,omitempty"`
+	ReportHex string `json:"report_hex,omitempty"`
+	RawHex    string `json:"raw_hex,omitempty"`
+	ReportID  int    `json:"report_id,omitempty"`
 }
 
 // DescribeSequence parses a combo and returns its steps for agents and tooling.
@@ -448,15 +498,23 @@ func DescribeSequence(input string) ([]StepDescription, error) {
 		case step.Raw != "":
 			desc.Type = "raw"
 			desc.Value = step.Raw
+			desc.RawHex = step.Raw
+			if rawBytes, err := hex.DecodeString(step.Raw); err == nil {
+				desc.ReportID, _ = ReportIDForLength(len(rawBytes))
+			}
 		case step.Mouse != nil:
 			desc.Type = "mouse"
 			desc.Value = step.Mouse.Name
+			desc.ReportID = ReportIDMouse
 		case step.Delay > 0 && step.Combo != "" && (step.Modifier == 0 && step.KeyCode == 0):
 			desc.Type = "delay"
 			desc.Value = step.Combo
 		default:
 			desc.Type = "keyboard"
 			desc.Value = NormalizeComboForAndroid(step.Combo)
+			desc.Modifier = step.Modifier
+			desc.Keycode = step.KeyCode
+			desc.ReportHex = NewKeyReport(step.Modifier, step.KeyCode).HexString()
 		}
 		described = append(described, desc)
 	}

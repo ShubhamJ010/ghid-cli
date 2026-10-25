@@ -41,8 +41,14 @@ func NewStore(path string, v vault.Vault) *Store {
 	}
 }
 
-func (s *Store) vaultKey(name string) string {
+// KeychainAccount is the Keychain account name used for a secure payload.
+// Exposed so `payload get` and the docs can point at the real item.
+func KeychainAccount(name string) string {
 	return "ghid_payload_" + strings.ToLower(strings.TrimSpace(name))
+}
+
+func (s *Store) vaultKey(name string) string {
+	return KeychainAccount(name)
 }
 
 // Load loads all payloads from disk and populates secure payload values from Vault.
@@ -139,6 +145,54 @@ func (s *Store) Resolver() hid.PayloadResolver {
 // List returns all payloads in the store (alias for Load).
 func (s *Store) List() ([]Payload, error) {
 	return s.Load()
+}
+
+// RefReport classifies payload references from a combo sequence.
+// Unresolved means no payload with that name exists; Empty means the payload
+// exists but has no usable value (for example a secure payload whose Keychain
+// item was never created).
+type RefReport struct {
+	Referenced []string `json:"referenced"`
+	Resolved   []string `json:"resolved"`
+	Unresolved []string `json:"unresolved"`
+	Empty      []string `json:"empty"`
+}
+
+// ResolveRefs resolves payload names the exact way the send path does,
+// including legacy aliases, and reports what is missing.
+func (s *Store) ResolveRefs(names []string) RefReport {
+	report := RefReport{Referenced: []string{}, Resolved: []string{}, Unresolved: []string{}, Empty: []string{}}
+	if s == nil {
+		for _, name := range names {
+			report.Referenced = append(report.Referenced, name)
+			report.Unresolved = append(report.Unresolved, name)
+		}
+		return report
+	}
+
+	seen := make(map[string]bool, len(names))
+	resolve := s.Resolver()
+	for _, name := range names {
+		clean := strings.TrimSpace(name)
+		key := strings.ToLower(clean)
+		if clean == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		report.Referenced = append(report.Referenced, clean)
+
+		value, err := resolve(clean)
+		if err != nil {
+			report.Unresolved = append(report.Unresolved, clean)
+			continue
+		}
+		if strings.TrimSpace(value) == "" {
+			report.Empty = append(report.Empty, clean)
+			continue
+		}
+		report.Resolved = append(report.Resolved, clean)
+	}
+	return report
 }
 
 // SaveAll persists a complete list of payloads to disk, properly delegating secure values.
@@ -345,11 +399,20 @@ func (s *Store) Set(name, value string, secure bool, pType ...string) (Payload, 
 	var result Payload
 	found := false
 
-	// Handle secure storage
-	if secure && s.Vault != nil && s.Vault.IsAvailable() {
-		if err := s.Vault.Set(s.vaultKey(cleanName), value); err != nil {
+	// Handle secure storage. Never persist a value in plaintext while marking
+	// it secure: if the vault is unavailable, refuse the write.
+	if secure {
+		if s.Vault == nil || !s.Vault.IsAvailable() {
+			return Payload{}, errors.New("secure payloads require an available vault (macOS Keychain); use a plain payload on this platform")
+		}
+		if strings.TrimSpace(value) == "" {
+			_ = s.Vault.Delete(s.vaultKey(cleanName))
+		} else if err := s.Vault.Set(s.vaultKey(cleanName), value); err != nil {
 			return Payload{}, fmt.Errorf("secure storage: %w", err)
 		}
+	} else if s.Vault != nil && s.Vault.IsAvailable() {
+		// A payload that used to be secure must not leave a stale Keychain item.
+		_ = s.Vault.Delete(s.vaultKey(cleanName))
 	}
 
 	for i := range list {

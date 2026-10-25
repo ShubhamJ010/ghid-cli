@@ -202,7 +202,12 @@ Inspects active connection state:
 ghid status --json
 ```
 
-Returns exit code 0 if connected, 1 if disconnected.
+The JSON separates `gateway` (ADB reachability and serial) from `hid_link`
+(Bluetooth registration and target). `os` falls back to the selected target
+device when the phone has no fingerprint (`os_source`), `can_send` is the single
+boolean to gate on, and `secure_payloads` is always `device_only`.
+
+Returns exit code 0 if the HID link is connected, 1 if disconnected.
 
 ### Automated Login (`login`)
 Unlock using stored Keychain credentials:
@@ -231,8 +236,9 @@ The CLI automatically pulls changes from the phone on startup (<15ms check), and
 ```bash
 # Full bi-directional sync (pull from phone, merge additions, push back, restart & reconnect)
 ghid sync
+# Secure payload values never cross the link; entries push with Value scrubbed and are counted as payloads_skipped_secure
 
-# Pull only (replaces local combo/payload cache with phone state)
+# Pull only (phone wins name conflicts; local-only entries are kept for the next push)
 ghid sync --pull
 
 # Push only (pushes local cache to phone, scrubs secrets, restarts app, reconnects)
@@ -251,9 +257,10 @@ Target HID collection (Report ID) is automatically inferred from the payload len
 ghid quick "git status"
 ghid quick "Administrator" --json
 
-# Send composite sequences containing raw steps
-ghid quick "{PLAY_PAUSE}" --json                      # Consumer Play/Pause toggle
-ghid quick "{WIN_SLEEP}" --json                       # System Control Sleep
+# quick types text; use combo for sequences and media keys
+ghid combo "{playpause}" --json                      # Consumer Play/Pause toggle
+ghid combo "{PLAY_PAUSE}" --json                     # PLAY_PAUSE payload (raw cd00)
+ghid combo "{WIN_SLEEP}" --json                      # System Control Sleep
 
 # Transmit length-inferred raw HID reports directly
 ghid quick --raw "02"               # 1 byte  -> Report ID 3 (System Control: Sleep)
@@ -281,11 +288,21 @@ ghid combo mouse scroll-down
 Combos can be validated, saved, listed, and sent via CLI or JSON without loading the TUI:
 
 ```bash
-# Inspect accepted grammar tokens and mouse actions
+# Inspect accepted grammar tokens
 ghid combo schema --json
 
-# Validate a chained sequence before saving
+# Dump the complete token table (keys, modifiers, consumer, aliases, F-keys)
+ghid combo keys --json
+
+# Validate a chained sequence before saving (resolves payload references too)
 ghid combo validate "{mod+s}{700ms}rustdesk{400ms}{Enter}" --json
+ghid combo validate "{cmd+s}" --os macos --json
+
+# Read a saved combo back
+ghid combo show "Open RustDesk" --json
+
+# Prove a combo resolves without sending anything
+ghid combo send "Open RustDesk" --dry-run --json
 
 # Save a named combo for a host OS (updates if already exists)
 ghid combo save "Open RustDesk" "{mod+s}{700ms}rustdesk{400ms}{Enter}" --os windows --emoji "🚀" --json
@@ -302,7 +319,7 @@ ghid combo list --os macos --json
 # Built-in macOS shortcuts
 ghid combo send "MacSleep" --json      # {mod+ctrl+q}{500ms}{Escape} (Locks screen & sleeps display)
 ghid combo send "ForceQuit" --json     # {mod+alt+esc}{400ms}{Enter}{300ms}{Enter} (Force quits frontmost app)
-ghid combo send "PlayPause" --json     # {PLAY_PAUSE} (Consumer Control toggle)
+ghid combo send "PlayPause" --json     # {PLAY_PAUSE} payload -> raw cd00
 
 # Send any saved combo by name
 ghid combo send "Open RustDesk" --json
@@ -310,6 +327,10 @@ ghid combo send "Open RustDesk" --json
 # Delete a saved combo
 ghid combo delete "Open RustDesk" --json
 ```
+
+`combo save` refuses missing payload references. Add `--allow-unresolved` for a
+secure payload that only exists on the phone. The output only says `synced to
+Android` when an attached phone was actually pushed.
 
 Saved combos are stored in `~/.config/ghid/combos.json`.
 
@@ -380,9 +401,10 @@ samxn81@gmail.com{Tab}{PASSWORD}{Enter}{500ms}{mod+s}{100ms}{WIN_SLEEP}
 2. **Escaped Bracket**: `{{` evaluates to a literal `{` within typed text.
 3. **Execution Delay**: Numbers followed by `ms` or `s` (e.g. `{500ms}`, `{1s}`, `{100ms}`) trigger execution delays.
 4. **Keyboard Chords**: Tokens containing `+` trigger simultaneous modifier + key chords (e.g. `{mod+s}`, `{ctrl+alt+del}`). The `mod` modifier dynamically resolves to **Command (GUI)** on macOS and **Ctrl** on Windows/Linux.
-5. **Standard & Consumer Keys**: `{Tab}`, `{Enter}`, `{Escape}`, `{Space}`, `{Del}`, `{Up}`, `{F1}`-`{F12}`, or consumer media keys `{VolumeUp}`, `{VolumeDown}`, `{Mute}`, `{PlayPause}`.
+5. **Standard & Consumer Keys**: `{Tab}`, `{Enter}`, `{Escape}`, `{Space}`, `{Del}`, `{Up}`, `{F1}`-`{F24}`, or consumer media keys `{VolumeUp}`, `{VolumeDown}`, `{Mute}`, `{playpause}`. A bare modifier such as `{shift}` is a valid modifier-only step. Consumer keys cannot carry modifiers.
+   - `playpause` is the media key. `play_pause` is the **payload** name (`PLAY_PAUSE`, default raw report `cd00`), so `{PLAY_PAUSE}` resolves through the payload vault.
 6. **Mouse Gestures**: `{click-left}`, `{click-right}`, `{click-middle}`, `{double-click}`, `{scroll-up}`, `{scroll-down}`.
-7. **Named Payloads**: Alphanumeric tokens (e.g. `{PASSWORD}`, `{EMAIL}`, `{WIN_SLEEP}`) dynamically resolve against the payload vault.
+7. **Named Payloads**: Any braced identifier that is not a key, modifier, mouse gesture, delay or raw report (e.g. `{PASSWORD}`, `{EMAIL}`, `{WIN_SLEEP}`) resolves against the payload vault. Names are case-insensitive; uppercase is convention only.
 
 ### Payloads Subsystem (`ghid payload`)
 Payloads store reusable text strings, secure credentials, and raw HID reports:
@@ -403,7 +425,14 @@ ghid payload get username
 ghid payload delete username
 ```
 
-When combos with bundled payloads are saved or synchronized, referenced raw reports (e.g. `{WIN_SLEEP}`, `{PLAY_PAUSE}`) are automatically provisioned in the recipient's local payload store.
+Flags work in any position: `ghid payload set MAC_POWER 3000 --type raw` stores
+`3000` with type `raw` (it does not fold `--type raw` into the value). Payload JSON
+reads use one shape — `name`, `type`, `secure`, `source`, `present`, `has_value`,
+and `value` only for non-secure entries — so an absent Keychain item is visible as
+`present: false` instead of an empty string. Secure items live under service
+`ghost-hid` and account `ghid_payload_<lowercase-name>`.
+
+When combos with bundled payloads are saved or synchronized, referenced raw reports (e.g. `{WIN_SLEEP}`, `{PLAY_PAUSE}`) are automatically provisioned in the recipient's local payload store. Secure payload entries sync with `Value` scrubbed so phone-side references resolve (ADR-009) while the secret values stay device-only in the Keychain; `sync` counts them as `payloads_skipped_secure`.
 
 ## Bluetooth Pairing Setup
 
