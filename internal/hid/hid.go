@@ -308,4 +308,5 @@ type ComboStep struct {
 	Payload  string        // Non-empty when this step references a payload name, e.g. "PASSWORD"
 	Raw      string        // Non-empty hex string when this step is a raw HID report
 	Delay    time.Duration // Pause duration after transmitting this step
+	Hold     time.Duration // Hold duration for chords, raw reports, and payloads (default 0 -> momentary 60ms)
 }

@@ -40,6 +40,16 @@ Macro sequences were previously split across ad-hoc, divergent syntax tokens: ar
    - Combos now store `sequence` (replacing legacy `keys`) and bundle `payloads: map[string]Payload`.
    - When saving or syncing combos, if a referenced payload (such as raw report `{WIN_SLEEP}` or `{PLAY_PAUSE}`) does not exist in the recipient's local payload store, it is automatically provisioned into the `PayloadStore`/`PayloadRepository`.
 
+4. **Parameterized Duration (`{TOKEN:duration}`) and Button Hold**:
+   - To support holding buttons (such as Mac/Windows power/sleep hold for 3-5 seconds, volume ramp, or typematic key repeat) while keeping single taps momentary by default, tokens inside `{...}` can optionally append `:duration`:
+     - `{WIN_SLEEP:3s}`: Sends ACPI Sleep (`0x02`), holds down for 3000ms, then auto-releases (`0x00`).
+     - `{VolumeUp:1.5s}`: Sends Consumer Volume Up (`0xE9`), holds for 1500ms, then auto-releases (`0x0000`).
+     - `{Backspace:800ms}`: Holds Backspace keycode down for 800ms to trigger OS typematic repeat.
+     - `{mod+s:500ms}`: Holds modifier chord down for 500ms.
+   - Omitted duration defaults to momentary tap (40ms for keyboard chords, 60ms for consumer/system raw reports).
+   - In CLI: `ghid raw <hex> --hold <duration>` (e.g. `ghid raw 02 --hold 3s`).
+   - In ADB: `--el hold_ms <ms>` intent extra for `cmd=raw` and `cmd=combo`.
+
 5. **Momentary HID Raw Report Auto-Release**:
    - HID reports are stateful switch states. Unlike keystroke chords which have an explicit down-settle-up cycle, single-shot raw reports previously sent only the down state.
    - For Report ID 4 (Consumer Control, 2 bytes, e.g. `cd00` Play/Pause) and Report ID 3 (System Control, 1 byte, e.g. `02` System Sleep), `HidService.sendRawReport` automatically transmits an all-zero release report (`0000` or `00`) after a 60ms settle delay for non-zero reports.

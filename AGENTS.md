@@ -119,6 +119,7 @@ ghid combo delete "Open RustDesk" --json
 
 Combo grammar: unified bracket sequence DSL `{chord}`, `{delay}`, `literal text`, `{PAYLOAD}`.
 Delays: `{100ms}`, `{1s}`, `{0.5s}`.
+Parameterized duration: `{TOKEN:duration}` (e.g. `{WIN_SLEEP:3s}`, `{VolumeUp:1.5s}`, `{Backspace:800ms}`, `{mod+s:500ms}`). Omitted duration defaults to safe momentary 40-60ms tap.
 Cross-platform modifiers: `mod` (resolves to `cmd` on macOS, `win` on Windows/Linux), `ctrl`, `alt`/`opt`, `shift`.
 Payload references: `{NAME}` (e.g. `{PASSWORD}`, `{WIN_SLEEP}`, `{PLAY_PAUSE}`).
 
@@ -133,7 +134,7 @@ Payload references: `{NAME}` (e.g. `{PASSWORD}`, `{WIN_SLEEP}`, `{PLAY_PAUSE}`).
 - Commit style: `feat:`, `fix:`, `refactor:`, `docs:`.
 - Alpha means large refactors OK. Do not leave half-migrated layers, dead code, or duplicate parsers.
 - **Android APK deployment & testing rule**: Android Package Manager (`adb install -r`) preserves existing processes in memory. Whenever deploying an APK, ALWAYS run `adb shell am force-stop com.sj010.ghid` before starting the app or testing via ADB/CLI so that newly compiled bytecode is executed rather than stale code in memory.
-- **Momentary HID report auto-release**: HID raw reports are stateful switch reports. Momentary actions like Consumer Control Report 4 (e.g. `cd00` Play/Pause) or System Control Report 3 (e.g. `02` System Sleep) MUST be released with a zero report (`0000` / `00`) after ~60ms. `HidService.sendRawReport` automatically sends this zero release for non-zero Report 3 and Report 4 payloads.
+- **Momentary HID report auto-release & hold semantics**: HID raw reports are stateful switch reports. Momentary actions like Consumer Control Report 4 (e.g. `cd00` Play/Pause) or System Control Report 3 (e.g. `02` System Sleep) MUST be released with a zero report (`0000` / `00`) after ~60ms. `HidService.sendRawReport` automatically sends this zero release for non-zero Report 3 and Report 4 payloads. To hold buttons (e.g. Mac/Windows power/sleep hold for 3-5 seconds, Volume ramp, key repeat), use the parameterized duration suffix `{TOKEN:duration}` in sequence strings or `--hold <duration>` in CLI `ghid raw <hex> --hold 3s` / `--el hold_ms <ms>` in ADB.
 
 ## Android app design & iteration rules
 

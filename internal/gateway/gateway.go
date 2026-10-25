@@ -67,6 +67,7 @@ type Controller interface {
 	ComboWithResolver(keys string, resolver hid.PayloadResolver) error
 	Mouse(action string) error
 	Raw(hexReport string) error
+	RawWithHold(hexReport string, hold time.Duration) error
 	Login(req LoginRequest, progress func(step int, desc string)) error
 	GetLogs(lines int) (string, error)
 	GetFileLog() (string, error)
@@ -192,13 +193,17 @@ func (g *Gateway) Mouse(action string) error {
 }
 
 func (g *Gateway) Raw(hexReport string) error {
+	return g.RawWithHold(hexReport, 0)
+}
+
+func (g *Gateway) RawWithHold(hexReport string, hold time.Duration) error {
 	if g.mgr == nil {
 		return errors.New("adb manager not initialized")
 	}
 	if _, err := hid.ValidateRaw(hexReport); err != nil {
 		return err
 	}
-	return g.mgr.SendRaw(hexReport)
+	return g.mgr.SendRawWithHold(hexReport, hold)
 }
 
 func (g *Gateway) Login(req LoginRequest, progress func(step int, desc string)) error {

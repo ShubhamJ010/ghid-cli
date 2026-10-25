@@ -1,6 +1,7 @@
 package hid
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"regexp"
@@ -235,69 +236,101 @@ func ParseSequence(input string) ([]ComboStep, error) {
 			return nil, errors.New("empty bracket '{}' in sequence")
 		}
 
-		// 2. Delay: {500ms}, {1s}
-		if m := delayRegex.FindStringSubmatch(inner); len(m) == 3 {
-			val, err := strconv.ParseFloat(m[1], 64)
-			if err != nil {
-				return nil, fmt.Errorf("invalid delay %q: %w", inner, err)
+		// Check if inner has a duration suffix separated by ':' (e.g. WIN_SLEEP:3s, Backspace:800ms)
+		var holdDuration time.Duration
+		tokenBody := inner
+		if colonIdx := strings.LastIndex(inner, ":"); colonIdx != -1 {
+			candidateToken := strings.TrimSpace(inner[:colonIdx])
+			candidateDur := strings.TrimSpace(inner[colonIdx+1:])
+			if m := delayRegex.FindStringSubmatch(candidateDur); len(m) == 3 && candidateToken != "" {
+				val, err := strconv.ParseFloat(m[1], 64)
+				if err == nil && val > 0 {
+					if strings.ToLower(m[2]) == "ms" {
+						holdDuration = time.Duration(val * float64(time.Millisecond))
+					} else {
+						holdDuration = time.Duration(val * float64(time.Second))
+					}
+					tokenBody = candidateToken
+				}
 			}
-			var d time.Duration
-			if strings.ToLower(m[2]) == "ms" {
-				d = time.Duration(val * float64(time.Millisecond))
-			} else {
-				d = time.Duration(val * float64(time.Second))
+		}
+
+		// 2. Pure Delay: {500ms}, {1s}
+		if holdDuration == 0 {
+			if m := delayRegex.FindStringSubmatch(tokenBody); len(m) == 3 {
+				val, err := strconv.ParseFloat(m[1], 64)
+				if err != nil {
+					return nil, fmt.Errorf("invalid delay %q: %w", inner, err)
+				}
+				var d time.Duration
+				if strings.ToLower(m[2]) == "ms" {
+					d = time.Duration(val * float64(time.Millisecond))
+				} else {
+					d = time.Duration(val * float64(time.Second))
+				}
+				flushText()
+				steps = append(steps, ComboStep{Combo: inner, Delay: d})
+				lastIdx = matchEnd
+				continue
 			}
-			flushText()
-			steps = append(steps, ComboStep{Combo: inner, Delay: d})
-			lastIdx = matchEnd
-			continue
 		}
 
 		// 3. Contains '+' -> Keyboard chord
-		if strings.Contains(inner, "+") {
-			mod, code, err := ParseCombo(inner)
+		if strings.Contains(tokenBody, "+") {
+			mod, code, err := ParseCombo(tokenBody)
 			if err != nil {
 				return nil, fmt.Errorf("invalid chord %q: %w", inner, err)
 			}
 			flushText()
-			steps = append(steps, ComboStep{Combo: inner, Modifier: mod, KeyCode: code})
+			steps = append(steps, ComboStep{Combo: tokenBody, Modifier: mod, KeyCode: code, Hold: holdDuration})
 			lastIdx = matchEnd
 			continue
 		}
 
 		// 4. Standard W3C / HID key name or consumer key or mouse gesture
-		lowerInner := strings.ToLower(inner)
-		if rawReport, isConsumer := ConsumerKeyReports[lowerInner]; isConsumer {
+		lowerBody := strings.ToLower(tokenBody)
+		if rawReport, isConsumer := ConsumerKeyReports[lowerBody]; isConsumer {
 			flushText()
-			steps = append(steps, ComboStep{Combo: inner, Raw: rawReport})
+			steps = append(steps, ComboStep{Combo: tokenBody, Raw: rawReport, Hold: holdDuration})
 			lastIdx = matchEnd
 			continue
 		}
 
-		if mouseAction, isMouse, mErr := ParseMouseAction(inner); isMouse {
+		if mouseAction, isMouse, mErr := ParseMouseAction(tokenBody); isMouse {
 			if mErr != nil {
 				return nil, mErr
 			}
 			flushText()
-			steps = append(steps, ComboStep{Combo: mouseAction.Name, Mouse: &mouseAction})
+			steps = append(steps, ComboStep{Combo: mouseAction.Name, Mouse: &mouseAction, Hold: holdDuration})
 			lastIdx = matchEnd
 			continue
 		}
 
-		if isStandardKey(inner) {
-			mod, code, err := ParseCombo(inner)
+		if isStandardKey(tokenBody) {
+			mod, code, err := ParseCombo(tokenBody)
 			if err == nil {
 				flushText()
-				steps = append(steps, ComboStep{Combo: inner, Modifier: mod, KeyCode: code})
+				steps = append(steps, ComboStep{Combo: tokenBody, Modifier: mod, KeyCode: code, Hold: holdDuration})
+				lastIdx = matchEnd
+				continue
+			}
+		}
+
+		// Check for direct raw report hex (e.g. 02, cd00, 08000f0000000000)
+		cleanHex := strings.ReplaceAll(tokenBody, " ", "")
+		if len(cleanHex) == 2 || len(cleanHex) == 4 || len(cleanHex) == 8 || len(cleanHex) == 16 {
+			if _, hexErr := hex.DecodeString(cleanHex); hexErr == nil {
+				flushText()
+				steps = append(steps, ComboStep{Combo: tokenBody, Raw: strings.ToLower(cleanHex), Hold: holdDuration})
 				lastIdx = matchEnd
 				continue
 			}
 		}
 
 		// 5. Alphanumeric / Identifier -> Named Payload reference
-		if identRegex.MatchString(inner) {
+		if identRegex.MatchString(tokenBody) {
 			flushText()
-			steps = append(steps, ComboStep{Combo: inner, Payload: inner})
+			steps = append(steps, ComboStep{Combo: tokenBody, Payload: tokenBody, Hold: holdDuration})
 			lastIdx = matchEnd
 			continue
 		}
@@ -390,6 +423,7 @@ type StepDescription struct {
 	Type    string `json:"type"` // keyboard, mouse, text, payload, delay, or raw
 	Value   string `json:"value"`
 	DelayMS int64  `json:"delay_ms"`
+	HoldMS  int64  `json:"hold_ms,omitempty"`
 }
 
 // DescribeSequence parses a combo and returns its steps for agents and tooling.
@@ -401,6 +435,9 @@ func DescribeSequence(input string) ([]StepDescription, error) {
 	described := make([]StepDescription, 0, len(steps))
 	for _, step := range steps {
 		desc := StepDescription{DelayMS: step.Delay.Milliseconds()}
+		if step.Hold > 0 {
+			desc.HoldMS = step.Hold.Milliseconds()
+		}
 		switch {
 		case step.Payload != "":
 			desc.Type = "payload"
