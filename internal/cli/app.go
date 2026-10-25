@@ -9,7 +9,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ghost-hid/ghid/internal/adb"
@@ -508,16 +510,60 @@ func (a *App) handleSleep(serial string, args []string, jsonOutput bool) int {
 }
 
 func (a *App) handleRaw(serial string, args []string, jsonOutput bool) int {
-	if len(args) == 0 {
+	var holdDuration time.Duration
+	var hexParts []string
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--hold" || arg == "-h" {
+			if i+1 < len(args) {
+				i++
+				durStr := args[i]
+				var d time.Duration
+				var err error
+				if strings.HasSuffix(strings.ToLower(durStr), "ms") {
+					val, parseErr := strconv.ParseFloat(strings.TrimSuffix(strings.ToLower(durStr), "ms"), 64)
+					if parseErr == nil {
+						d = time.Duration(val * float64(time.Millisecond))
+					} else {
+						err = parseErr
+					}
+				} else if strings.HasSuffix(strings.ToLower(durStr), "s") {
+					val, parseErr := strconv.ParseFloat(strings.TrimSuffix(strings.ToLower(durStr), "s"), 64)
+					if parseErr == nil {
+						d = time.Duration(val * float64(time.Second))
+					} else {
+						err = parseErr
+					}
+				} else {
+					d, err = time.ParseDuration(durStr)
+				}
+				if err != nil {
+					if jsonOutput {
+						res, _ := json.Marshal(map[string]interface{}{"status": "error", "error": fmt.Sprintf("invalid hold duration %q: %v", durStr, err)})
+						fmt.Fprintln(a.Stdout, string(res))
+					} else {
+						fmt.Fprintf(a.Stderr, "Error: invalid hold duration %q\n", durStr)
+					}
+					return 1
+				}
+				holdDuration = d
+			}
+		} else {
+			hexParts = append(hexParts, arg)
+		}
+	}
+
+	if len(hexParts) == 0 {
 		if jsonOutput {
-			res, _ := json.Marshal(map[string]interface{}{"status": "error", "error": "usage: ghid raw <hex>"})
+			res, _ := json.Marshal(map[string]interface{}{"status": "error", "error": "usage: ghid raw <hex> [--hold <duration>]"})
 			fmt.Fprintln(a.Stdout, string(res))
 		} else {
-			fmt.Fprintf(a.Stderr, "Usage: ghid raw <hex>\n  2 hex chars (1 byte)  -> Report 3 (System Control / Sleep)\n  4 hex chars (2 bytes) -> Report 4 (Consumer / Media)\n  8 hex chars (4 bytes) -> Report 2 (Mouse)\n  16 hex chars (8 bytes)-> Report 1 (Keyboard)\n")
+			fmt.Fprintf(a.Stderr, "Usage: ghid raw <hex> [--hold <duration>]\n  2 hex chars (1 byte)  -> Report 3 (System Control / Sleep)\n  4 hex chars (2 bytes) -> Report 4 (Consumer / Media)\n  8 hex chars (4 bytes) -> Report 2 (Mouse)\n  16 hex chars (8 bytes)-> Report 1 (Keyboard)\n")
 		}
 		return 1
 	}
-	cleanHex := strings.ReplaceAll(strings.Join(args, ""), " ", "")
+	cleanHex := strings.ReplaceAll(strings.Join(hexParts, ""), " ", "")
 	rawBytes, err := hid.ValidateRaw(cleanHex)
 	if err != nil {
 		if jsonOutput {
@@ -541,7 +587,7 @@ func (a *App) handleRaw(serial string, args []string, jsonOutput bool) int {
 		return 1
 	}
 
-	if err := gw.Raw(cleanHex); err != nil {
+	if err := gw.RawWithHold(cleanHex, holdDuration); err != nil {
 		if jsonOutput {
 			res, _ := json.Marshal(map[string]interface{}{"status": "error", "error": err.Error()})
 			fmt.Fprintln(a.Stdout, string(res))
@@ -552,15 +598,23 @@ func (a *App) handleRaw(serial string, args []string, jsonOutput bool) int {
 	}
 
 	if jsonOutput {
-		res, _ := json.Marshal(map[string]interface{}{
+		outMap := map[string]interface{}{
 			"status":    "success",
 			"raw":       cleanHex,
 			"report_id": reportID,
 			"bytes":     len(rawBytes),
-		})
+		}
+		if holdDuration > 0 {
+			outMap["hold_ms"] = holdDuration.Milliseconds()
+		}
+		res, _ := json.Marshal(outMap)
 		fmt.Fprintln(a.Stdout, string(res))
 	} else {
-		fmt.Fprintf(a.Stdout, "✔ Dispatched raw HID report %s (Report ID %d, %d bytes)\n", cleanHex, reportID, len(rawBytes))
+		if holdDuration > 0 {
+			fmt.Fprintf(a.Stdout, "✔ Dispatched raw HID report %s (Report ID %d, %d bytes, held for %s)\n", cleanHex, reportID, len(rawBytes), holdDuration)
+		} else {
+			fmt.Fprintf(a.Stdout, "✔ Dispatched raw HID report %s (Report ID %d, %d bytes)\n", cleanHex, reportID, len(rawBytes))
+		}
 	}
 	return 0
 }

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -447,8 +448,11 @@ func (m *Manager) SendComboWithResolver(sequence string, resolver func(string) (
 			cleanVal := strings.TrimSpace(val)
 			cleanHex := strings.ReplaceAll(cleanVal, " ", "")
 			if _, rawErr := hid.ValidateRaw(cleanHex); rawErr == nil {
-				if err := m.SendRaw(cleanHex); err != nil {
+				if err := m.SendRawWithHold(cleanHex, step.Hold); err != nil {
 					return err
+				}
+				if step.Hold > 0 {
+					time.Sleep(step.Hold)
 				}
 			} else {
 				if err := m.TypeText(val); err != nil {
@@ -456,8 +460,11 @@ func (m *Manager) SendComboWithResolver(sequence string, resolver func(string) (
 				}
 			}
 		} else if step.Raw != "" {
-			if err := m.SendRaw(step.Raw); err != nil {
+			if err := m.SendRawWithHold(step.Raw, step.Hold); err != nil {
 				return err
+			}
+			if step.Hold > 0 {
+				time.Sleep(step.Hold)
 			}
 		} else if step.Text != "" {
 			if err := m.TypeText(step.Text); err != nil {
@@ -472,8 +479,15 @@ func (m *Manager) SendComboWithResolver(sequence string, resolver func(string) (
 				// Pure delay step
 			} else {
 				clean := hid.NormalizeComboForAndroid(step.Combo)
-				if _, err := m.Run("shell", "am", "broadcast", "-n", ReceiverName, "-a", ActionCmd, "--es", "cmd", "combo", "--es", "keys", clean); err != nil {
+				args := []string{"shell", "am", "broadcast", "-n", ReceiverName, "-a", ActionCmd, "--es", "cmd", "combo", "--es", "keys", clean}
+				if step.Hold > 0 {
+					args = append(args, "--el", "hold_ms", strconv.FormatInt(step.Hold.Milliseconds(), 10))
+				}
+				if _, err := m.Run(args...); err != nil {
 					return err
+				}
+				if step.Hold > 0 {
+					time.Sleep(step.Hold)
 				}
 			}
 		}
@@ -507,11 +521,19 @@ func (m *Manager) TypeText(text string) error {
 }
 
 func (m *Manager) SendRaw(hexReport string) error {
+	return m.SendRawWithHold(hexReport, 0)
+}
+
+func (m *Manager) SendRawWithHold(hexReport string, hold time.Duration) error {
 	cleanHex := strings.ReplaceAll(hexReport, " ", "")
 	if _, err := hid.ValidateRaw(cleanHex); err != nil {
 		return err
 	}
-	_, err := m.Run("shell", "am", "broadcast", "-n", ReceiverName, "-a", ActionCmd, "--es", "cmd", "raw", "--es", "hex", cleanHex)
+	args := []string{"shell", "am", "broadcast", "-n", ReceiverName, "-a", ActionCmd, "--es", "cmd", "raw", "--es", "hex", cleanHex}
+	if hold > 0 {
+		args = append(args, "--el", "hold_ms", strconv.FormatInt(hold.Milliseconds(), 10))
+	}
+	_, err := m.Run(args...)
 	return err
 }
 

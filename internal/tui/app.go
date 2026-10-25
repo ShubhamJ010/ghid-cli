@@ -708,6 +708,9 @@ func (m Model) triggerAction(action string) (tea.Model, tea.Cmd) {
 func describeStep(step hid.ComboStep) string {
 	switch {
 	case step.Payload != "":
+		if step.Hold > 0 {
+			return fmt.Sprintf("{%s:%s}", step.Payload, step.Hold)
+		}
 		return "{" + step.Payload + "}"
 	case step.Text != "":
 		if len(step.Text) > 20 {
@@ -717,10 +720,16 @@ func describeStep(step hid.ComboStep) string {
 	case step.Mouse != nil:
 		return step.Mouse.Name
 	case step.Raw != "":
+		if step.Hold > 0 {
+			return fmt.Sprintf("{%s:%s}", step.Raw, step.Hold)
+		}
 		return "raw:" + step.Raw
 	case step.Delay > 0:
 		return step.Delay.String()
 	default:
+		if step.Hold > 0 {
+			return fmt.Sprintf("{%s:%s}", step.Combo, step.Hold)
+		}
 		return step.Combo
 	}
 }
@@ -749,7 +758,7 @@ func (m *Model) executeCurrentStepCmd() tea.Cmd {
 					cleanVal := strings.TrimSpace(val)
 					cleanHex := strings.ReplaceAll(cleanVal, " ", "")
 					if _, rawErr := hid.ValidateRaw(cleanHex); rawErr == nil {
-						err = m.manager.SendRaw(cleanHex)
+						err = m.manager.SendRawWithHold(cleanHex, step.Hold)
 					} else {
 						err = m.manager.TypeText(val)
 					}
@@ -757,7 +766,7 @@ func (m *Model) executeCurrentStepCmd() tea.Cmd {
 			}
 
 		case step.Raw != "":
-			err = m.manager.SendRaw(step.Raw)
+			err = m.manager.SendRawWithHold(step.Raw, step.Hold)
 
 		case step.Text != "":
 			err = m.manager.TypeText(step.Text)
