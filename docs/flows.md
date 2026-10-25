@@ -192,20 +192,14 @@ sequenceDiagram
 
     Operator->>CLI: ghid sleep --countdown 5
     
-    Note over CLI,Target: Trigger Windows Sleep Sequence
-    CLI->>ADB: Broadcast ACTION_CMD (combo "win+x")
-    ADB->>Service: sendCombo("win+x")
-    Service->>Target: Keystroke Win+X (Quick Link Menu)
-    CLI->>CLI: Sleep(1.2s)
-    
-    CLI->>ADB: Broadcast ACTION_CMD (combo "u")
-    ADB->>Service: sendCombo("u")
-    Service->>Target: Keystroke U (Shut down or sign out sub-menu)
-    CLI->>CLI: Sleep(0.6s)
-
-    CLI->>ADB: Broadcast ACTION_CMD (combo "s")
-    ADB->>Service: sendCombo("s")
-    Service->>Target: Keystroke S (Enter Modern Standby / Sleep)
+    Note over CLI,Target: Trigger Hardware ACPI Sleep
+    CLI->>ADB: Broadcast ACTION_CMD (raw "02")
+    ADB->>Service: sendRawReport([0x02]) -> System Control (Report 3)
+    Service->>Target: ACPI System Sleep (0x82)
+    CLI->>CLI: Sleep(60ms settle)
+    CLI->>ADB: Broadcast ACTION_CMD (raw "00")
+    ADB->>Service: sendRawReport([0x00]) -> System Control (Report 3)
+    Service->>Target: ACPI Sleep Release (0x00)
     
     Note over CLI: Operator Feedback Countdown
     loop Countdown 5 down to 1

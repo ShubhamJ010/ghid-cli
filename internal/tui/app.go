@@ -690,7 +690,7 @@ func (m Model) triggerAction(action string) (tea.Model, tea.Cmd) {
 				return m.executeCombo(combo)
 			}
 		}
-		return m.executeCombo(combos.Combo{Name: "Sleep", Keys: combos.DefaultSleepKeys, OS: combos.OSWindows, Description: "Windows sleep sequence + countdown exit"})
+		return m.executeCombo(combos.Combo{Name: "Sleep", Keys: combos.DefaultSleepKeys, OS: combos.OSWindows, Description: "Hardware ACPI sleep sequence"})
 
 	case "combo":
 		studio := NewComboStudioModel(m.combosStore, func(combo combos.Combo) error {

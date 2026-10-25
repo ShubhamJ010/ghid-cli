@@ -1857,7 +1857,7 @@ Commands:
   snippets delete <name> Delete a snippet
   login             Automated Windows unlock & credential injection
   lock              Instant Windows lock screen (Win + L)
-  sleep             Windows sleep sequence + countdown exit
+  sleep             Hardware ACPI sleep sequence
   combo [keys]      Interactive Windows combo studio (create, send, delete)
   combo list [--os <os>]  List saved combos, optionally filtered by target OS (--json supported)
   combo fav <name>  Toggle favorite (pin with ❤️ to top of dashboard action list)

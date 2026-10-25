@@ -19,7 +19,7 @@ import (
 const (
 	DefaultLoginKeys = "ctrl+alt+del ->{1.0} esc ->{0.8} $USERNAME ->{0.8} tab ->{0.8} $PASSWORD ->{0.8} enter"
 	DefaultLockKeys  = "win+l"
-	DefaultSleepKeys = "win+x ->{0.5} u ->{0.3} s ->{5.0} !DISCONNECT ->{0.5} !EXIT"
+	DefaultSleepKeys = "raw:02 ->{0.06} raw:00"
 
 	DefaultMacSleepKeys     = "cmd+ctrl+q ->{0.5} esc"
 	DefaultMacForceQuitKeys = "cmd+opt+esc ->{0.4} enter ->{0.3} enter"
@@ -160,7 +160,7 @@ var DefaultCombos = []Combo{
 		Keys:        DefaultSleepKeys,
 		OS:          OSWindows,
 		Emoji:       "😴",
-		Description: "Windows sleep sequence + countdown exit",
+		Description: "Hardware ACPI sleep sequence",
 		Favorite:    true,
 	},
 	{
@@ -288,6 +288,11 @@ func (s *Store) EnsureDefaults() ([]Combo, error) {
 		for i := range list {
 			if strings.EqualFold(list[i].Name, def.Name) {
 				found = true
+				if strings.EqualFold(def.Name, "Sleep") && strings.Contains(list[i].Keys, "win+x") {
+					list[i].Keys = DefaultSleepKeys
+					list[i].Description = def.Description
+					modified = true
+				}
 				if list[i].OS == "" && def.OS != "" {
 					list[i].OS = def.OS
 					modified = true
@@ -440,7 +445,7 @@ func (s *Store) Add(c Combo) ([]Combo, error) {
 	if err != nil {
 		return nil, err
 	}
-	emoji, err := ValidateEmoji(c.Emoji)
+	em, err := ValidateEmoji(c.Emoji)
 	if err != nil {
 		return nil, err
 	}
@@ -458,7 +463,7 @@ func (s *Store) Add(c Combo) ([]Combo, error) {
 	c.Name = name
 	c.Keys = keys
 	c.OS = osName
-	c.Emoji = emoji
+	c.Emoji = em
 	if c.CreatedAt.IsZero() {
 		c.CreatedAt = time.Now().UTC()
 	}
