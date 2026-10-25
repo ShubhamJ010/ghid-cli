@@ -168,6 +168,14 @@ func (m *Manager) SelectDevice() (*Device, error) {
 	return &first, fmt.Errorf("device in state '%s'", first.State)
 }
 
+// RediscoverDevice re-runs ADB discovery and adopts the first attached device.
+// It clears any serial left over from a previous link, so the interactive UI can
+// recover when the phone reconnects on a new port or transport.
+func (m *Manager) RediscoverDevice() (*Device, error) {
+	m.Serial = ""
+	return m.SelectDevice()
+}
+
 func (m *Manager) ConnectWireless(addr string) error {
 	out, err := m.runner.Run("", "connect", addr)
 	s := strings.ToLower(out)
