@@ -1,0 +1,1 @@
+- Real fix: patch  syncer.go  Push() to include secure payloads with  Value  scrubbed, matching  ADR-009

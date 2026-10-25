@@ -482,9 +482,53 @@ func isMacAlias(token string) bool {
 	return false
 }
 
+// PayloadRefError exposes the actionable message for missing payload references
+// so the CLI can validate without saving.
+func PayloadRefError(report payloads.RefReport) error {
+	return payloadRefError(report)
+}
+
+// AddOptions controls validation behavior when persisting a combo.
+type AddOptions struct {
+	// AllowUnresolvedPayloads saves a combo whose {NAME} references have no
+	// local payload record or no value. Needed for secure payloads that only
+	// exist on the phone (secure values never sync to the CLI).
+	AllowUnresolvedPayloads bool
+}
+
+// PayloadRefReport classifies every {NAME} reference in a sequence against the
+// configured payload store.
+func (s *Store) PayloadRefReport(sequence string) payloads.RefReport {
+	return s.PayloadStore.ResolveRefs(hid.ExtractPayloads(sequence))
+}
+
+// payloadRefError builds a single actionable message for missing references.
+func payloadRefError(report payloads.RefReport) error {
+	var lines []string
+	if len(report.Unresolved) > 0 {
+		refs := make([]string, 0, len(report.Unresolved))
+		for _, name := range report.Unresolved {
+			refs = append(refs, "{"+name+"}")
+		}
+		lines = append(lines, fmt.Sprintf("payload references not found: %s (create them with 'ghid payload set <name> <value>'; secure payloads that live only on the phone need --allow-unresolved)", strings.Join(refs, ", ")))
+	}
+	if len(report.Empty) > 0 {
+		refs := make([]string, 0, len(report.Empty))
+		for _, name := range report.Empty {
+			refs = append(refs, "{"+name+"}")
+		}
+		lines = append(lines, fmt.Sprintf("payload references have no value: %s (set them with 'ghid payload set <name> <value>')", strings.Join(refs, ", ")))
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+	return errors.New(strings.Join(lines, "; "))
+}
+
 // Add inserts a new combo or replaces an existing one with the same name
 // (case-insensitive) in place. Also auto-provisions any bundled payloads.
-func (s *Store) Add(c Combo) ([]Combo, error) {
+// Payload references are resolved before saving unless explicitly allowed.
+func (s *Store) Add(c Combo, opts ...AddOptions) ([]Combo, error) {
 	name, err := ValidateName(c.Name)
 	if err != nil {
 		return nil, err
@@ -503,10 +547,7 @@ func (s *Store) Add(c Combo) ([]Combo, error) {
 	}
 	osSpecified := strings.TrimSpace(c.OS) != ""
 
-	list, err := s.Load()
-	if err != nil {
-		return nil, err
-	}
+	allowUnresolved := len(opts) > 0 && opts[0].AllowUnresolvedPayloads
 
 	c.Name = name
 	c.Sequence = seq
@@ -517,6 +558,17 @@ func (s *Store) Add(c Combo) ([]Combo, error) {
 	}
 
 	s.AutoProvisionPayloads(c)
+
+	if !allowUnresolved {
+		if report := s.PayloadRefReport(seq); len(report.Unresolved) > 0 || len(report.Empty) > 0 {
+			return nil, payloadRefError(report)
+		}
+	}
+
+	list, err := s.Load()
+	if err != nil {
+		return nil, err
+	}
 
 	replaced := false
 	for i := range list {
