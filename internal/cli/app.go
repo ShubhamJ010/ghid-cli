@@ -105,10 +105,15 @@ func (a *App) Run(args []string) int {
 	}
 
 	// Android is Single Source of Truth: if connected, auto-pull latest phone state on start
+	pulled := false
 	if mgr, err := adb.NewManager(serial); err == nil {
-		pulled := syncer.AutoPullIfConnected(mgr, a.ComboStore, a.SnippetStore)
-		if !pulled {
+		pulled = syncer.AutoPullIfConnected(mgr, a.ComboStore, a.SnippetStore)
+	}
+	if !pulled {
+		if a.ComboStore != nil {
 			_, _ = a.ComboStore.EnsureDefaults()
+		}
+		if a.SnippetStore != nil {
 			_, _ = a.SnippetStore.EnsureDefaults()
 		}
 	}
@@ -927,11 +932,9 @@ func (a *App) handleComboSchema(store *combos.Store, jsonOutput bool) int {
 			"mouse gesture: click-left, scroll-up",
 			"variable injection: $USERNAME, $PASSWORD, ${PIN}",
 			"typed text: type:rustdesk or type:\"rust desk\"",
-			"event directive: !EXIT, !DISCONNECT, !CONNECT, !RECONNECT, !START, !STOP, !RESTART, !UNPAIR, !COMBO:SEND:lock",
 		},
 		"keyboard":      hid.WindowsKeyboardTokens(),
 		"mouse":         hid.MouseActions(),
-		"directives":    hid.Directives(),
 		"text_prefixes": []string{"type:", "text:", "type ", "text "},
 		"os_tags":       combos.OSTokens(),
 		"default_os":    combos.OSWindows,
@@ -1152,6 +1155,7 @@ func (a *App) listCombos(store *combos.Store, jsonOutput bool, osFilter string) 
 
 func (a *App) handleSnippets(serial string, args []string, jsonOutput bool) int {
 	store := a.snippetStore()
+	_, _ = store.EnsureDefaults()
 	if len(args) == 0 {
 		args = []string{"list"}
 	}
@@ -1173,15 +1177,16 @@ func (a *App) handleSnippets(serial string, args []string, jsonOutput bool) int 
 			fmt.Fprintln(a.Stdout, "  No snippets found.")
 			return 0
 		}
-		fmt.Fprintf(a.Stdout, "  %-3s %-20s %-26s %s\n", "#", "VARIABLE", "VALUE", "SECURITY")
+		fmt.Fprintf(a.Stdout, "  %-3s %-20s %-8s %-26s %s\n", "#", "VARIABLE", "TYPE", "VALUE", "SECURITY")
 		for i, s := range list {
 			varName := "$" + strings.ToUpper(s.Name)
 			displayVal := s.MaskedValue()
+			snType := s.EffectiveType()
 			sec := "[PLAIN]"
 			if s.Secure {
 				sec = "[KEYCHAIN 🔒]"
 			}
-			fmt.Fprintf(a.Stdout, "  %2d. %-20s %-26s %s\n", i+1, varName, displayVal, sec)
+			fmt.Fprintf(a.Stdout, "  %2d. %-20s %-8s %-26s %s\n", i+1, varName, snType, displayVal, sec)
 		}
 		fmt.Fprintln(a.Stdout)
 		return 0
@@ -1210,21 +1215,26 @@ func (a *App) handleSnippets(serial string, args []string, jsonOutput bool) int 
 
 	case "set":
 		if len(args) < 3 {
-			fmt.Fprintf(a.Stderr, "Usage: ghid snippets set <name> <value> [--secure]\n")
+			fmt.Fprintf(a.Stderr, "Usage: ghid snippets set <name> <value> [--secure] [--raw]\n")
 			return 1
 		}
 		name := args[1]
 		secure := false
+		snType := "type"
 		var valParts []string
 		for _, arg := range args[2:] {
 			if arg == "--secure" || arg == "-s" {
 				secure = true
+			} else if arg == "--raw" || arg == "-r" {
+				snType = "raw"
+			} else if strings.HasPrefix(arg, "--type=") {
+				snType = strings.TrimPrefix(arg, "--type=")
 			} else {
 				valParts = append(valParts, arg)
 			}
 		}
 		val := strings.Join(valParts, " ")
-		sn, err := store.Set(name, val, secure)
+		sn, err := store.Set(name, val, secure, snType)
 		if err != nil {
 			fmt.Fprintf(a.Stderr, "Error: %v\n", err)
 			return 1
@@ -1249,7 +1259,7 @@ func (a *App) handleSnippets(serial string, args []string, jsonOutput bool) int 
 			return 1
 		}
 		name := args[1]
-		if strings.EqualFold(name, "username") || strings.EqualFold(name, "password") {
+		if strings.EqualFold(name, "username") || strings.EqualFold(name, "password") || strings.EqualFold(name, "email") || strings.EqualFold(name, "sleep_windows") || strings.EqualFold(name, "play_pause") {
 			fmt.Fprintf(a.Stderr, "Error: Default snippet %q cannot be deleted (clear value using 'ghid snippets set %s \"\"' instead)\n", name, name)
 			return 1
 		}
@@ -1309,49 +1319,8 @@ func (a *App) dispatchCombo(serial, name, keys string, jsonOutput bool) int {
 		return a.comboFail(jsonOutput, "%v", err)
 	}
 
-	depth := 0
-	var handleDirective func(directive string) (bool, error)
-	handleDirective = func(directive string) (bool, error) {
-		upper := strings.ToUpper(strings.TrimSpace(directive))
-		if strings.HasPrefix(upper, "!COMBO:SEND:") {
-			targetName := strings.TrimSpace(directive[len("!COMBO:SEND:"):])
-			if depth >= 5 {
-				return true, fmt.Errorf("maximum combo nesting depth exceeded at %q", targetName)
-			}
-			targetCombo, found := a.comboStore().Find(targetName)
-			if !found {
-				return true, fmt.Errorf("nested combo %q not found", targetName)
-			}
-			depth++
-			defer func() { depth-- }()
-			return true, gw.ComboWithResolver(targetCombo.Keys, a.snippetResolver())
-		}
-		return false, nil
-	}
-	gw.SetDirectiveHandler(handleDirective)
-
 	err = gw.ComboWithResolver(keys, a.snippetResolver())
 	if err != nil {
-		if errors.Is(err, hid.ErrExitRequested) {
-			if jsonOutput {
-				payload := map[string]interface{}{"status": "success", "exit": true, "combo": keys}
-				if name != "" {
-					payload["name"] = name
-					if strings.EqualFold(name, "Lock") {
-						payload["action"] = "lock"
-					} else if strings.EqualFold(name, "Sleep") {
-						payload["action"] = "sleep"
-					}
-				}
-				res, _ := json.Marshal(payload)
-				fmt.Fprintln(a.Stdout, string(res))
-			} else if strings.EqualFold(name, "Sleep") {
-				fmt.Fprintln(a.Stdout, "✔ Windows host put to sleep. Android gateway stopped.")
-			} else {
-				fmt.Fprintln(a.Stdout, "✔ Sequence completed and terminated via !EXIT")
-			}
-			return 0
-		}
 		return a.comboFail(jsonOutput, "combo failed: %v", err)
 	}
 	if jsonOutput {
@@ -1369,7 +1338,7 @@ func (a *App) dispatchCombo(serial, name, keys string, jsonOutput bool) int {
 	} else if strings.EqualFold(name, "Lock") {
 		fmt.Fprintln(a.Stdout, "✔ Windows lock command dispatched (Win + L)")
 	} else if strings.EqualFold(name, "Sleep") {
-		fmt.Fprintln(a.Stdout, "✔ Windows host put to sleep. Android gateway stopped.")
+		fmt.Fprintln(a.Stdout, "✔ Windows host put to sleep.")
 	} else if name != "" {
 		fmt.Fprintf(a.Stdout, "✔ Dispatched %q: %s\n", name, keys)
 	} else {

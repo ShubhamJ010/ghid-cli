@@ -65,7 +65,6 @@ type Controller interface {
 	Type(text string) error
 	Combo(keys string) error
 	ComboWithResolver(keys string, resolver hid.VariableResolver) error
-	SetDirectiveHandler(h adb.DirectiveHandler)
 	Mouse(action string) error
 	Raw(hexReport string) error
 	Login(req LoginRequest, progress func(step int, desc string)) error
@@ -89,12 +88,6 @@ func New(mgr *adb.Manager) *Gateway {
 
 func (g *Gateway) Manager() *adb.Manager {
 	return g.mgr
-}
-
-func (g *Gateway) SetDirectiveHandler(h adb.DirectiveHandler) {
-	if g.mgr != nil {
-		g.mgr.SetDirectiveHandler(h)
-	}
 }
 
 func (g *Gateway) Status() (adb.GatewayStatus, error) {

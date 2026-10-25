@@ -19,11 +19,11 @@ import (
 const (
 	DefaultLoginKeys = "ctrl+alt+del ->{1.0} esc ->{0.8} $USERNAME ->{0.8} tab ->{0.8} $PASSWORD ->{0.8} enter"
 	DefaultLockKeys  = "win+l"
-	DefaultSleepKeys = "raw:02 ->{0.06} raw:00"
+	DefaultSleepKeys = "$SLEEP_WINDOWS ->{0.06} raw:00"
 
 	DefaultMacSleepKeys     = "cmd+ctrl+q ->{0.5} esc"
 	DefaultMacForceQuitKeys = "cmd+opt+esc ->{0.4} enter ->{0.3} enter"
-	DefaultMacPlayPauseKeys = "raw:cd00 ->{0.06} raw:0000"
+	DefaultMacPlayPauseKeys = "$PLAY_PAUSE ->{0.06} raw:0000"
 )
 
 // Target operating systems a combo is written for. The tag drives the combo
@@ -288,8 +288,13 @@ func (s *Store) EnsureDefaults() ([]Combo, error) {
 		for i := range list {
 			if strings.EqualFold(list[i].Name, def.Name) {
 				found = true
-				if strings.EqualFold(def.Name, "Sleep") && strings.Contains(list[i].Keys, "win+x") {
+				if strings.EqualFold(def.Name, "Sleep") && (strings.Contains(list[i].Keys, "win+x") || list[i].Keys == "raw:02 ->{0.06} raw:00") {
 					list[i].Keys = DefaultSleepKeys
+					list[i].Description = def.Description
+					modified = true
+				}
+				if strings.EqualFold(def.Name, "PlayPause") && list[i].Keys == "raw:cd00 ->{0.06} raw:0000" {
+					list[i].Keys = DefaultMacPlayPauseKeys
 					list[i].Description = def.Description
 					modified = true
 				}
@@ -393,9 +398,6 @@ func ValidateForOS(keys string, osName string) error {
 	isMac := NormalizeOSDefault(osName) == OSMacOS
 
 	for _, step := range steps {
-		if step.Directive != "" {
-			continue
-		}
 		if step.Variable != "" {
 			continue
 		}

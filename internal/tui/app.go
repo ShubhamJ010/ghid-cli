@@ -476,10 +476,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case comboStepExecMsg:
 		if m.state == StateComboExecuting {
 			if msg.err != nil {
-				if errors.Is(msg.err, hid.ErrExitRequested) {
-					m.quitting = true
-					return m, tea.Quit
-				}
 				m.state = StateMenu
 				m.notice = fmt.Sprintf("Combo failed at step %d: %v", msg.stepIdx+1, msg.err)
 				m.isErrorNotice = true
@@ -753,8 +749,6 @@ func (m Model) triggerAction(action string) (tea.Model, tea.Cmd) {
 
 func describeStep(step hid.ComboStep) string {
 	switch {
-	case step.Directive != "":
-		return step.Directive
 	case step.Variable != "":
 		return "$" + step.Variable
 	case step.Text != "":
@@ -784,45 +778,6 @@ func (m *Model) executeCurrentStepCmd() tea.Cmd {
 	return func() tea.Msg {
 		var err error
 		switch {
-		case step.Directive != "":
-			upper := strings.ToUpper(strings.TrimSpace(step.Directive))
-			switch {
-			case upper == hid.DirectiveExit:
-				return comboStepExecMsg{stepIdx: idx, err: hid.ErrExitRequested}
-			case upper == hid.DirectiveDisconnect:
-				err = m.manager.DisconnectTarget()
-			case upper == hid.DirectiveConnect:
-				err = m.manager.ConnectTarget("")
-			case strings.HasPrefix(upper, hid.DirectiveConnect+":"):
-				target := strings.TrimPrefix(step.Directive, hid.DirectiveConnect+":")
-				err = m.manager.ConnectTarget(strings.TrimSpace(target))
-			case upper == hid.DirectiveReconnect:
-				_ = m.manager.DisconnectTarget()
-				time.Sleep(300 * time.Millisecond)
-				err = m.manager.ConnectTarget("")
-			case upper == hid.DirectiveStart:
-				err = m.manager.StartGateway()
-			case upper == hid.DirectiveStop:
-				err = m.manager.StopGateway()
-			case upper == hid.DirectiveRestart:
-				_ = m.manager.StopGateway()
-				time.Sleep(300 * time.Millisecond)
-				err = m.manager.StartGateway()
-			case upper == hid.DirectiveUnpair:
-				err = m.manager.UnpairTarget()
-			case strings.HasPrefix(upper, hid.DirectiveComboSend):
-				targetName := strings.TrimSpace(step.Directive[len(hid.DirectiveComboSend):])
-				if m.combosStore != nil {
-					if targetCombo, ok := m.combosStore.Find(targetName); ok {
-						err = m.manager.SendComboWithResolver(targetCombo.Keys, m.snippetsStore.Resolver())
-					} else {
-						err = fmt.Errorf("combo %q not found", targetName)
-					}
-				}
-			default:
-				err = fmt.Errorf("unknown directive %q", step.Directive)
-			}
-
 		case step.Variable != "":
 			if m.snippetsStore != nil {
 				val, vErr := m.snippetsStore.Resolver()(step.Variable)

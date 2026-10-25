@@ -97,19 +97,7 @@ Returns the complete list of valid key tokens, modifier names, and mouse actions
     "keyboard chord: ctrl+shift+esc",
     "mouse gesture: click-left, scroll-up",
     "variable injection: $USERNAME, $PASSWORD, ${PIN}",
-    "typed text: type:rustdesk or type:\"rust desk\"",
-    "event directive: !EXIT, !DISCONNECT, !CONNECT, !RECONNECT, !START, !STOP, !RESTART, !UNPAIR, !COMBO:SEND:lock"
-  ],
-  "directives": [
-    "!EXIT",
-    "!CONNECT",
-    "!DISCONNECT",
-    "!RECONNECT",
-    "!START",
-    "!STOP",
-    "!RESTART",
-    "!UNPAIR",
-    "!COMBO:SEND:<name>"
+    "typed text: type:rustdesk or type:\"rust desk\""
   ],
   "keyboard": ["win", "ctrl", "alt", "shift", "enter", "esc", "tab", "space", "..."],
   "mouse": ["click-left", "click-right", "click-middle", "double-click", "scroll-up", "scroll-down"],

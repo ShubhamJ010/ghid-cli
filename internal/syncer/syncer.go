@@ -21,8 +21,9 @@ type SyncReport struct {
 	Reconnected    bool `json:"reconnected"`
 }
 
-// Pull pulls combos and snippets from Android and replaces local stores.
-// Android is the single source of truth (SSOT).
+// Pull pulls combos and non-secure snippets from Android and updates local stores.
+// Secure snippets are never shared between CLI and Android app and remain local.
+// Non-secure snippets keep their value and are not hidden.
 func Pull(mgr *adb.Manager, cStore *combos.Store, sStore *snippets.Store) (*SyncReport, error) {
 	report := &SyncReport{}
 
@@ -36,38 +37,41 @@ func Pull(mgr *adb.Manager, cStore *combos.Store, sStore *snippets.Store) (*Sync
 		}
 	}
 
-	// 2. Pull remote snippets - phone is SSOT for entry list & plaintext values
+	// 2. Pull remote snippets - phone is SSOT for non-secure snippets.
+	// Secure snippets are never shared and remain securely stored locally.
+	// Non-secure snippets always keep their value when moving between CLI and phone.
 	remoteSnippetsRaw, err := mgr.Run("shell", "cat", adb.AppSnippetsFileRemote)
 	if err == nil && strings.HasPrefix(strings.TrimSpace(remoteSnippetsRaw), "[") {
 		var remoteSnippets []snippets.Snippet
 		if err := json.Unmarshal([]byte(strings.TrimSpace(remoteSnippetsRaw)), &remoteSnippets); err == nil {
-			report.SnippetsPulled = len(remoteSnippets)
 			localSnippets, _ := sStore.Load()
-			// Map local secrets to preserve Keychain passwords
-			localMap := make(map[string]string)
+
+			// Retain all local secure snippets
+			merged := make([]snippets.Snippet, 0, len(localSnippets)+len(remoteSnippets))
 			for _, s := range localSnippets {
-				if s.Secure && s.Value != "" {
-					localMap[strings.ToLower(s.Name)] = s.Value
+				if s.Secure {
+					merged = append(merged, s)
 				}
 			}
 
-			for i := range remoteSnippets {
-				nameKey := strings.ToLower(remoteSnippets[i].Name)
-				if remoteSnippets[i].Secure {
-					if secretVal, exists := localMap[nameKey]; exists {
-						remoteSnippets[i].Value = secretVal
-					}
+			// Add or update non-secure snippets from remote, keeping their full values
+			for _, r := range remoteSnippets {
+				if !r.Secure {
+					merged = append(merged, r)
+					report.SnippetsPulled++
 				}
 			}
-			_ = sStore.SaveAll(remoteSnippets)
+			_ = sStore.SaveAll(merged)
 		}
 	}
 
 	return report, nil
 }
 
-// Push pushes local combos and sanitized snippets (secrets stripped) to Android,
+// Push pushes local combos and non-secure snippets to Android,
 // restarts the app and broadcasts reconnect to target device.
+// Secure snippets are never saved by the CLI to the application.
+// Non-secure snippets always keep their value when moving to the phone.
 func Push(mgr *adb.Manager, cStore *combos.Store, sStore *snippets.Store) (*SyncReport, error) {
 	report := &SyncReport{}
 
@@ -95,19 +99,19 @@ func Push(mgr *adb.Manager, cStore *combos.Store, sStore *snippets.Store) (*Sync
 	}
 	report.CombosPushed = len(localCombos)
 
-	// 2. Push snippets (strip secrets)
+	// 2. Push snippets: secure snippets are NEVER saved by CLI to the application.
+	// Only non-secure snippets are saved to the application, preserving their values.
 	localSnippets, err := sStore.Load()
 	if err != nil {
 		return nil, fmt.Errorf("load snippets: %w", err)
 	}
-	sanitized := make([]snippets.Snippet, len(localSnippets))
-	for i, s := range localSnippets {
-		sanitized[i] = s
-		if s.Secure {
-			sanitized[i].Value = ""
+	toPush := make([]snippets.Snippet, 0, len(localSnippets))
+	for _, s := range localSnippets {
+		if !s.Secure {
+			toPush = append(toPush, s)
 		}
 	}
-	snippetsData, err := json.MarshalIndent(sanitized, "", "  ")
+	snippetsData, err := json.MarshalIndent(toPush, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("marshal snippets: %w", err)
 	}
@@ -124,7 +128,7 @@ func Push(mgr *adb.Manager, cStore *combos.Store, sStore *snippets.Store) (*Sync
 	if _, err := mgr.Run("push", tmpSnippets.Name(), adb.AppSnippetsFileRemote); err != nil {
 		return nil, fmt.Errorf("push snippets to android: %w", err)
 	}
-	report.SnippetsPushed = len(sanitized)
+	report.SnippetsPushed = len(toPush)
 
 	// 3. Restart app and reconnect Bluetooth
 	if err := mgr.RestartAppAndReconnect(); err != nil {
@@ -137,8 +141,8 @@ func Push(mgr *adb.Manager, cStore *combos.Store, sStore *snippets.Store) (*Sync
 }
 
 // Sync performs a full two-way synchronization:
-// 1. Pulls from Android (Android is single source of truth).
-// 2. Pushes back to Android (sanitized secrets).
+// 1. Pulls from Android (non-secure snippets and combos).
+// 2. Pushes back to Android (excluding secure snippets).
 // 3. Restarts app and reconnects Bluetooth.
 func Sync(mgr *adb.Manager, cStore *combos.Store, sStore *snippets.Store) (*SyncReport, error) {
 	pullRep, err := Pull(mgr, cStore, sStore)
@@ -159,45 +163,22 @@ func Sync(mgr *adb.Manager, cStore *combos.Store, sStore *snippets.Store) (*Sync
 	}, nil
 }
 
-// AutoPullIfConnected quietly pulls from Android on CLI startup if a device is connected.
-// Returns true if sync occurred, false if no device or error.
-func AutoPullIfConnected(mgr *adb.Manager, cStore *combos.Store, sStore *snippets.Store) bool {
-	if mgr == nil || cStore == nil || sStore == nil {
-		return false
+// AutoPushIfConnected pushes combos & non-secure snippets if a device is connected via ADB.
+// Silent no-op if no device is connected.
+func AutoPushIfConnected(mgr *adb.Manager, cStore *combos.Store, sStore *snippets.Store) error {
+	if mgr == nil || !mgr.IsAvailable() {
+		return nil
 	}
-	devices, err := mgr.GetDevices()
-	if err != nil || len(devices) == 0 {
-		return false
-	}
-	hasDevice := false
-	for _, d := range devices {
-		if d.State == "device" {
-			hasDevice = true
-			break
-		}
-	}
-	if !hasDevice {
-		return false
-	}
-
-	_, err = Pull(mgr, cStore, sStore)
-	return err == nil
+	_, err := Push(mgr, cStore, sStore)
+	return err
 }
 
-// AutoPushIfConnected pushes local changes back to Android and restarts app if device is connected.
-func AutoPushIfConnected(mgr *adb.Manager, cStore *combos.Store, sStore *snippets.Store) bool {
-	if mgr == nil || cStore == nil || sStore == nil {
+// AutoPullIfConnected pulls combos and non-secure snippets if a device is connected.
+// Returns true if sync succeeded.
+func AutoPullIfConnected(mgr *adb.Manager, cStore *combos.Store, sStore *snippets.Store) bool {
+	if mgr == nil || !mgr.IsAvailable() {
 		return false
 	}
-	devices, err := mgr.GetDevices()
-	if err != nil || len(devices) == 0 {
-		return false
-	}
-	for _, d := range devices {
-		if d.State == "device" {
-			_, pushErr := Push(mgr, cStore, sStore)
-			return pushErr == nil
-		}
-	}
-	return false
+	rep, err := Pull(mgr, cStore, sStore)
+	return err == nil && (rep.CombosPulled > 0 || rep.SnippetsPulled > 0)
 }
