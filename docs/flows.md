@@ -77,28 +77,34 @@ Timings are configurable in `~/.config/ghid/config.json`:
 
 ## 2. Combo and Action Engine Execution
 
-The combo engine parses chained action strings containing keyboard chords, text typing steps, and mouse gestures separated by timed transitions (`->{seconds}`).
+The combo engine parses unified bracket sequence strings containing keyboard chords `{mod+s}`, timed delays `{700ms}`, literal typed text, and dynamic payloads `{PASSWORD}` / `{WIN_SLEEP}`.
 
 ```mermaid
 flowchart TD
-    Input([Input String e.g. 'win+s ->{0.7} type:rustdesk ->{0.4} enter']) --> Split[Split string on '->']
+    Input([Input String e.g. '{win+s}{700ms}rustdesk{400ms}{enter}']) --> Parse[Tokenize Brackets & Literal Runs]
     
-    subgraph StepParsing["Per-Step Parsing"]
-        Step[Step Segment] --> CheckType{Prefix 'type:' or 'text:'?}
-        CheckType -->|Yes| ParseText[Extract literal string]
-        CheckType -->|No| CheckMouse{Matches Mouse Alias?}
-        CheckMouse -->|Yes| ParseMouse[Map to MouseAction: buttons, wheel]
-        CheckMouse -->|No| ParseKeys[Split on '+' and validate Windows tokens]
+    subgraph StepParsing["Per-Token Parsing"]
+        Token[Braced Token or Literal Run] --> CheckBrace{Enclosed in {...}?}
+        CheckBrace -->|No| ParseLiteral[Emit TypeText Step]
+        CheckBrace -->|Yes| CheckDelay{Delay unit e.g. 500ms, 1s?}
+        CheckDelay -->|Yes| ParseDelay[Emit Delay Step]
+        CheckDelay -->|No| CheckPayload{Registered Payload ID?}
+        CheckPayload -->|Yes| ResolvePayload[Substitute Payload: Type or RawReport]
+        CheckPayload -->|No| CheckMouse{Matches Mouse Gesture?}
+        CheckMouse -->|Yes| ParseMouse[Emit Mouse Gesture Step]
+        CheckMouse -->|No| ParseChord[Split on '+' and resolve Key Codes]
         
-        ParseText --> StepObj[Construct ComboStep]
+        ParseLiteral --> StepObj[Construct Sequence Step]
+        ParseDelay --> StepObj
+        ResolvePayload --> StepObj
         ParseMouse --> StepObj
-        ParseKeys --> StepObj
+        ParseChord --> StepObj
     end
 
-    Split --> Step
-    StepObj --> ValidateGrammar{Validate Step Sequence}
+    Parse --> Token
+    StepObj --> ValidateGrammar{Validate Steps}
     
-    ValidateGrammar -->|Invalid Token or Alias| ReturnErr[Reject: Return Validation Error]
+    ValidateGrammar -->|Invalid Token or Syntax| ReturnErr[Reject: Return Validation Error]
     ValidateGrammar -->|Valid| DispatchLoop[Iterate and Execute Steps]
 
     subgraph Execution["Execution Loop"]
@@ -196,10 +202,9 @@ sequenceDiagram
     CLI->>ADB: Broadcast ACTION_CMD (raw "02")
     ADB->>Service: sendRawReport([0x02]) -> System Control (Report 3)
     Service->>Target: ACPI System Sleep (0x82)
-    CLI->>CLI: Sleep(60ms settle)
-    CLI->>ADB: Broadcast ACTION_CMD (raw "00")
-    ADB->>Service: sendRawReport([0x00]) -> System Control (Report 3)
-    Service->>Target: ACPI Sleep Release (0x00)
+    Note over Service: Auto-release momentary report
+    Service->>Service: Sleep(60ms auto-release)
+    Service->>Target: ACPI Sleep Release (0x00, Report 3 auto-release)
     
     Note over CLI: Operator Feedback Countdown
     loop Countdown 5 down to 1

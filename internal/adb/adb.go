@@ -219,7 +219,12 @@ func (m *Manager) InstallApk(customPath string) error {
 	}
 
 	_, err := m.Run("install", "-r", apkPath)
-	return err
+	if err != nil {
+		return err
+	}
+	// Force-stop to prevent Android Package Manager from retaining stale process memory
+	_, _ = m.Run("shell", "am", "force-stop", PackageName)
+	return nil
 }
 
 func (m *Manager) BuildApk() error {

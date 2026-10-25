@@ -110,17 +110,17 @@ ghid status
 
 ```bash
 ghid combo schema --json
-ghid combo validate 'win+s ->{0.7} type:rustdesk ->{0.4} enter' --json
-ghid combo save "Open RustDesk" 'win+s ->{0.7} type:rustdesk ->{0.4} enter' --json
+ghid combo validate '{win+s}{700ms}rustdesk{400ms}{enter}' --json
+ghid combo save "Open RustDesk" '{win+s}{700ms}rustdesk{400ms}{enter}' --json
 ghid combo list --json
 ghid combo send "Open RustDesk" --json
 ghid combo delete "Open RustDesk" --json
 ```
 
-Combo grammar: `step ->{seconds} step`.
-Steps: keyboard chord, mouse gesture, `type:<text>` / `text:<text>`.
-Windows only. Reject `cmd`, `super`, `option`.
-Typed text = printable US-ASCII. Go validator + Android `keyForChar` must stay in sync.
+Combo grammar: unified bracket sequence DSL `{chord}`, `{delay}`, `literal text`, `{PAYLOAD}`.
+Delays: `{100ms}`, `{1s}`, `{0.5s}`.
+Cross-platform modifiers: `mod` (resolves to `cmd` on macOS, `win` on Windows/Linux), `ctrl`, `alt`/`opt`, `shift`.
+Payload references: `{NAME}` (e.g. `{PASSWORD}`, `{WIN_SLEEP}`, `{PLAY_PAUSE}`).
 
 ## Engineering rules
 
@@ -132,6 +132,8 @@ Typed text = printable US-ASCII. Go validator + Android `keyForChar` must stay i
 - Preserve one-shot `ghid combo "win+d"`.
 - Commit style: `feat:`, `fix:`, `refactor:`, `docs:`.
 - Alpha means large refactors OK. Do not leave half-migrated layers, dead code, or duplicate parsers.
+- **Android APK deployment & testing rule**: Android Package Manager (`adb install -r`) preserves existing processes in memory. Whenever deploying an APK, ALWAYS run `adb shell am force-stop com.sj010.ghid` before starting the app or testing via ADB/CLI so that newly compiled bytecode is executed rather than stale code in memory.
+- **Momentary HID report auto-release**: HID raw reports are stateful switch reports. Momentary actions like Consumer Control Report 4 (e.g. `cd00` Play/Pause) or System Control Report 3 (e.g. `02` System Sleep) MUST be released with a zero report (`0000` / `00`) after ~60ms. `HidService.sendRawReport` automatically sends this zero release for non-zero Report 3 and Report 4 payloads.
 
 ## Android app design & iteration rules
 
