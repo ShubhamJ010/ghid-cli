@@ -1,6 +1,11 @@
 package tui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
+)
 
 var (
 	// 24-bit Truecolor Palette
@@ -147,4 +152,36 @@ func calculateCardWidth(termWidth int) int {
 		}
 	}
 	return w
+}
+
+func padRight(s string, width int) string {
+	w := runewidth.StringWidth(s)
+	if w >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-w)
+}
+
+func truncate(s string, maxVisualWidth int) string {
+	if lipgloss.Width(s) <= maxVisualWidth {
+		return s
+	}
+	ellipsis := "…"
+	ellipsisWidth := lipgloss.Width(ellipsis)
+	target := maxVisualWidth - ellipsisWidth
+	if target <= 0 {
+		return ellipsis
+	}
+	var res strings.Builder
+	curWidth := 0
+	for _, r := range s {
+		rw := runewidth.RuneWidth(r)
+		if curWidth+rw > target {
+			break
+		}
+		res.WriteRune(r)
+		curWidth += rw
+	}
+	res.WriteString(ellipsis)
+	return res.String()
 }

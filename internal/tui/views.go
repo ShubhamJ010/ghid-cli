@@ -17,8 +17,8 @@ func (m Model) View() string {
 		return m.comboStudio.View()
 	}
 
-	if m.state == StateSnippetStudio && m.snippetStudio != nil {
-		return m.snippetStudio.View()
+	if m.state == StatePayloadStudio && m.payloadStudio != nil {
+		return m.payloadStudio.View()
 	}
 
 	var sb strings.Builder
@@ -508,19 +508,19 @@ func (m Model) renderDeleteConfirm() string {
 }
 
 func (m Model) renderLoginPrompt() string {
-	userLabel := "Username ($USERNAME):"
-	passLabel := "Password ($PASSWORD):"
+	userLabel := "Username ({USERNAME}):"
+	passLabel := "Password ({PASSWORD}):"
 	if m.loginActiveIn == 0 {
-		userLabel = lipgloss.NewStyle().Foreground(ColorCyan).Bold(true).Render("▶ Username ($USERNAME):")
-		passLabel = lipgloss.NewStyle().Foreground(ColorFgMuted).Render("  Password ($PASSWORD):")
+		userLabel = lipgloss.NewStyle().Foreground(ColorCyan).Bold(true).Render("▶ Username ({USERNAME}):")
+		passLabel = lipgloss.NewStyle().Foreground(ColorFgMuted).Render("  Password ({PASSWORD}):")
 	} else {
-		userLabel = lipgloss.NewStyle().Foreground(ColorFgMuted).Render("  Username ($USERNAME):")
-		passLabel = lipgloss.NewStyle().Foreground(ColorCyan).Bold(true).Render("▶ Password ($PASSWORD):")
+		userLabel = lipgloss.NewStyle().Foreground(ColorFgMuted).Render("  Username ({USERNAME}):")
+		passLabel = lipgloss.NewStyle().Foreground(ColorCyan).Bold(true).Render("▶ Password ({PASSWORD}):")
 	}
 
-	title := "Set Snippet Values"
+	title := "Set Payload Values"
 	if m.pendingCombo != nil {
-		title = fmt.Sprintf("Run %q · Missing Snippets", m.pendingCombo.Name)
+		title = fmt.Sprintf("Run %q · Missing Payloads", m.pendingCombo.Name)
 	}
 
 	content := fmt.Sprintf(
@@ -560,7 +560,7 @@ func (m Model) renderComboCountdown() string {
 		if m.execCombo.Description != "" {
 			desc = m.execCombo.Description
 		} else {
-			desc = m.execCombo.Keys
+			desc = m.execCombo.Sequence
 		}
 	}
 
@@ -598,8 +598,8 @@ func (m Model) renderComboInput() string {
 		"%s\n\n%s\n\n%s\n\n%s",
 		TitleStyle.Render("🎹 Custom Keyboard Chord & Gesture Sequence"),
 		m.textInput.View(),
-		SubtitleStyle.Render("Examples: super+l  •  ctrl+alt+del -> esc -> $USERNAME  •  click-left ->{0.5} win+d"),
-		HelpStyle.Render("[Enter]: Transmit • Delays: -> (1.0s) or ->{1.5} • [Esc]: Cancel"),
+		SubtitleStyle.Render("Examples: {win+l}  •  {ctrl+alt+del}{Escape}{USERNAME}  •  {click-left}{500ms}{mod+s}"),
+		HelpStyle.Render("[Enter]: Transmit • Delays: {500ms} • Chords: {mod+s} • Payloads: {NAME} • [Esc]: Cancel"),
 	)
 	return FocusCardStyle.Width(m.cardWidth()).Render(content)
 }

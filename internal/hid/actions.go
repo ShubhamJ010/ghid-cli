@@ -1,13 +1,16 @@
 package hid
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // MouseAction describes a pointer gesture that is transmitted as its own HID
-// mouse report. Kept separate from keyboard chords because Windows interprets
+// mouse report. Kept separate from keyboard chords because target systems interpret
 // mouse buttons and wheel ticks on a different HID report ID.
 type MouseAction struct {
 	Name    string // canonical token, e.g. "click-left"
@@ -16,7 +19,7 @@ type MouseAction struct {
 	Double  bool   // repeat the click twice
 }
 
-// Canonical mouse gestures understood by the Windows gateway.
+// Canonical mouse gestures understood by the HID gateway.
 const (
 	MouseClickLeft   = "click-left"
 	MouseClickRight  = "click-right"
@@ -104,124 +107,219 @@ func mouseActionFor(canonical string) MouseAction {
 	}
 }
 
-// ParseActionSequence parses a combo in which every step is either a Windows
-// keyboard chord, a mouse gesture, a literal text type step, or a variable ($VAR).
-// Steps are joined with "->" and may carry a delay, e.g. "win+r ->{0.9} tab ->{0.2} $USERNAME".
-func ParseActionSequence(input string) ([]ComboStep, error) {
-	return parseSequence(input, parseActionSegment)
+// ConsumerKeyReports maps standard consumer/media keys to raw 2-byte reports.
+var ConsumerKeyReports = map[string]string{
+	"volumeup":   "e900",
+	"volumedown": "ea00",
+	"mute":       "e200",
+	"playpause":  "cd00",
+	"play_pause": "cd00",
+	"play-pause": "cd00",
 }
 
-func parseRawStep(segment string) (string, bool, error) {
-	trimmed := strings.TrimSpace(segment)
-	lower := strings.ToLower(trimmed)
-	if !strings.HasPrefix(lower, "raw:") {
-		return "", false, nil
+var (
+	bracketRegex = regexp.MustCompile(`\{\{|(\{([^}]+)\})`)
+	delayRegex   = regexp.MustCompile(`^(?i)([0-9]+(?:\.[0-9]+)?)(ms|s)$`)
+	identRegex   = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+)
+
+func checkBracketsSyntax(input string) error {
+	inBrace := false
+	runes := []rune(input)
+	n := len(runes)
+	for i := 0; i < n; i++ {
+		if runes[i] == '{' {
+			if !inBrace && i+1 < n && runes[i+1] == '{' {
+				i++ // skip escaped {{
+				continue
+			}
+			if inBrace {
+				return fmt.Errorf("unexpected nested '{' at position %d", i)
+			}
+			inBrace = true
+		} else if runes[i] == '}' {
+			if !inBrace {
+				continue
+			}
+			inBrace = false
+		}
 	}
-	hexPart := strings.TrimSpace(trimmed[4:])
-	if strings.Contains(hexPart, ":") {
-		parts := strings.SplitN(hexPart, ":", 2)
-		hexPart = strings.TrimSpace(parts[1])
+	if inBrace {
+		return errors.New("unclosed '{' in sequence")
 	}
-	cleanHex := strings.ReplaceAll(hexPart, " ", "")
-	if _, err := ValidateRaw(cleanHex); err != nil {
-		return "", true, err
-	}
-	return cleanHex, true, nil
+	return nil
 }
 
-func parseActionSegment(segment string) (ComboStep, error) {
-	if raw, ok, err := parseRawStep(segment); ok {
-		if err != nil {
-			return ComboStep{}, err
+func isStandardKey(token string) bool {
+	lower := strings.ToLower(strings.TrimSpace(token))
+	switch lower {
+	case "tab", "enter", "return", "esc", "escape", "space", "backspace",
+		"del", "delete", "insert", "home", "end", "pageup", "pgup", "pagedown", "pgdn",
+		"up", "down", "left", "right",
+		"capslock", "caps", "numlock", "scrolllock", "scroll",
+		"printscreen", "prtsc", "print", "pause", "break", "menu", "apps", "context",
+		"minus", "equal", "equals", "leftbracket", "lbracket", "rightbracket", "rbracket",
+		"backslash", "semicolon", "quote", "apostrophe", "grave", "backtick", "tilde",
+		"comma", "period", "dot", "slash", "forwardslash",
+		"win", "ctrl", "alt", "shift", "mod", "cmd", "opt", "option", "super", "gui", "meta", "control":
+		return true
+	}
+	if strings.HasPrefix(lower, "f") && len(lower) >= 2 && len(lower) <= 3 {
+		n := 0
+		for _, r := range lower[1:] {
+			if r < '0' || r > '9' {
+				return false
+			}
+			n = n*10 + int(r-'0')
 		}
-		return ComboStep{Combo: segment, Raw: raw}, nil
+		return n >= 1 && n <= 24
 	}
-
-	if varName, ok := parseVariableStep(segment); ok {
-		return ComboStep{Combo: segment, Variable: varName}, nil
-	}
-
-	if text, ok, err := parseTextStep(segment); ok {
-		if err != nil {
-			return ComboStep{}, err
-		}
-		if varName, ok := parseVariableStep(text); ok {
-			return ComboStep{Combo: segment, Variable: varName}, nil
-		}
-		return ComboStep{Combo: segment, Text: text}, nil
-	}
-
-	if action, ok, err := ParseMouseAction(segment); ok {
-		if err != nil {
-			return ComboStep{}, err
-		}
-		return ComboStep{Combo: action.Name, Mouse: &action}, nil
-	}
-
-	mod, code, err := ParseCombo(segment)
-	if err != nil {
-		return ComboStep{}, err
-	}
-	return ComboStep{Combo: segment, Modifier: mod, KeyCode: code}, nil
+	return false
 }
 
-// parseVariableStep recognises variable tokens like $USERNAME, ${PASSWORD}, or $api_token.
-func parseVariableStep(segment string) (string, bool) {
-	trimmed := strings.TrimSpace(segment)
-	if !strings.HasPrefix(trimmed, "$") {
-		return "", false
+// ParseSequence parses a canonical {...} bracket sequence into executable ComboSteps.
+// Grammar:
+// - Plain text outside {} is emitted as virtual typing steps.
+// - Inside {}:
+//   1. {{ -> Literal "{" (escaped bracket in typed text).
+//   2. Number + ms or s ({500ms}, {1s}) -> Delay step.
+//   3. Contains "+" ({mod+s}, {ctrl+alt+del}) -> Keyboard chord step.
+//   4. Standard W3C / HID key name or consumer key or mouse action -> Single key / raw / mouse step.
+//   5. Alphanumeric / Identifier ({PASSWORD}, {WIN_SLEEP}) -> Named Payload reference step.
+func ParseSequence(input string) ([]ComboStep, error) {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return nil, errors.New("empty combo sequence")
 	}
-	varName := strings.TrimPrefix(trimmed, "$")
-	if strings.HasPrefix(varName, "{") && strings.HasSuffix(varName, "}") {
-		varName = varName[1 : len(varName)-1]
+
+	if err := checkBracketsSyntax(trimmed); err != nil {
+		return nil, err
 	}
-	varName = strings.TrimSpace(varName)
-	if varName == "" {
-		return "", false
+
+	matches := bracketRegex.FindAllStringSubmatchIndex(trimmed, -1)
+	if len(matches) == 0 {
+		// Entire input is plain text typing
+		return []ComboStep{{Text: trimmed}}, nil
 	}
-	for _, r := range varName {
-		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-') {
-			return "", false
+
+	var steps []ComboStep
+	var currentText strings.Builder
+	lastIdx := 0
+
+	flushText := func() {
+		if currentText.Len() > 0 {
+			steps = append(steps, ComboStep{Text: currentText.String()})
+			currentText.Reset()
 		}
 	}
-	return varName, true
-}
 
-// parseTextStep recognises literal typing steps: type:rustdesk,
-// type:"rust desk", text:hello or text 'hello world'.
-func parseTextStep(segment string) (string, bool, error) {
-	lower := strings.ToLower(strings.TrimSpace(segment))
-	var rest string
+	for _, loc := range matches {
+		matchStart := loc[0]
+		matchEnd := loc[1]
 
-	switch {
-	case strings.HasPrefix(lower, "type:"):
-		rest = segment[strings.Index(segment, ":")+1:]
-	case strings.HasPrefix(lower, "text:"):
-		rest = segment[strings.Index(segment, ":")+1:]
-	case strings.HasPrefix(lower, "type "):
-		rest = segment[len("type "):]
-	case strings.HasPrefix(lower, "text "):
-		rest = segment[len("text "):]
-	default:
-		return "", false, nil
+		// Text before this token
+		if matchStart > lastIdx {
+			currentText.WriteString(trimmed[lastIdx:matchStart])
+		}
+
+		matchedStr := trimmed[matchStart:matchEnd]
+		if matchedStr == "{{" {
+			currentText.WriteByte('{')
+			lastIdx = matchEnd
+			continue
+		}
+
+		// Group 2 is inside {...}
+		inner := strings.TrimSpace(trimmed[loc[4]:loc[5]])
+		if inner == "" {
+			return nil, errors.New("empty bracket '{}' in sequence")
+		}
+
+		// 2. Delay: {500ms}, {1s}
+		if m := delayRegex.FindStringSubmatch(inner); len(m) == 3 {
+			val, err := strconv.ParseFloat(m[1], 64)
+			if err != nil {
+				return nil, fmt.Errorf("invalid delay %q: %w", inner, err)
+			}
+			var d time.Duration
+			if strings.ToLower(m[2]) == "ms" {
+				d = time.Duration(val * float64(time.Millisecond))
+			} else {
+				d = time.Duration(val * float64(time.Second))
+			}
+			flushText()
+			steps = append(steps, ComboStep{Combo: inner, Delay: d})
+			lastIdx = matchEnd
+			continue
+		}
+
+		// 3. Contains '+' -> Keyboard chord
+		if strings.Contains(inner, "+") {
+			mod, code, err := ParseCombo(inner)
+			if err != nil {
+				return nil, fmt.Errorf("invalid chord %q: %w", inner, err)
+			}
+			flushText()
+			steps = append(steps, ComboStep{Combo: inner, Modifier: mod, KeyCode: code})
+			lastIdx = matchEnd
+			continue
+		}
+
+		// 4. Standard W3C / HID key name or consumer key or mouse gesture
+		lowerInner := strings.ToLower(inner)
+		if rawReport, isConsumer := ConsumerKeyReports[lowerInner]; isConsumer {
+			flushText()
+			steps = append(steps, ComboStep{Combo: inner, Raw: rawReport})
+			lastIdx = matchEnd
+			continue
+		}
+
+		if mouseAction, isMouse, mErr := ParseMouseAction(inner); isMouse {
+			if mErr != nil {
+				return nil, mErr
+			}
+			flushText()
+			steps = append(steps, ComboStep{Combo: mouseAction.Name, Mouse: &mouseAction})
+			lastIdx = matchEnd
+			continue
+		}
+
+		if isStandardKey(inner) {
+			mod, code, err := ParseCombo(inner)
+			if err == nil {
+				flushText()
+				steps = append(steps, ComboStep{Combo: inner, Modifier: mod, KeyCode: code})
+				lastIdx = matchEnd
+				continue
+			}
+		}
+
+		// 5. Alphanumeric / Identifier -> Named Payload reference
+		if identRegex.MatchString(inner) {
+			flushText()
+			steps = append(steps, ComboStep{Combo: inner, Payload: inner})
+			lastIdx = matchEnd
+			continue
+		}
+
+		return nil, fmt.Errorf("unknown token %q in sequence", inner)
 	}
 
-	rest = strings.TrimSpace(rest)
-	if len(rest) >= 2 && ((rest[0] == '"' && rest[len(rest)-1] == '"') || (rest[0] == '\'' && rest[len(rest)-1] == '\'')) {
-		rest = rest[1 : len(rest)-1]
-	} else if len(rest) > 0 && (rest[0] == '"' || rest[0] == '\'') {
-		return "", true, fmt.Errorf("unterminated quoted text in %q", segment)
+	// Remaining text after last match
+	if lastIdx < len(trimmed) {
+		currentText.WriteString(trimmed[lastIdx:])
+	}
+	flushText()
+
+	if len(steps) == 0 {
+		return nil, errors.New("empty combo sequence")
 	}
 
-	if rest == "" {
-		return "", true, fmt.Errorf("type step needs text, e.g. type:rustdesk or type:\"rust desk\"")
-	}
-	return rest, true, nil
+	return steps, nil
 }
 
 // IsWindowsKeyToken reports whether a single token names a key that exists on
-// a real Windows keyboard. It intentionally rejects macOS-only aliases such as
-// cmd, super, meta, option and opt.
+// a real Windows keyboard.
 func IsWindowsKeyToken(token string) bool {
 	p := strings.ToLower(strings.TrimSpace(token))
 	if p == "" {
@@ -229,7 +327,7 @@ func IsWindowsKeyToken(token string) bool {
 	}
 
 	switch p {
-	case "win", "gui", "ctrl", "control", "alt", "shift":
+	case "win", "gui", "ctrl", "control", "alt", "shift", "mod":
 		return true
 	case "backspace", "esc", "escape", "enter", "return", "tab", "space":
 		return true
@@ -259,7 +357,7 @@ func IsWindowsKeyToken(token string) bool {
 			}
 			n = n*10 + int(r-'0')
 		}
-		return n >= 1 && n <= 12
+		return n >= 1 && n <= 24
 	}
 
 	return false
@@ -268,7 +366,7 @@ func IsWindowsKeyToken(token string) bool {
 // WindowsKeyboardTokens lists every key token the combo grammar accepts.
 func WindowsKeyboardTokens() []string {
 	tokens := []string{
-		"win", "ctrl", "alt", "shift",
+		"win", "ctrl", "alt", "shift", "mod",
 		"enter", "esc", "tab", "space", "backspace", "del", "insert",
 		"up", "down", "left", "right", "home", "end", "pgup", "pgdn",
 		"printscreen", "capslock", "numlock", "scrolllock", "pause", "menu",
@@ -281,7 +379,7 @@ func WindowsKeyboardTokens() []string {
 	for c := '0'; c <= '9'; c++ {
 		tokens = append(tokens, string(c))
 	}
-	for i := 1; i <= 12; i++ {
+	for i := 1; i <= 24; i++ {
 		tokens = append(tokens, fmt.Sprintf("f%d", i))
 	}
 	return tokens
@@ -289,14 +387,14 @@ func WindowsKeyboardTokens() []string {
 
 // StepDescription is a machine-readable view of one parsed combo step.
 type StepDescription struct {
-	Type    string `json:"type"` // keyboard, mouse, text or variable
+	Type    string `json:"type"` // keyboard, mouse, text, payload, delay, or raw
 	Value   string `json:"value"`
 	DelayMS int64  `json:"delay_ms"`
 }
 
 // DescribeSequence parses a combo and returns its steps for agents and tooling.
 func DescribeSequence(input string) ([]StepDescription, error) {
-	steps, err := ParseActionSequence(input)
+	steps, err := ParseSequence(input)
 	if err != nil {
 		return nil, err
 	}
@@ -304,9 +402,9 @@ func DescribeSequence(input string) ([]StepDescription, error) {
 	for _, step := range steps {
 		desc := StepDescription{DelayMS: step.Delay.Milliseconds()}
 		switch {
-		case step.Variable != "":
-			desc.Type = "variable"
-			desc.Value = "$" + step.Variable
+		case step.Payload != "":
+			desc.Type = "payload"
+			desc.Value = step.Payload
 		case step.Text != "":
 			desc.Type = "text"
 			desc.Value = step.Text
@@ -316,6 +414,9 @@ func DescribeSequence(input string) ([]StepDescription, error) {
 		case step.Mouse != nil:
 			desc.Type = "mouse"
 			desc.Value = step.Mouse.Name
+		case step.Delay > 0 && step.Combo != "" && (step.Modifier == 0 && step.KeyCode == 0):
+			desc.Type = "delay"
+			desc.Value = step.Combo
 		default:
 			desc.Type = "keyboard"
 			desc.Value = NormalizeComboForAndroid(step.Combo)
@@ -325,91 +426,27 @@ func DescribeSequence(input string) ([]StepDescription, error) {
 	return described, nil
 }
 
-var varRegex = regexp.MustCompile(`\$([a-zA-Z0-9_-]+)|\$\{([a-zA-Z0-9_-]+)\}`)
-
-// ExtractVariables scans a combo sequence for all referenced snippet variables.
-func ExtractVariables(input string) []string {
-	steps, err := ParseActionSequence(input)
+// ExtractPayloads scans a combo sequence for all referenced payload names ({NAME}).
+func ExtractPayloads(input string) []string {
+	steps, err := ParseSequence(input)
 	if err != nil {
-		return extractVariablesFromRaw(input)
+		return nil
 	}
 
 	seen := make(map[string]bool)
 	var result []string
-
-	add := func(v string) {
-		clean := strings.TrimSpace(v)
-		if clean == "" {
-			return
-		}
-		key := strings.ToLower(clean)
-		if !seen[key] {
-			seen[key] = true
-			result = append(result, clean)
-		}
-	}
-
 	for _, step := range steps {
-		if step.Variable != "" {
-			add(step.Variable)
-		}
-		if step.Text != "" {
-			for _, match := range varRegex.FindAllStringSubmatch(step.Text, -1) {
-				if len(match) > 1 && match[1] != "" {
-					add(match[1])
-				} else if len(match) > 2 && match[2] != "" {
-					add(match[2])
-				}
-			}
-		}
-	}
-	return result
-}
-
-func extractVariablesFromRaw(input string) []string {
-	seen := make(map[string]bool)
-	var result []string
-	for _, match := range varRegex.FindAllStringSubmatch(input, -1) {
-		name := ""
-		if len(match) > 1 && match[1] != "" {
-			name = match[1]
-		} else if len(match) > 2 && match[2] != "" {
-			name = match[2]
-		}
-		if name != "" {
-			key := strings.ToLower(name)
+		if step.Payload != "" {
+			clean := strings.TrimSpace(step.Payload)
+			key := strings.ToLower(clean)
 			if !seen[key] {
 				seen[key] = true
-				result = append(result, name)
+				result = append(result, clean)
 			}
 		}
 	}
 	return result
 }
 
-// VariableResolver resolves a variable name to its string value.
-type VariableResolver func(name string) (string, error)
-
-// NormalizeVariableName strips leading "$" and enclosing "{...}".
-func NormalizeVariableName(token string) string {
-	clean := strings.TrimSpace(token)
-	clean = strings.TrimPrefix(clean, "$")
-	if strings.HasPrefix(clean, "{") && strings.HasSuffix(clean, "}") {
-		clean = clean[1 : len(clean)-1]
-	}
-	return clean
-}
-
-// ExpandTextVariables replaces $VAR and ${VAR} placeholders using the provided resolver.
-func ExpandTextVariables(text string, resolver VariableResolver) string {
-	if resolver == nil || !strings.Contains(text, "$") {
-		return text
-	}
-	return varRegex.ReplaceAllStringFunc(text, func(match string) string {
-		name := NormalizeVariableName(match)
-		if val, err := resolver(name); err == nil && val != "" {
-			return val
-		}
-		return match
-	})
-}
+// PayloadResolver resolves a payload name to its string or hex value.
+type PayloadResolver func(name string) (string, error)

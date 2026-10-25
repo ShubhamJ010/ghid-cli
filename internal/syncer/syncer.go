@@ -8,23 +8,23 @@ import (
 
 	"github.com/ghost-hid/ghid/internal/adb"
 	"github.com/ghost-hid/ghid/internal/combos"
-	"github.com/ghost-hid/ghid/internal/snippets"
+	"github.com/ghost-hid/ghid/internal/payloads"
 )
 
 // SyncReport summarizes the results of a sync operation.
 type SyncReport struct {
 	CombosPulled   int  `json:"combos_pulled"`
 	CombosPushed   int  `json:"combos_pushed"`
-	SnippetsPulled int  `json:"snippets_pulled"`
-	SnippetsPushed int  `json:"snippets_pushed"`
+	PayloadsPulled int  `json:"payloads_pulled"`
+	PayloadsPushed int  `json:"payloads_pushed"`
 	AppRestarted   bool `json:"app_restarted"`
 	Reconnected    bool `json:"reconnected"`
 }
 
-// Pull pulls combos and non-secure snippets from Android and updates local stores.
-// Secure snippets are never shared between CLI and Android app and remain local.
-// Non-secure snippets keep their value and are not hidden.
-func Pull(mgr *adb.Manager, cStore *combos.Store, sStore *snippets.Store) (*SyncReport, error) {
+// Pull pulls combos and non-secure payloads from Android and updates local stores.
+// Secure payloads are never shared between CLI and Android app and remain local.
+// Non-secure payloads keep their value and are not hidden.
+func Pull(mgr *adb.Manager, cStore *combos.Store, pStore *payloads.Store) (*SyncReport, error) {
 	report := &SyncReport{}
 
 	// 1. Pull remote combos - phone is SSOT
@@ -37,42 +37,42 @@ func Pull(mgr *adb.Manager, cStore *combos.Store, sStore *snippets.Store) (*Sync
 		}
 	}
 
-	// 2. Pull remote snippets - phone is SSOT for non-secure snippets.
-	// Secure snippets are never shared and remain securely stored locally.
-	// Non-secure snippets always keep their value when moving between CLI and phone.
-	remoteSnippetsRaw, err := mgr.Run("shell", "cat", adb.AppSnippetsFileRemote)
-	if err == nil && strings.HasPrefix(strings.TrimSpace(remoteSnippetsRaw), "[") {
-		var remoteSnippets []snippets.Snippet
-		if err := json.Unmarshal([]byte(strings.TrimSpace(remoteSnippetsRaw)), &remoteSnippets); err == nil {
-			localSnippets, _ := sStore.Load()
+	// 2. Pull remote payloads - phone is SSOT for non-secure payloads.
+	// Secure payloads are never shared and remain securely stored locally.
+	// Non-secure payloads always keep their value when moving between CLI and phone.
+	remotePayloadsRaw, err := mgr.Run("shell", "cat", adb.AppPayloadsFileRemote)
+	if err == nil && strings.HasPrefix(strings.TrimSpace(remotePayloadsRaw), "[") {
+		var remotePayloads []payloads.Payload
+		if err := json.Unmarshal([]byte(strings.TrimSpace(remotePayloadsRaw)), &remotePayloads); err == nil {
+			localPayloads, _ := pStore.Load()
 
-			// Retain all local secure snippets
-			merged := make([]snippets.Snippet, 0, len(localSnippets)+len(remoteSnippets))
-			for _, s := range localSnippets {
-				if s.Secure {
-					merged = append(merged, s)
+			// Retain all local secure payloads
+			merged := make([]payloads.Payload, 0, len(localPayloads)+len(remotePayloads))
+			for _, p := range localPayloads {
+				if p.Secure {
+					merged = append(merged, p)
 				}
 			}
 
-			// Add or update non-secure snippets from remote, keeping their full values
-			for _, r := range remoteSnippets {
+			// Add or update non-secure payloads from remote, keeping their full values
+			for _, r := range remotePayloads {
 				if !r.Secure {
 					merged = append(merged, r)
-					report.SnippetsPulled++
+					report.PayloadsPulled++
 				}
 			}
-			_ = sStore.SaveAll(merged)
+			_ = pStore.SaveAll(merged)
 		}
 	}
 
 	return report, nil
 }
 
-// Push pushes local combos and non-secure snippets to Android,
+// Push pushes local combos and non-secure payloads to Android,
 // restarts the app and broadcasts reconnect to target device.
-// Secure snippets are never saved by the CLI to the application.
-// Non-secure snippets always keep their value when moving to the phone.
-func Push(mgr *adb.Manager, cStore *combos.Store, sStore *snippets.Store) (*SyncReport, error) {
+// Secure payloads are never saved by the CLI to the application.
+// Non-secure payloads always keep their value when moving to the phone.
+func Push(mgr *adb.Manager, cStore *combos.Store, pStore *payloads.Store) (*SyncReport, error) {
 	report := &SyncReport{}
 
 	// 1. Push combos
@@ -99,36 +99,36 @@ func Push(mgr *adb.Manager, cStore *combos.Store, sStore *snippets.Store) (*Sync
 	}
 	report.CombosPushed = len(localCombos)
 
-	// 2. Push snippets: secure snippets are NEVER saved by CLI to the application.
-	// Only non-secure snippets are saved to the application, preserving their values.
-	localSnippets, err := sStore.Load()
+	// 2. Push payloads: secure payloads are NEVER saved by CLI to the application.
+	// Only non-secure payloads are saved to the application, preserving their values.
+	localPayloads, err := pStore.Load()
 	if err != nil {
-		return nil, fmt.Errorf("load snippets: %w", err)
+		return nil, fmt.Errorf("load payloads: %w", err)
 	}
-	toPush := make([]snippets.Snippet, 0, len(localSnippets))
-	for _, s := range localSnippets {
-		if !s.Secure {
-			toPush = append(toPush, s)
+	toPush := make([]payloads.Payload, 0, len(localPayloads))
+	for _, p := range localPayloads {
+		if !p.Secure {
+			toPush = append(toPush, p)
 		}
 	}
-	snippetsData, err := json.MarshalIndent(toPush, "", "  ")
+	payloadsData, err := json.MarshalIndent(toPush, "", "  ")
 	if err != nil {
-		return nil, fmt.Errorf("marshal snippets: %w", err)
+		return nil, fmt.Errorf("marshal payloads: %w", err)
 	}
-	tmpSnippets, err := os.CreateTemp("", "ghid_snippets_*.json")
+	tmpPayloads, err := os.CreateTemp("", "ghid_payloads_*.json")
 	if err != nil {
 		return nil, err
 	}
-	defer os.Remove(tmpSnippets.Name())
-	if _, err := tmpSnippets.Write(snippetsData); err != nil {
+	defer os.Remove(tmpPayloads.Name())
+	if _, err := tmpPayloads.Write(payloadsData); err != nil {
 		return nil, err
 	}
-	_ = tmpSnippets.Close()
+	_ = tmpPayloads.Close()
 
-	if _, err := mgr.Run("push", tmpSnippets.Name(), adb.AppSnippetsFileRemote); err != nil {
-		return nil, fmt.Errorf("push snippets to android: %w", err)
+	if _, err := mgr.Run("push", tmpPayloads.Name(), adb.AppPayloadsFileRemote); err != nil {
+		return nil, fmt.Errorf("push payloads to android: %w", err)
 	}
-	report.SnippetsPushed = len(toPush)
+	report.PayloadsPushed = len(toPush)
 
 	// 3. Restart app and reconnect Bluetooth
 	if err := mgr.RestartAppAndReconnect(); err != nil {
@@ -141,44 +141,44 @@ func Push(mgr *adb.Manager, cStore *combos.Store, sStore *snippets.Store) (*Sync
 }
 
 // Sync performs a full two-way synchronization:
-// 1. Pulls from Android (non-secure snippets and combos).
-// 2. Pushes back to Android (excluding secure snippets).
+// 1. Pulls from Android (non-secure payloads and combos).
+// 2. Pushes back to Android (excluding secure payloads).
 // 3. Restarts app and reconnects Bluetooth.
-func Sync(mgr *adb.Manager, cStore *combos.Store, sStore *snippets.Store) (*SyncReport, error) {
-	pullRep, err := Pull(mgr, cStore, sStore)
+func Sync(mgr *adb.Manager, cStore *combos.Store, pStore *payloads.Store) (*SyncReport, error) {
+	pullRep, err := Pull(mgr, cStore, pStore)
 	if err != nil {
 		return nil, err
 	}
-	pushRep, err := Push(mgr, cStore, sStore)
+	pushRep, err := Push(mgr, cStore, pStore)
 	if err != nil {
 		return nil, err
 	}
 	return &SyncReport{
 		CombosPulled:   pullRep.CombosPulled,
 		CombosPushed:   pushRep.CombosPushed,
-		SnippetsPulled: pullRep.SnippetsPulled,
-		SnippetsPushed: pushRep.SnippetsPushed,
+		PayloadsPulled: pullRep.PayloadsPulled,
+		PayloadsPushed: pushRep.PayloadsPushed,
 		AppRestarted:   pushRep.AppRestarted,
 		Reconnected:    pushRep.Reconnected,
 	}, nil
 }
 
-// AutoPushIfConnected pushes combos & non-secure snippets if a device is connected via ADB.
+// AutoPushIfConnected pushes combos & non-secure payloads if a device is connected via ADB.
 // Silent no-op if no device is connected.
-func AutoPushIfConnected(mgr *adb.Manager, cStore *combos.Store, sStore *snippets.Store) error {
+func AutoPushIfConnected(mgr *adb.Manager, cStore *combos.Store, pStore *payloads.Store) error {
 	if mgr == nil || !mgr.IsAvailable() {
 		return nil
 	}
-	_, err := Push(mgr, cStore, sStore)
+	_, err := Push(mgr, cStore, pStore)
 	return err
 }
 
-// AutoPullIfConnected pulls combos and non-secure snippets if a device is connected.
+// AutoPullIfConnected pulls combos and non-secure payloads if a device is connected.
 // Returns true if sync succeeded.
-func AutoPullIfConnected(mgr *adb.Manager, cStore *combos.Store, sStore *snippets.Store) bool {
+func AutoPullIfConnected(mgr *adb.Manager, cStore *combos.Store, pStore *payloads.Store) bool {
 	if mgr == nil || !mgr.IsAvailable() {
 		return false
 	}
-	rep, err := Pull(mgr, cStore, sStore)
-	return err == nil && (rep.CombosPulled > 0 || rep.SnippetsPulled > 0)
+	rep, err := Pull(mgr, cStore, pStore)
+	return err == nil && (rep.CombosPulled > 0 || rep.PayloadsPulled > 0)
 }
