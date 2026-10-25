@@ -298,7 +298,6 @@ type ComboStep struct {
 	Mouse     *MouseAction  // Non-nil when this step is a mouse gesture
 	Text      string        // Non-empty when this step types a literal string
 	Variable  string        // Non-empty when this step references a snippet variable, e.g. "USERNAME"
-	Directive string        // Non-empty when this step is an event directive, e.g. "!EXIT", "!DISCONNECT"
 	Raw       string        // Non-empty hex string when this step is a raw HID report
 	Delay     time.Duration // Pause duration after transmitting this step
 }

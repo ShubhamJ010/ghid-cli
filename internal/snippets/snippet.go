@@ -2,18 +2,36 @@ package snippets
 
 import (
 	"errors"
-	"github.com/ghost-hid/ghid/internal/hid"
+	"strings"
 	"time"
+
+	"github.com/ghost-hid/ghid/internal/hid"
 )
 
-// Snippet represents a named text snippet or variable that can be injected into
-// combos (e.g. $USERNAME, $PASSWORD) or typed via HID.
+// Snippet represents a named snippet or variable that can be injected into
+// combos (e.g. $USERNAME, $PASSWORD, $SLEEP_WINDOWS) or sent directly via HID.
+// Supports "type" (typed text) and "raw" (raw HID hex report) snippets,
+// and secure vs non-secure storage.
 type Snippet struct {
 	Name      string    `json:"name"`
+	Type      string    `json:"type"` // "type" (keystroke typing) or "raw" (raw HID report)
 	Value     string    `json:"value,omitempty"`
 	Secure    bool      `json:"secure"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// IsRaw returns true if the snippet is a raw HID report snippet.
+func (s Snippet) IsRaw() bool {
+	return strings.EqualFold(s.Type, "raw")
+}
+
+// EffectiveType returns "raw" or "type", defaulting empty type to "type".
+func (s Snippet) EffectiveType() string {
+	if strings.EqualFold(s.Type, "raw") {
+		return "raw"
+	}
+	return "type"
 }
 
 // ValidateName checks that a snippet identifier is valid.
@@ -35,6 +53,7 @@ func ValidateName(name string) (string, error) {
 }
 
 // MaskedValue returns a safe display representation for lists and UI cards.
+// Non-secure snippets will never be hidden and always return their plain value.
 func (s Snippet) MaskedValue() string {
 	if s.Secure {
 		if s.Value != "" {
