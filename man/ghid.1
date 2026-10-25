@@ -200,9 +200,11 @@ Keyboard tokens cover standard keys across operating systems: \fIwin\fR, \fIcmd\
 \fIenter\fR, \fIesc\fR, \fItab\fR, \fIspace\fR, \fIbackspace\fR, \fIdel\fR,
 \fIinsert\fR, navigation keys, \fIprintscreen\fR, \fIcapslock\fR,
 \fInumlock\fR, \fIscrolllock\fR, \fIpause\fR, \fImenu\fR and punctuation names
-such as \fIsemicolon\fR or \fIslash\fR. Type literal text with a
-\fBtype:\fR step: \fIwin+s ->{0.7} type:rustdesk ->{0.3} enter\fR (quote text
-with spaces as \fItype:"rust desk"\fR; printable ASCII only). Chain raw HID reports
+such as \fIsemicolon\fR or \fIslash\fR. Sequences use unified bracket syntax
+where text outside braces is typed literally, chords use braces (e.g. \fI{mod+s}\fR),
+delays use milliseconds or seconds (e.g. \fI{500ms}\fR, \fI{1s}\fR), and dynamic payloads
+use identifiers (e.g. \fI{PASSWORD}\fR, \fI{WIN_SLEEP}\fR). For example:
+\fIsamxn81@gmail.com{Tab}{PASSWORD}{Enter}{500ms}{mod+s}{100ms}{WIN_SLEEP}\fR.
 with \fIraw:<hex>\fR, such as \fIraw:cd00 ->{0.06} raw:0000\fR (Play/Pause).
 Chain steps with \fI->{seconds}\fR. macOS modifier aliases (\fIcmd\fR, \fIopt\fR)
 are accepted for macOS targets and mapped to native GUI and Alt masks.
@@ -223,8 +225,21 @@ errors are emitted as JSON on stdout with exit code 1, and \fBcombo delete\fR
 skips the confirmation prompt. Use \fBcombo schema \-\-json\fR to enumerate
 supported keys and gestures, then \fBcombo validate\fR before \fBcombo save\fR.
 .TP
+.B payload \fR{\fBlist\fR|\fBget\fR|\fBset\fR|\fBdelete\fR} [\fIname\fR] [\fIvalue\fR] [\fB\-\-\secure\fR] [\fB\-\-\raw\fR] [\fB\-\-\json\fR]
+Manage reusable payloads (credentials, strings, and raw HID reports).
+.RS
+.IP \(bu 2
+\fBlist\fR: Enumerate all configured payloads.
+.IP \(bu 2
+\fBget\fR \fIname\fR: Retrieve payload value (resolving secure credentials from OS Keychain).
+.IP \(bu 2
+\fBset\fR \fIname\fR \fIvalue\fR [\fB\-\-\secure\fR] [\fB\-\-\raw\fR]: Store a payload. Secure payloads are saved exclusively in the local Keychain and never pushed over the wire.
+.IP \(bu 2
+\fBdelete\fR \fIname\fR: Remove a payload from local store and vault.
+.RE
+.TP
 .B sync \fR[\fB\-\-pull\fR | \fB\-\-push\fR] [\fB\-\-json\fR]
-Synchronize combos and snippets between host and Android device over ADB.
+Synchronize combos and payloads between host and Android device over ADB.
 Android is treated as the Single Source of Truth (SSOT).
 .RS
 .IP \(bu 2

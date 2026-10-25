@@ -324,26 +324,26 @@ sequenceDiagram
 
 ---
 
-## 7. Snippet Variable Resolution & Intercept Flow
+## 7. Payload Reference Resolution & Intercept Flow
 
-When executing macros containing dynamic variable references (e.g. `$USERNAME`, `$PASSWORD`), the execution engine resolves tokens at runtime through the registered `SnippetStore`. If referenced snippets are unpopulated, the interactive dashboard prompts the user immediately instead of failing.
+When executing sequences containing dynamic payload references (e.g. `{USERNAME}`, `{PASSWORD}`, `{WIN_SLEEP}`), the execution engine resolves tokens at runtime through the registered `PayloadStore`. If referenced credentials are unpopulated, the interactive dashboard prompts the user immediately instead of failing.
 
 ```mermaid
 flowchart TD
-    Trigger([Trigger Combo e.g. Login Macro]) --> ExtractVars[hid.ExtractVariables: Scan for $VAR and ${VAR}]
-    ExtractVars --> CheckVars{Any variables in combo?}
+    Trigger([Trigger Combo e.g. Login Macro]) --> ExtractVars[hid.ExtractPayloads: Scan for {PAYLOAD}]
+    ExtractVars --> CheckVars{Any payloads in combo?}
 
     CheckVars -->|No| ExecDirect[Execute Keystrokes & Gestures Directly]
-    CheckVars -->|Yes| QueryStore[Query snippets.Store for each variable]
+    CheckVars -->|Yes| QueryStore[Query payloads.Store for each payload]
 
-    QueryStore --> CheckValues{All variables present & non-empty?}
+    QueryStore --> CheckValues{All payloads present & non-empty?}
 
-    CheckValues -->|No (Empty Snippets)| PromptUser[Intercept: Transition to StateLoginPrompt]
+    CheckValues -->|No (Empty Payloads)| PromptUser[Intercept: Transition to StateLoginPrompt]
     PromptUser --> CaptureInput[User fills Username & Password in TUI]
-    CaptureInput --> SaveSnippets[Save text & store secret in Keychain]
-    SaveSnippets --> ResumeCombo[Auto-resume and re-trigger pending combo]
+    CaptureInput --> SavePayloads[Save text & store secret in Keychain]
+    SavePayloads --> ResumeCombo[Auto-resume and re-trigger pending combo]
 
-    CheckValues -->|Yes| Interpolate[hid.SubstituteVariables: Replace tokens with values]
+    CheckValues -->|Yes| Resolve[hid.PayloadResolver: Resolve text or raw report]
     ResumeCombo --> Interpolate
     Interpolate --> DispatchADB[adb.Manager.SendComboWithResolver]
     DispatchADB --> SendHID[Phone injects resolved HID keystrokes into host]
@@ -353,14 +353,14 @@ flowchart TD
     classDef exec fill:#EBF5FB,stroke:#3498DB,stroke-width:2px,color:#1B4F72
 
     class Trigger,ExtractVars,CheckVars,QueryStore,Interpolate,DispatchADB,SendHID normal
-    class PromptUser,CaptureInput,SaveSnippets,ResumeCombo prompt
+    class PromptUser,CaptureInput,SavePayloads,ResumeCombo prompt
     class ExecDirect exec
 ```
 
 
 ## 8. Bi-directional Synchronization and Reconnect Flow (Android SSOT)
 
-The synchronization pipeline enforces the Android smartphone as the Single Source of Truth (SSOT). Remote phone combos and snippets are pulled into the local cache on startup. Local mutations automatically push back to Android, restart the application to invalidate in-memory repositories, and restore the active Bluetooth link.
+The synchronization pipeline enforces the Android smartphone as the Single Source of Truth (SSOT). Remote phone combos and payloads are pulled into the local cache on startup. Local mutations automatically push back to Android, restart the application to invalidate in-memory repositories, and restore the active Bluetooth link.
 
 ```mermaid
 sequenceDiagram
@@ -375,17 +375,17 @@ sequenceDiagram
     participant Target as Target Computer (Bluetooth)
 
     Note over CLI,PhoneDisk: Phase 1: Pull from SSOT (Android)
-    CLI->>ADB: shell cat combos.json & snippets.json
+    CLI->>ADB: shell cat combos.json & payloads.json
     ADB->>PhoneDisk: Read JSON files
     PhoneDisk-->>CLI: Return remote JSON
-    CLI->>Keychain: Resolve local secrets for secure snippets
+    CLI->>Keychain: Resolve local secrets for secure payloads
     CLI->>Local: Overwrite local stores (SaveAll)
 
     opt When Push or Mutation Triggered
         Note over CLI,PhoneDisk: Phase 2: Push Sanitized State
-        CLI->>Local: Load active combos & snippets
-        CLI->>CLI: Sanitize snippets (strip secrets: Value = "")
-        CLI->>ADB: push combos.json & snippets.json
+        CLI->>Local: Load active combos & payloads
+        CLI->>CLI: Sanitize payloads (strip secrets: Value = "")
+        CLI->>ADB: push combos.json & payloads.json
         ADB->>PhoneDisk: Write updated JSON files
 
         Note over CLI,Target: Phase 3: Reload Memory & Restore Connection

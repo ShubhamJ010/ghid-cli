@@ -169,7 +169,7 @@ flowchart TD
         CLIHandler["cli.App (Command Router)"]
         InteractiveTUI["tui.Model (Bubble Tea / Lip Gloss)"]
         ComboStudio["tui.ComboStudio (Interactive Macro Editor)"]
-        SnippetStudio["tui.SnippetStudio (Variable & Secret Vault)"]
+        PayloadStudio["tui.PayloadStudio (Variable & Secret Vault)"]
         QuickSendView["tui.QuickSend (Type / Raw Modal)"]
         JSONFormatter["JSON Output Serializer"]
     end
@@ -177,9 +177,9 @@ flowchart TD
     subgraph Core_Logic["Core Gateway & Domain Layer"]
         GatewayCtrl["gateway.Controller Interface"]
         GatewayImpl["gateway.Gateway"]
-        HIDEngine["hid.Actions & AST Parser (Variable Interpolation)"]
+        HIDEngine["hid.Actions & Unified Bracket Parser"]
         ComboStore["combos.Store (~/.config/ghid/combos.json)"]
-        SnippetStore["snippets.Store (~/.config/ghid/snippets.json)"]
+        PayloadStore["payloads.Store (~/.config/ghid/payloads.json)"]
         ConfigStore["config.Store (~/.config/ghid/config.json)"]
         Vault["vault.Vault (macOS Keychain / In-Memory)"]
     end
@@ -193,17 +193,17 @@ flowchart TD
 
     CLIHandler --> InteractiveTUI
     CLIHandler --> ComboStudio
-    CLIHandler --> SnippetStudio
+    CLIHandler --> PayloadStudio
     CLIHandler --> JSONFormatter
 
     InteractiveTUI --> ComboStudio
-    InteractiveTUI --> SnippetStudio
+    InteractiveTUI --> PayloadStudio
     InteractiveTUI --> QuickSendView
 
     CLIHandler --> GatewayCtrl
     InteractiveTUI --> GatewayCtrl
     ComboStudio --> ComboStore
-    SnippetStudio --> SnippetStore
+    PayloadStudio --> PayloadStore
 
     GatewayCtrl <|-- GatewayImpl
     GatewayImpl --> HIDEngine
@@ -211,8 +211,8 @@ flowchart TD
     GatewayImpl --> Vault
 
     ComboStore --> HIDEngine
-    SnippetStore --> Vault
-    HIDEngine ..> SnippetStore : "Resolves $VAR tokens"
+    PayloadStore --> Vault
+    HIDEngine ..> PayloadStore : "Resolves {NAME} payload references"
     ConfigStore --> GatewayImpl
 
     ADBManager --> Runner

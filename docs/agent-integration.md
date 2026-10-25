@@ -92,12 +92,12 @@ Returns the complete list of valid key tokens, modifier names, and mouse actions
 #### Response
 ```json
 {
-  "grammar": "step ->{seconds} step ->{seconds} step",
+  "grammar": "text outside braces typed literally; {chord}, {delay}, {key}, {PAYLOAD}",
   "step_types": [
     "keyboard chord: ctrl+shift+esc",
     "mouse gesture: click-left, scroll-up",
-    "variable injection: $USERNAME, $PASSWORD, ${PIN}",
-    "typed text: type:rustdesk or type:\"rust desk\""
+    "payload injection: {USERNAME}, {PASSWORD}, {WIN_SLEEP}",
+    "typed text: plain text outside braces"
   ],
   "keyboard": ["win", "ctrl", "alt", "shift", "enter", "esc", "tab", "space", "..."],
   "mouse": ["click-left", "click-right", "click-middle", "double-click", "scroll-up", "scroll-down"],
@@ -117,9 +117,9 @@ Parses and validates a chained combo sequence without executing it.
 ```json
 {
   "valid": true,
-  "input": "win+r ->{0.5} type:notepad ->{0.3} enter",
+  "input": "{mod+r}{500ms}notepad{300ms}{Enter}",
   "steps": [
-    {"type": "keyboard", "value": "win+r", "delay_ms": 500},
+    {"type": "keyboard", "value": "mod+r", "delay_ms": 500},
     {"type": "text", "value": "notepad", "delay_ms": 300},
     {"type": "keyboard", "value": "enter", "delay_ms": 0}
   ]
@@ -147,7 +147,7 @@ Returns all saved combos in the local library (`~/.config/ghid/combos.json`).
 [
   {
     "name": "Login",
-    "keys": "ctrl+alt+del ->{1.0} esc ->{0.8} $USERNAME ->{0.8} tab ->{0.8} $PASSWORD ->{0.8} enter",
+    "sequence": "{ctrl+alt+del}{1s}{Escape}{800ms}{USERNAME}{800ms}{Tab}{800ms}{PASSWORD}{800ms}{Enter}",
     "os": "windows",
     "emoji": "🔑",
     "description": "Windows unlock & credential injection",
@@ -156,7 +156,7 @@ Returns all saved combos in the local library (`~/.config/ghid/combos.json`).
   },
   {
     "name": "Lock",
-    "keys": "win+l",
+    "sequence": "{mod+l}",
     "os": "windows",
     "emoji": "🔒",
     "description": "Instant Windows lock screen (Win + L)",
@@ -165,7 +165,7 @@ Returns all saved combos in the local library (`~/.config/ghid/combos.json`).
   },
   {
     "name": "Sleep",
-    "keys": "raw:02 ->{0.06} raw:00",
+    "sequence": "{WIN_SLEEP}",
     "os": "windows",
     "emoji": "😴",
     "description": "Hardware ACPI sleep sequence",
@@ -235,12 +235,12 @@ ghid quick --raw "08000f0000000000" --json
 
 ---
 
-### `ghid snippets <action> --json`
-Inspects and manages text variables and encrypted secrets stored in `~/.config/ghid/snippets.json` (and macOS Keychain).
+### `ghid payload <action> --json`
+Inspects and manages text variables and encrypted secrets stored in `~/.config/ghid/payloads.json` (and macOS Keychain).
 
-#### List Snippets
+#### List Payloads
 ```bash
-ghid snippets list --json
+ghid payload list --json
 ```
 ```json
 [
@@ -257,9 +257,9 @@ ghid snippets list --json
 ]
 ```
 
-#### Get Snippet
+#### Get Payload
 ```bash
-ghid snippets get username --json
+ghid payload get username --json
 ```
 ```json
 {
@@ -269,9 +269,9 @@ ghid snippets get username --json
 }
 ```
 
-#### Set Snippet
+#### Set Payload
 ```bash
-ghid snippets set api_token "secret_abc123" --secure --json
+ghid payload set api_token "secret_abc123" --secure --json
 ```
 ```json
 {
@@ -281,9 +281,9 @@ ghid snippets set api_token "secret_abc123" --secure --json
 }
 ```
 
-#### Delete Snippet
+#### Delete Payload
 ```bash
-ghid snippets delete api_token --json
+ghid payload delete api_token --json
 ```
 ```json
 {
@@ -358,7 +358,7 @@ if ! ghid status --json >/dev/null 2>&1; then
 fi
 
 # 2. Inject command
-ghid combo "win+r ->{0.5} type:cmd ->{0.3} enter"
+ghid combo "{mod+r}{500ms}cmd{300ms}{Enter}"
 ```
 
 ### Python: Automated Diagnostic and Action Dispatch
@@ -381,7 +381,7 @@ if not doctor.get("gateway_connected"):
 
 # Dispatch sequence
 print("Dispatching combo sequence...")
-subprocess.run(["ghid", "combo", "ctrl+alt+del ->{1.0} esc"], check=True)
+subprocess.run(["ghid", "combo", "{ctrl+alt+del}{1s}{Escape}"], check=True)
 ```
 
 ### Node.js: Agent Tool Definition
