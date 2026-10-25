@@ -58,6 +58,18 @@ const (
 	KeyF10       byte = 0x43
 	KeyF11       byte = 0x44
 	KeyF12       byte = 0x45
+	KeyF13       byte = 0x68
+	KeyF14       byte = 0x69
+	KeyF15       byte = 0x6A
+	KeyF16       byte = 0x6B
+	KeyF17       byte = 0x6C
+	KeyF18       byte = 0x6D
+	KeyF19       byte = 0x6E
+	KeyF20       byte = 0x6F
+	KeyF21       byte = 0x70
+	KeyF22       byte = 0x71
+	KeyF23       byte = 0x72
+	KeyF24       byte = 0x73
 	KeyPrintScr  byte = 0x46
 	KeyScrollLk  byte = 0x47
 	KeyPause     byte = 0x48
@@ -148,7 +160,7 @@ func ParseCombo(combo string) (modifier byte, keyCode byte, err error) {
 			} else {
 				modifier |= ModLeftCtrl
 			}
-		case "win", "gui", "cmd", "meta", "super":
+		case "win", "gui", "cmd", "command", "meta", "super":
 			modifier |= ModLeftGUI
 		case "ctrl", "control":
 			modifier |= ModLeftCtrl
@@ -244,6 +256,30 @@ func ParseCombo(combo string) (modifier byte, keyCode byte, err error) {
 			keyCode = KeyF11
 		case "f12":
 			keyCode = KeyF12
+		case "f13":
+			keyCode = KeyF13
+		case "f14":
+			keyCode = KeyF14
+		case "f15":
+			keyCode = KeyF15
+		case "f16":
+			keyCode = KeyF16
+		case "f17":
+			keyCode = KeyF17
+		case "f18":
+			keyCode = KeyF18
+		case "f19":
+			keyCode = KeyF19
+		case "f20":
+			keyCode = KeyF20
+		case "f21":
+			keyCode = KeyF21
+		case "f22":
+			keyCode = KeyF22
+		case "f23":
+			keyCode = KeyF23
+		case "f24":
+			keyCode = KeyF24
 		default:
 			if len(p) == 1 {
 				c := p[0]
@@ -275,7 +311,7 @@ func NormalizeComboForAndroid(combo string) string {
 		switch token {
 		case "mod":
 			normalized = append(normalized, "mod")
-		case "super", "cmd", "meta", "gui":
+		case "super", "cmd", "command", "meta", "gui":
 			normalized = append(normalized, "win")
 		case "control":
 			normalized = append(normalized, "ctrl")
@@ -296,6 +332,26 @@ func NormalizeComboForAndroid(combo string) string {
 		}
 	}
 	return strings.Join(normalized, "+")
+}
+
+// IsModifierToken reports whether a token is a modifier name rather than a
+// keycode. A modifier on its own is a valid HID step (a bare modifier press).
+func IsModifierToken(token string) bool {
+	switch strings.ToLower(strings.TrimSpace(token)) {
+	case "mod", "win", "gui", "cmd", "command", "meta", "super", "ctrl", "control", "alt", "opt", "option", "shift":
+		return true
+	}
+	return false
+}
+
+// ConsumerToken reports whether a token names a consumer-control key and
+// returns its canonical name.
+func ConsumerToken(token string) (string, bool) {
+	lower := strings.ToLower(strings.TrimSpace(token))
+	if _, ok := ConsumerKeyReports[lower]; !ok {
+		return "", false
+	}
+	return CanonicalConsumerName(lower), true
 }
 
 // ComboStep represents a single action in a chained combo sequence.

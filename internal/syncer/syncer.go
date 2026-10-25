@@ -13,59 +13,93 @@ import (
 
 // SyncReport summarizes the results of a sync operation.
 type SyncReport struct {
-	CombosPulled   int  `json:"combos_pulled"`
-	CombosPushed   int  `json:"combos_pushed"`
-	PayloadsPulled int  `json:"payloads_pulled"`
-	PayloadsPushed int  `json:"payloads_pushed"`
-	AppRestarted   bool `json:"app_restarted"`
-	Reconnected    bool `json:"reconnected"`
+	CombosPulled          int  `json:"combos_pulled"`
+	CombosPushed          int  `json:"combos_pushed"`
+	PayloadsPulled        int  `json:"payloads_pulled"`
+	PayloadsPushed        int  `json:"payloads_pushed"`
+	PayloadsSkippedSecure int  `json:"payloads_skipped_secure"`
+	AppRestarted          bool `json:"app_restarted"`
+	Reconnected           bool `json:"reconnected"`
 }
 
-// Pull pulls combos and non-secure payloads from Android and updates local stores.
-// Secure payloads are never shared between CLI and Android app and remain local.
-// Non-secure payloads keep their value and are not hidden.
+// Pull merges combos and non-secure payloads from Android into the local stores.
+// The phone wins name conflicts (Android is SSOT), but local-only entries are
+// preserved: a CLI edit made while the phone was away must not disappear on the
+// next startup pull. Secure payloads are never shared and remain local.
 func Pull(mgr *adb.Manager, cStore *combos.Store, pStore *payloads.Store) (*SyncReport, error) {
 	report := &SyncReport{}
 
-	// 1. Pull remote combos - phone is SSOT
+	// 1. Pull remote combos - phone wins conflicts, local-only entries survive.
 	remoteCombosRaw, err := mgr.Run("shell", "cat", adb.AppCombosFileRemote)
 	if err == nil && strings.HasPrefix(strings.TrimSpace(remoteCombosRaw), "[") {
 		var remoteCombos []combos.Combo
 		if err := json.Unmarshal([]byte(strings.TrimSpace(remoteCombosRaw)), &remoteCombos); err == nil {
 			report.CombosPulled = len(remoteCombos)
-			_ = cStore.SaveAll(remoteCombos)
+			localCombos, _ := cStore.Load()
+			_ = cStore.SaveAll(mergeCombos(localCombos, remoteCombos))
 		}
 	}
 
-	// 2. Pull remote payloads - phone is SSOT for non-secure payloads.
-	// Secure payloads are never shared and remain securely stored locally.
-	// Non-secure payloads always keep their value when moving between CLI and phone.
+	// 2. Pull remote payloads - phone wins conflicts for non-secure payloads.
+	// Secure payloads are never shared and remain securely stored locally;
+	// non-secure payloads that only exist locally are preserved for the next push.
 	remotePayloadsRaw, err := mgr.Run("shell", "cat", adb.AppPayloadsFileRemote)
 	if err == nil && strings.HasPrefix(strings.TrimSpace(remotePayloadsRaw), "[") {
 		var remotePayloads []payloads.Payload
 		if err := json.Unmarshal([]byte(strings.TrimSpace(remotePayloadsRaw)), &remotePayloads); err == nil {
 			localPayloads, _ := pStore.Load()
-
-			// Retain all local secure payloads
-			merged := make([]payloads.Payload, 0, len(localPayloads)+len(remotePayloads))
-			for _, p := range localPayloads {
-				if p.Secure {
-					merged = append(merged, p)
-				}
-			}
-
-			// Add or update non-secure payloads from remote, keeping their full values
-			for _, r := range remotePayloads {
-				if !r.Secure {
-					merged = append(merged, r)
+			_ = pStore.SaveAll(mergePayloads(localPayloads, remotePayloads))
+			for _, p := range remotePayloads {
+				if !p.Secure {
 					report.PayloadsPulled++
 				}
 			}
-			_ = pStore.SaveAll(merged)
 		}
 	}
 
 	return report, nil
+}
+
+// mergeCombos returns remote combos in order, then local-only combos. Names are
+// compared case-insensitively, matching the rest of the combo store.
+func mergeCombos(local, remote []combos.Combo) []combos.Combo {
+	seen := make(map[string]bool, len(remote))
+	merged := make([]combos.Combo, 0, len(local)+len(remote))
+	for _, c := range remote {
+		merged = append(merged, c)
+		seen[strings.ToLower(strings.TrimSpace(c.Name))] = true
+	}
+	for _, c := range local {
+		if !seen[strings.ToLower(strings.TrimSpace(c.Name))] {
+			merged = append(merged, c)
+		}
+	}
+	return merged
+}
+
+// mergePayloads keeps secure payloads local, takes remote non-secure payloads,
+// and preserves non-secure payloads that only exist locally.
+func mergePayloads(local, remote []payloads.Payload) []payloads.Payload {
+	seen := make(map[string]bool, len(remote))
+	merged := make([]payloads.Payload, 0, len(local)+len(remote))
+	for _, p := range local {
+		if p.Secure {
+			merged = append(merged, p)
+		}
+	}
+	for _, p := range remote {
+		if p.Secure {
+			continue
+		}
+		merged = append(merged, p)
+		seen[strings.ToLower(strings.TrimSpace(p.Name))] = true
+	}
+	for _, p := range local {
+		if !p.Secure && !seen[strings.ToLower(strings.TrimSpace(p.Name))] {
+			merged = append(merged, p)
+		}
+	}
+	return merged
 }
 
 // Push pushes local combos and non-secure payloads to Android,
@@ -109,6 +143,8 @@ func Push(mgr *adb.Manager, cStore *combos.Store, pStore *payloads.Store) (*Sync
 	for _, p := range localPayloads {
 		if !p.Secure {
 			toPush = append(toPush, p)
+		} else {
+			report.PayloadsSkippedSecure++
 		}
 	}
 	payloadsData, err := json.MarshalIndent(toPush, "", "  ")
@@ -154,29 +190,45 @@ func Sync(mgr *adb.Manager, cStore *combos.Store, pStore *payloads.Store) (*Sync
 		return nil, err
 	}
 	return &SyncReport{
-		CombosPulled:   pullRep.CombosPulled,
-		CombosPushed:   pushRep.CombosPushed,
-		PayloadsPulled: pullRep.PayloadsPulled,
-		PayloadsPushed: pushRep.PayloadsPushed,
-		AppRestarted:   pushRep.AppRestarted,
-		Reconnected:    pushRep.Reconnected,
+		CombosPulled:          pullRep.CombosPulled,
+		CombosPushed:          pushRep.CombosPushed,
+		PayloadsPulled:        pullRep.PayloadsPulled,
+		PayloadsPushed:        pushRep.PayloadsPushed,
+		PayloadsSkippedSecure: pushRep.PayloadsSkippedSecure,
+		AppRestarted:          pushRep.AppRestarted,
+		Reconnected:           pushRep.Reconnected,
 	}, nil
 }
 
-// AutoPushIfConnected pushes combos & non-secure payloads if a device is connected via ADB.
-// Silent no-op if no device is connected.
-func AutoPushIfConnected(mgr *adb.Manager, cStore *combos.Store, pStore *payloads.Store) error {
-	if mgr == nil || !mgr.IsAvailable() {
-		return nil
+// PushIfConnected pushes local state only when an Android device is actually
+// attached. The boolean reports whether a push was attempted, so callers can
+// print the truth instead of assuming a sync happened.
+func PushIfConnected(mgr *adb.Manager, cStore *combos.Store, pStore *payloads.Store) (*SyncReport, bool, error) {
+	if mgr == nil {
+		return nil, false, nil
 	}
-	_, err := Push(mgr, cStore, pStore)
+	if _, err := mgr.SelectDevice(); err != nil {
+		return nil, false, nil
+	}
+	report, err := Push(mgr, cStore, pStore)
+	return report, true, err
+}
+
+// AutoPushIfConnected pushes combos & non-secure payloads if a device is
+// connected via ADB. Silent no-op if no device is connected.
+func AutoPushIfConnected(mgr *adb.Manager, cStore *combos.Store, pStore *payloads.Store) error {
+	_, _, err := PushIfConnected(mgr, cStore, pStore)
 	return err
 }
 
-// AutoPullIfConnected pulls combos and non-secure payloads if a device is connected.
-// Returns true if sync succeeded.
+// AutoPullIfConnected pulls combos and non-secure payloads if a device is
+// connected. Discovery happens here too: a manager with no serial still finds
+// a freshly attached phone instead of silently skipping the pull.
 func AutoPullIfConnected(mgr *adb.Manager, cStore *combos.Store, pStore *payloads.Store) bool {
-	if mgr == nil || !mgr.IsAvailable() {
+	if mgr == nil {
+		return false
+	}
+	if _, err := mgr.SelectDevice(); err != nil {
 		return false
 	}
 	rep, err := Pull(mgr, cStore, pStore)

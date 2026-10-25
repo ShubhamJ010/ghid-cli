@@ -101,12 +101,17 @@ ghid status
 
 `--json` = non-interactive. No prompts, no ANSI, JSON on stdout, diagnostics on stderr.
 
-- Exit `0` success, `1` error.
-- Combo errors: `{"status":"error","error":"..."}` on stdout + exit 1.
-- `combo schema --json` = grammar + every valid token. Agents discover, no hard-code.
-- `combo validate <keys> --json` = parse without send/save.
-- `combo save` = upsert, returns `updated: true|false`.
+- Exit `0` success, `1` error. `status` exits `1` while the HID link is disconnected (JSON body is still emitted).
+- Combo errors: `{"status":"error","error":"..."}` on stdout + exit 1. Payload errors use the same shape.
+- `combo schema --json` / `combo keys --json` = grammar + every valid token. Agents discover, no hard-code.
+- `combo validate <keys> [--os ...] --json` = parse + resolve payload refs without send/save.
+- `combo save` = upsert, returns `updated: true|false` and `synced: true|false`; refuses unresolved payload refs unless `--allow-unresolved`.
+- `combo show <name> --json` = read one saved combo + payload resolution.
+- `combo send <name> --dry-run --json` = resolved HID steps, nothing dispatched.
 - `combo delete --json` = no confirmation.
+- `payload get --json` = `source`/`present`/`has_value`; a missing Keychain item exits 1.
+- Secure payloads are device-only: never synced, reported as `payloads_skipped_secure`; `status` carries `secure_payloads: "device_only"`.
+- `status --json` splits `gateway` (ADB) from `hid_link`; gate sends on `can_send`.
 
 ```bash
 ghid combo schema --json
