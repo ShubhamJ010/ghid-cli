@@ -1,4 +1,4 @@
-package snippets
+package payloads
 
 import (
 	"encoding/json"
@@ -14,23 +14,23 @@ import (
 	"github.com/ghost-hid/ghid/internal/vault"
 )
 
-// Store manages snippets stored on disk (JSON) and secure snippets backed by Vault (Keychain).
+// Store manages payloads stored on disk (JSON) and secure payloads backed by Vault (Keychain).
 type Store struct {
 	Path  string
 	Vault vault.Vault
 	mu    sync.RWMutex
 }
 
-// GetDefaultPath returns the default path to snippets.json in the user config dir.
+// GetDefaultPath returns the default path to payloads.json in the user config dir.
 func GetDefaultPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return filepath.Join(".config", "ghid", "snippets.json")
+		return filepath.Join(".config", "ghid", "payloads.json")
 	}
-	return filepath.Join(home, ".config", "ghid", "snippets.json")
+	return filepath.Join(home, ".config", "ghid", "payloads.json")
 }
 
-// NewStore initializes a snippets Store.
+// NewStore initializes a payloads Store.
 func NewStore(path string, v vault.Vault) *Store {
 	if strings.TrimSpace(path) == "" {
 		path = GetDefaultPath()
@@ -42,32 +42,39 @@ func NewStore(path string, v vault.Vault) *Store {
 }
 
 func (s *Store) vaultKey(name string) string {
-	return "ghid_snippet_" + strings.ToLower(strings.TrimSpace(name))
+	return "ghid_payload_" + strings.ToLower(strings.TrimSpace(name))
 }
 
-// Load loads all snippets from disk and populates secure snippet values from Vault.
-func (s *Store) Load() ([]Snippet, error) {
+// Load loads all payloads from disk and populates secure payload values from Vault.
+func (s *Store) Load() ([]Payload, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	data, err := os.ReadFile(s.Path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return []Snippet{}, nil
+			// Check legacy snippets.json path for seamless migration
+			legacyPath := filepath.Join(filepath.Dir(s.Path), "snippets.json")
+			if legData, legErr := os.ReadFile(legacyPath); legErr == nil && len(strings.TrimSpace(string(legData))) > 0 {
+				data = legData
+			} else {
+				return []Payload{}, nil
+			}
+		} else {
+			return nil, err
 		}
-		return nil, err
 	}
 
 	if len(strings.TrimSpace(string(data))) == 0 {
-		return []Snippet{}, nil
+		return []Payload{}, nil
 	}
 
-	var list []Snippet
+	var list []Payload
 	if err := json.Unmarshal(data, &list); err != nil {
-		return nil, fmt.Errorf("parse snippets: %w", err)
+		return nil, fmt.Errorf("parse payloads: %w", err)
 	}
 
-	// Populate secure snippets from vault and normalize types
+	// Populate secure payloads from vault and normalize types
 	for i := range list {
 		if list[i].Type == "" {
 			list[i].Type = "type"
@@ -77,6 +84,12 @@ func (s *Store) Load() ([]Snippet, error) {
 				val, err := s.Vault.Get(s.vaultKey(list[i].Name))
 				if err == nil && val != "" {
 					list[i].Value = val
+				} else {
+					// Fallback to legacy snippet vault key
+					legVal, err := s.Vault.Get("ghid_snippet_" + strings.ToLower(strings.TrimSpace(list[i].Name)))
+					if err == nil && legVal != "" {
+						list[i].Value = legVal
+					}
 				}
 			}
 			// Fallback check for legacy password key
@@ -92,69 +105,65 @@ func (s *Store) Load() ([]Snippet, error) {
 	return list, nil
 }
 
-// Resolver returns a hid.VariableResolver backed by this store.
-func (s *Store) Resolver() hid.VariableResolver {
+// Resolver returns a hid.PayloadResolver backed by this store.
+func (s *Store) Resolver() hid.PayloadResolver {
 	return func(name string) (string, error) {
 		if s == nil {
-			return "", fmt.Errorf("snippets store is unavailable")
+			return "", fmt.Errorf("payload store is unavailable")
 		}
-		snip, ok, err := s.Get(name)
+		p, ok, err := s.Get(name)
 		if err != nil {
 			return "", err
 		}
 		if !ok {
-			// Handle aliases
+			// Handle common legacy aliases
 			if strings.EqualFold(name, "sleep") {
-				if sn, ok2, _ := s.Get("sleep_windows"); ok2 {
-					return sn.Value, nil
+				if p2, ok2, _ := s.Get("win_sleep"); ok2 {
+					return p2.Value, nil
 				}
 			} else if strings.EqualFold(name, "sleep_windows") {
-				if sn, ok2, _ := s.Get("sleep"); ok2 {
-					return sn.Value, nil
+				if p2, ok2, _ := s.Get("win_sleep"); ok2 {
+					return p2.Value, nil
 				}
 			} else if strings.EqualFold(name, "playpause") {
-				if sn, ok2, _ := s.Get("play_pause"); ok2 {
-					return sn.Value, nil
-				}
-			} else if strings.EqualFold(name, "play_pause") {
-				if sn, ok2, _ := s.Get("playpause"); ok2 {
-					return sn.Value, nil
+				if p2, ok2, _ := s.Get("play_pause"); ok2 {
+					return p2.Value, nil
 				}
 			}
-			return "", fmt.Errorf("snippet %q not found", name)
+			return "", fmt.Errorf("payload %q not found", name)
 		}
-		return snip.Value, nil
+		return p.Value, nil
 	}
 }
 
-// List returns all snippets in the store (alias for Load).
-func (s *Store) List() ([]Snippet, error) {
+// List returns all payloads in the store (alias for Load).
+func (s *Store) List() ([]Payload, error) {
 	return s.Load()
 }
 
-// SaveAll persists a complete list of snippets to disk, properly delegating secure values.
-func (s *Store) SaveAll(list []Snippet) error {
+// SaveAll persists a complete list of payloads to disk, properly delegating secure values.
+func (s *Store) SaveAll(list []Payload) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.save(list)
 }
 
-func (s *Store) save(list []Snippet) error {
+func (s *Store) save(list []Payload) error {
 	if list == nil {
-		list = []Snippet{}
+		list = []Payload{}
 	}
 	if err := os.MkdirAll(filepath.Dir(s.Path), 0700); err != nil {
 		return err
 	}
 
-	// Make a copy so secure snippet values are not persisted in plaintext to disk
-	toSave := make([]Snippet, len(list))
-	for i, sn := range list {
-		toSave[i] = sn
+	// Make a copy so secure payload values are not persisted in plaintext to disk
+	toSave := make([]Payload, len(list))
+	for i, p := range list {
+		toSave[i] = p
 		if toSave[i].Type == "" {
 			toSave[i].Type = "type"
 		}
-		if sn.Secure && s.Vault != nil && s.Vault.IsAvailable() {
+		if p.Secure && s.Vault != nil && s.Vault.IsAvailable() {
 			toSave[i].Value = ""
 		}
 	}
@@ -166,13 +175,13 @@ func (s *Store) save(list []Snippet) error {
 	return os.WriteFile(s.Path, data, 0600)
 }
 
-// EnsureDefaults seeds the default snippets:
+// EnsureDefaults seeds the default payloads:
 // - "username" (type: "type", secure: false)
 // - "password" (type: "type", secure: true)
 // - "email" (type: "type", secure: true)
-// - "sleep_windows" (type: "raw", value: "02", secure: false)
-// - "play_pause" (type: "raw", value: "cd00", secure: false)
-func (s *Store) EnsureDefaults() ([]Snippet, error) {
+// - "WIN_SLEEP" (type: "raw", value: "02", secure: false)
+// - "PLAY_PAUSE" (type: "raw", value: "cd00", secure: false)
+func (s *Store) EnsureDefaults() ([]Payload, error) {
 	list, err := s.Load()
 	if err != nil {
 		return nil, err
@@ -181,7 +190,7 @@ func (s *Store) EnsureDefaults() ([]Snippet, error) {
 	hasUser := false
 	hasPass := false
 	hasEmail := false
-	hasSleep := false
+	hasWinSleep := false
 	hasPlayPause := false
 
 	for i := range list {
@@ -197,8 +206,8 @@ func (s *Store) EnsureDefaults() ([]Snippet, error) {
 				list[i].Secure = true
 			}
 		}
-		if strings.EqualFold(list[i].Name, "sleep_windows") || strings.EqualFold(list[i].Name, "sleep") {
-			hasSleep = true
+		if strings.EqualFold(list[i].Name, "win_sleep") || strings.EqualFold(list[i].Name, "sleep_windows") || strings.EqualFold(list[i].Name, "sleep") {
+			hasWinSleep = true
 			if list[i].Type != "raw" || list[i].Value == "" {
 				list[i].Type = "raw"
 				list[i].Value = "02"
@@ -217,7 +226,7 @@ func (s *Store) EnsureDefaults() ([]Snippet, error) {
 	changed := false
 
 	if !hasUser {
-		list = append(list, Snippet{
+		list = append(list, Payload{
 			Name:      "username",
 			Type:      "type",
 			Value:     "",
@@ -228,7 +237,7 @@ func (s *Store) EnsureDefaults() ([]Snippet, error) {
 		changed = true
 	}
 	if !hasPass {
-		list = append(list, Snippet{
+		list = append(list, Payload{
 			Name:      "password",
 			Type:      "type",
 			Value:     "",
@@ -239,7 +248,7 @@ func (s *Store) EnsureDefaults() ([]Snippet, error) {
 		changed = true
 	}
 	if !hasEmail {
-		list = append(list, Snippet{
+		list = append(list, Payload{
 			Name:      "email",
 			Type:      "type",
 			Value:     "",
@@ -249,9 +258,9 @@ func (s *Store) EnsureDefaults() ([]Snippet, error) {
 		})
 		changed = true
 	}
-	if !hasSleep {
-		list = append(list, Snippet{
-			Name:      "sleep_windows",
+	if !hasWinSleep {
+		list = append(list, Payload{
+			Name:      "WIN_SLEEP",
 			Type:      "raw",
 			Value:     "02",
 			Secure:    false,
@@ -261,8 +270,8 @@ func (s *Store) EnsureDefaults() ([]Snippet, error) {
 		changed = true
 	}
 	if !hasPlayPause {
-		list = append(list, Snippet{
-			Name:      "play_pause",
+		list = append(list, Payload{
+			Name:      "PLAY_PAUSE",
 			Type:      "raw",
 			Value:     "cd00",
 			Secure:    false,
@@ -282,43 +291,43 @@ func (s *Store) EnsureDefaults() ([]Snippet, error) {
 	return list, nil
 }
 
-// Get returns the snippet with the given name (case-insensitive).
-func (s *Store) Get(name string) (Snippet, bool, error) {
+// Get returns the payload with the given name (case-insensitive).
+func (s *Store) Get(name string) (Payload, bool, error) {
 	list, err := s.Load()
 	if err != nil {
-		return Snippet{}, false, err
+		return Payload{}, false, err
 	}
 	clean := strings.TrimSpace(name)
-	for _, sn := range list {
-		if strings.EqualFold(sn.Name, clean) {
-			return sn, true, nil
+	for _, p := range list {
+		if strings.EqualFold(p.Name, clean) {
+			return p, true, nil
 		}
 	}
-	return Snippet{}, false, nil
+	return Payload{}, false, nil
 }
 
-// Resolve returns the string value of a snippet, suitable for variable expansion.
+// Resolve returns the string value of a payload.
 func (s *Store) Resolve(name string) (string, bool, error) {
-	sn, ok, err := s.Get(name)
+	p, ok, err := s.Get(name)
 	if err != nil {
 		return "", false, err
 	}
 	if !ok {
 		return "", false, nil
 	}
-	return sn.Value, true, nil
+	return p.Value, true, nil
 }
 
-// Set creates or updates a snippet.
-// Optional snType can be "type" or "raw" (defaults to "type").
-func (s *Store) Set(name, value string, secure bool, snType ...string) (Snippet, error) {
+// Set creates or updates a payload.
+// Optional pType can be "type" or "raw" (defaults to "type").
+func (s *Store) Set(name, value string, secure bool, pType ...string) (Payload, error) {
 	cleanName, err := ValidateName(name)
 	if err != nil {
-		return Snippet{}, err
+		return Payload{}, err
 	}
 
 	targetType := "type"
-	if len(snType) > 0 && strings.EqualFold(snType[0], "raw") {
+	if len(pType) > 0 && strings.EqualFold(pType[0], "raw") {
 		targetType = "raw"
 	}
 
@@ -327,19 +336,19 @@ func (s *Store) Set(name, value string, secure bool, snType ...string) (Snippet,
 
 	// Load directly without locking inside Load
 	data, err := os.ReadFile(s.Path)
-	var list []Snippet
+	var list []Payload
 	if err == nil && len(strings.TrimSpace(string(data))) > 0 {
 		_ = json.Unmarshal(data, &list)
 	}
 
 	now := time.Now().UTC()
-	var result Snippet
+	var result Payload
 	found := false
 
 	// Handle secure storage
 	if secure && s.Vault != nil && s.Vault.IsAvailable() {
 		if err := s.Vault.Set(s.vaultKey(cleanName), value); err != nil {
-			return Snippet{}, fmt.Errorf("secure storage: %w", err)
+			return Payload{}, fmt.Errorf("secure storage: %w", err)
 		}
 	}
 
@@ -363,9 +372,9 @@ func (s *Store) Set(name, value string, secure bool, snType ...string) (Snippet,
 
 	if !found {
 		if len(list) >= 200 {
-			return Snippet{}, errors.New("snippet library is full (200 entries)")
+			return Payload{}, errors.New("payload library is full (200 entries)")
 		}
-		newSn := Snippet{
+		newP := Payload{
 			Name:      cleanName,
 			Type:      targetType,
 			Secure:    secure,
@@ -373,45 +382,45 @@ func (s *Store) Set(name, value string, secure bool, snType ...string) (Snippet,
 			UpdatedAt: now,
 		}
 		if !secure || s.Vault == nil || !s.Vault.IsAvailable() {
-			newSn.Value = value
+			newP.Value = value
 		}
-		list = append(list, newSn)
-		result = newSn
+		list = append(list, newP)
+		result = newP
 		result.Value = value
 	}
 
 	if err := s.save(list); err != nil {
-		return Snippet{}, err
+		return Payload{}, err
 	}
 	return result, nil
 }
 
-// Delete removes a snippet by name.
-func (s *Store) Delete(name string) ([]Snippet, bool, error) {
+// Delete removes a payload by name.
+func (s *Store) Delete(name string) ([]Payload, bool, error) {
 	cleanName := strings.TrimSpace(name)
 	if cleanName == "" {
-		return nil, false, errors.New("snippet name is required")
+		return nil, false, errors.New("payload name is required")
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	data, err := os.ReadFile(s.Path)
-	var list []Snippet
+	var list []Payload
 	if err == nil && len(strings.TrimSpace(string(data))) > 0 {
 		_ = json.Unmarshal(data, &list)
 	}
 
 	found := false
-	filtered := make([]Snippet, 0, len(list))
-	for _, sn := range list {
-		if strings.EqualFold(sn.Name, cleanName) {
+	filtered := make([]Payload, 0, len(list))
+	for _, p := range list {
+		if strings.EqualFold(p.Name, cleanName) {
 			found = true
-			if sn.Secure && s.Vault != nil && s.Vault.IsAvailable() {
+			if p.Secure && s.Vault != nil && s.Vault.IsAvailable() {
 				_ = s.Vault.Delete(s.vaultKey(cleanName))
 			}
 		} else {
-			filtered = append(filtered, sn)
+			filtered = append(filtered, p)
 		}
 	}
 

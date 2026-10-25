@@ -64,7 +64,7 @@ type Controller interface {
 	SleepSequence() error
 	Type(text string) error
 	Combo(keys string) error
-	ComboWithResolver(keys string, resolver hid.VariableResolver) error
+	ComboWithResolver(keys string, resolver hid.PayloadResolver) error
 	Mouse(action string) error
 	Raw(hexReport string) error
 	Login(req LoginRequest, progress func(step int, desc string)) error
@@ -173,13 +173,13 @@ func (g *Gateway) Combo(keys string) error {
 	return g.ComboWithResolver(keys, nil)
 }
 
-func (g *Gateway) ComboWithResolver(keys string, resolver hid.VariableResolver) error {
+func (g *Gateway) ComboWithResolver(keys string, resolver hid.PayloadResolver) error {
 	if g.mgr == nil {
 		return errors.New("adb manager not initialized")
 	}
-	// Validate keyboard chords and mouse gestures using the domain HID parser
-	if _, err := hid.ParseActionSequence(keys); err != nil {
-		return fmt.Errorf("invalid combo: %w", err)
+	// Validate sequence using the domain HID parser
+	if _, err := hid.ParseSequence(keys); err != nil {
+		return fmt.Errorf("invalid combo sequence: %w", err)
 	}
 	return g.mgr.SendComboWithResolver(keys, resolver)
 }
