@@ -70,8 +70,7 @@ Provides numbered actions:
 .IP \(bu 2
 \fBlock\fR: Sends instant Win+L keystroke sequence.
 .IP \(bu 2
-\fBsleep\fR: Dispatches Win+X \(-> u \(-> s sleep sequence, begins a countdown,
-disconnects Bluetooth, and terminates background phone services.
+\fBsleep\fR: Dispatches hardware ACPI sleep sequence (\fIraw:02 ->{0.06} raw:00\fR).
 .IP \(bu 2
 \fBtype\fR: Prompts for arbitrary text and injects it character-by-character.
 .IP \(bu 2
@@ -157,10 +156,8 @@ it will prompt for missing values and offer to cache them.
 Instantly send Windows lock shortcut (\fIWin + L\fR).
 .TP
 .B sleep \fR[\fB\-\-countdown\fR \fIsecs\fR] [\fB\-\-no-exit\fR]
-Dispatches Windows sleep sequence (\fIWin+X\fR \(-> \fIu\fR \(-> \fIs\fR).
-Begins countdown timer (default: 5 seconds), then cleanly disconnects
-Bluetooth and stops Android gateway service so that zero background
-battery drain occurs.
+Dispatches native hardware ACPI sleep sequence (\fIraw:02 ->{0.06} raw:00\fR)
+triggering S3/Modern Standby at the kernel level.
 .TP
 .B type \fItext...\fR
 Type arbitrary string arguments through virtual keyboard.

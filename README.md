@@ -128,7 +128,7 @@ On startup, `ghid` runs through environment checks:
 Actions:
   [1] login      - Automated Windows unlock & login
   [2] lock       - Lock Windows screen (Win + L)
-  [3] sleep      - Windows Sleep sequence + countdown exit
+  [3] sleep      - Hardware ACPI sleep sequence
   [4] type       - Inject text string via keyboard
   [5] combo      - Combo Studio (create / send / delete Windows combos)
   [6] raw        - Inject raw 16-hex byte HID report
@@ -141,7 +141,7 @@ Actions:
 
 - `login`: Wakes screen (`Ctrl+Alt+Del` then `Esc`), types username and password from the Keychain vault, and presses `Enter`.
 - `lock`: Dispatches `Win + L` immediately.
-- `sleep`: Dispatches Windows sleep sequence (`Win + X`, then `u`, then `s`), counts down 5 seconds, disconnects Bluetooth, and terminates the Android foreground service.
+- `sleep`: Dispatches native hardware ACPI sleep sequence (`raw:02 ->{0.06} raw:00`), putting host to sleep at kernel level.
 - `type`: Sends raw text strings as a sequence of keystrokes.
 - `combo`: Opens the interactive Combo Studio.
 - `raw`: Sends explicit 8-byte raw hex reports directly to the HID driver.

@@ -177,10 +177,10 @@ Returns all saved combos in the local library (`~/.config/ghid/combos.json`).
   },
   {
     "name": "Sleep",
-    "keys": "win+x ->{0.5} u ->{0.3} s ->{5.0} !DISCONNECT ->{0.5} !EXIT",
+    "keys": "raw:02 ->{0.06} raw:00",
     "os": "windows",
     "emoji": "😴",
-    "description": "Windows sleep sequence + countdown exit",
+    "description": "Hardware ACPI sleep sequence",
     "favorite": true,
     "created_at": "2026-10-23T01:00:00Z"
   }

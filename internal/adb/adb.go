@@ -585,15 +585,7 @@ func (m *Manager) SendMediaKey(key string) error {
 }
 
 func (m *Manager) SendSleepSequence() error {
-	_ = m.SendCombo("esc")
-	time.Sleep(300 * time.Millisecond)
-	_ = m.SendCombo("esc")
-	time.Sleep(400 * time.Millisecond)
-	_ = m.SendCombo("win+x")
-	time.Sleep(600 * time.Millisecond)
-	_ = m.SendCombo("u")
-	time.Sleep(400 * time.Millisecond)
-	return m.SendCombo("s")
+	return m.SendInstantSleep()
 }
 
 func (m *Manager) GetLogs(lines int) (string, error) {
