@@ -1,14 +1,14 @@
 # GhostHID
 
-Headless Android Bluetooth HID controller and automation gateway.
+Android Bluetooth HID controller, Material 3 app and automation gateway.
 
 GhostHID turns an Android phone into a physical Bluetooth Human Interface Device (HID) composite peripheral. It injects keyboard keystrokes, pointer gestures, text strings, and automated login sequences into any paired Windows, macOS, or Linux computer.
 
-The phone runs a background Android service controlled locally or over Wi-Fi via ADB and the `ghid` command-line utility.
+The phone runs a background Android service plus a Material 3 Expressive dashboard, controlled locally or over Wi-Fi via ADB and the `ghid` command-line utility.
 
 ```mermaid
 flowchart LR
-    Host["Host Machine (macOS / Linux)<br/><code>ghid</code> CLI / Automation Scripts"] -- ADB USB or Wi-Fi --> Phone["Android Phone (API 28+)<br/>Headless Foreground Service"]
+    Host["Host Machine (macOS / Linux)<br/><code>ghid</code> CLI / Automation Scripts"] -- ADB USB or Wi-Fi --> Phone["Android Phone (API 28+)<br/>GhostHID App: Material 3 UI + <code>HidService</code>"]
     Phone -- Bluetooth Classic HID<br/>(L2CAP PSM 0x11 / 0x13) --> Target["Target Computer<br/>(Windows / macOS / Linux)"]
 
     classDef node fill:#F4F6F7,stroke:#34495E,stroke-width:2px,color:#1C2833
@@ -36,12 +36,23 @@ GhostHID is built for headless operation and AI agents:
 - [Wire and Report Protocol Specification](docs/protocol-spec.md): Binary report payloads, L2CAP channels, USB HID scancode translation table, and ADB intent extras.
 - [Troubleshooting and Operational Runbook](docs/troubleshooting.md): Step-by-step diagnosis for ADB transport drops, Windows audio-vs-HID driver binding, Bluetooth state desync, and macOS Keychain in SSH.
 - [Automation and Agent Integration Guide](docs/agent-integration.md): Machine-readable `--json` schemas, exit code definitions, and integration recipes for Bash, Python, and Node.js.
-- [Standalone Android Toolchain (Zero Gradle)](docs/build-and-toolchain.md): Technical breakdown of the 1.8-second APK compilation pipeline using `aapt2`, `javac`, `d8`, `zipalign`, and `apksigner`.
+- [Standalone Android Toolchain (Gradle Release Pipeline)](docs/build-and-toolchain.md): How `build.sh` and `ghid build` drive `:app:assembleRelease`, R8 shrinking, and publishing of `build/ghost-hid.apk`.
 - [Architecture Decision Records](docs/decisions/):
   - [ADR-001: Headless Android Service with BroadcastReceiver IPC over ADB](docs/decisions/ADR-001-headless-android-service-adb-ipc.md)
   - [ADR-002: Dual-Report HID Descriptor for Keyboard and Mouse](docs/decisions/ADR-002-dual-report-descriptor-for-keyboard-and-mouse.md)
   - [ADR-003: Charm TUI with Structured JSON API and Native Credential Vault](docs/decisions/ADR-003-charm-tui-with-json-agent-api-and-keychain-vault.md)
   - [ADR-004: Snippets Subsystem, Dynamic Combo Variables, and Unified Quick Send](docs/decisions/ADR-004-snippets-subsystem-and-quick-send.md)
+  - [ADR-005: Combo Metadata and Unified Stepper Engine](docs/decisions/ADR-005-combo-metadata-and-unified-stepper.md)
+  - [ADR-006: Standalone Android Material 3 Expressive UI with Bi-directional Shared State](docs/decisions/ADR-006-material3-expressive-android-ui-and-shared-state.md)
+  - [ADR-007: Passive Target Host OS Fingerprinting](docs/decisions/ADR-007-host-os-fingerprinting.md)
+  - [ADR-008: Composite HID Report Descriptor and Auto-Inferred Raw Dispatch](docs/decisions/ADR-008-composite-descriptor-and-auto-inferred-raw-dispatch.md)
+  - [ADR-009: Bi-directional Synchronization and Android as Single Source of Truth](docs/decisions/ADR-009-bidirectional-sync-and-android-ssot.md)
+  - [ADR-010: macOS & Cross-Platform Gestures Adaptation, Vector Iconography, and Inset-Aware Shade Docking](docs/decisions/ADR-010-macos-and-cross-platform-gesture-adaptation.md)
+  - [ADR-011: Quick Send Unified Iconography and Device-Driven Host Coupling](docs/decisions/ADR-011-quick-send-unified-iconography-and-host-coupling.md)
+  - [ADR-012: Single Non-Headless Android App and Release-Only Deployment](docs/decisions/ADR-012-single-android-app-and-release-only-deployment.md)
+  - [ADR-013: Combo Emoji Icon Override](docs/decisions/ADR-013-combo-emoji-icon-override.md)
+  - [ADR-014: Raw Snippets, Strict Security Boundary, and Material 3 Expressive Controls](docs/decisions/ADR-014-raw-snippets-security-boundary-and-m3-expressive-controls.md)
+- [Prompt: Build Your Own Headless Android App](docs/prompts/headless-android-app.md): the complete ADB broadcast, status and file contract for coding a UI-less gateway app from scratch.
 
 ## Quick Start
 
@@ -74,12 +85,14 @@ adb connect 192.168.1.80:41839
 ```
 
 ### 3. Build and Install the Phone APK
-The build script compiles directly with Android SDK tools (`aapt2`, `javac`, `d8`, `zipalign`, `apksigner`) without Gradle:
+The build script drives the Gradle wrapper in `android/` and always produces a **release** APK:
 
 ```bash
 ./build.sh
 ghid install-apk
 ```
+
+`ghid build` runs the same script, and `ghid install-apk` installs `build/ghost-hid.apk` (package `com.sj010.ghid`) via `adb install -r`.
 
 ### 4. Pair Phone to Target Computer
 Pair the phone and target computer over Bluetooth before first use. See [Bluetooth Pairing Setup](#bluetooth-pairing-setup) for the required Windows settings.
@@ -101,7 +114,7 @@ ghid
 ### Startup Diagnostics
 On startup, `ghid` runs through environment checks:
 1. Checks for connected USB or wireless ADB devices. If disconnected, an interactive menu allows entering custom IP addresses, ports, or pairing codes.
-2. Checks whether package `com.poc.hiddebug` is installed. Offers to install pre-built APK or compile from source.
+2. Checks whether package `com.sj010.ghid` is installed. Offers to install the built APK or compile from source.
 3. Checks whether phone Bluetooth is enabled.
 4. Starts the Android foreground service and waits for SDP profile registration.
 5. Connects Bluetooth to the active target computer.
@@ -117,7 +130,7 @@ On startup, `ghid` runs through environment checks:
 Actions:
   [1] login      - Automated Windows unlock & login
   [2] lock       - Lock Windows screen (Win + L)
-  [3] sleep      - Windows Sleep sequence + countdown exit
+  [3] sleep      - Hardware ACPI sleep sequence
   [4] type       - Inject text string via keyboard
   [5] combo      - Combo Studio (create / send / delete Windows combos)
   [6] raw        - Inject raw 16-hex byte HID report
@@ -130,7 +143,7 @@ Actions:
 
 - `login`: Wakes screen (`Ctrl+Alt+Del` then `Esc`), types username and password from the Keychain vault, and presses `Enter`.
 - `lock`: Dispatches `Win + L` immediately.
-- `sleep`: Dispatches Windows sleep sequence (`Win + X`, then `u`, then `s`), counts down 5 seconds, disconnects Bluetooth, and terminates the Android foreground service.
+- `sleep`: Dispatches native hardware ACPI sleep sequence (`raw:02 ->{0.06} raw:00`), putting host to sleep at kernel level.
 - `type`: Sends raw text strings as a sequence of keystrokes.
 - `combo`: Opens the interactive Combo Studio.
 - `raw`: Sends explicit 8-byte raw hex reports directly to the HID driver.
@@ -153,31 +166,31 @@ ghid doctor --json
 Example output:
 ```json
 {
-  "version": "1.0.0",
-  "adb_path": "/opt/homebrew/bin/adb",
   "adb_available": true,
-  "device_connected": true,
-  "device_model": "KB2001",
-  "device_serial": "192.168.1.80:41839",
+  "adb_path": "/opt/homebrew/bin/adb",
   "apk_installed": true,
   "bluetooth_on": true,
-  "gateway_registered": true,
-  "gateway_connected": true,
-  "target_laptop": "LP-TZD-0X114650",
-  "target_address": "38:FC:98:E8:E3:87",
-  "registered_devices": 1,
-  "keychain_available": true,
   "cached_user": "Administrator",
+  "device_connected": true,
+  "device_model": "KB2001",
+  "device_name": "SJ's OnePlus 8T",
+  "device_serial": "192.168.1.80:41839",
+  "gateway_connected": true,
+  "gateway_registered": true,
   "has_cached_password": true,
-  "checks": [
-    {"name": "ADB Host Binary", "pass": true, "detail": "/opt/homebrew/bin/adb"},
-    {"name": "Device Transport", "pass": true, "detail": "KB2001 (192.168.1.80:41839)"},
-    {"name": "Gateway Package", "pass": true, "detail": "com.poc.hiddebug installed"},
-    {"name": "Phone Bluetooth Radio", "pass": true, "detail": "Radio active"},
-    {"name": "HID SDP Registration", "pass": true, "detail": "SDP registered"},
-    {"name": "Host Connection", "pass": true, "detail": "Connected to LP-TZD-0X114650"},
-    {"name": "macOS Keychain Vault", "pass": true, "detail": "Vault accessible, user Administrator cached"}
-  ]
+  "keychain_available": true,
+  "registered_devices": 1,
+  "selected_device": {
+    "id": "dev-1",
+    "name": "LP-TZD-0X114650",
+    "address": "38:FC:98:E8:E3:87",
+    "platform": "windows",
+    "selected": true
+  },
+  "snippets_count": 3,
+  "target_address": "38:FC:98:E8:E3:87",
+  "target_laptop": "LP-TZD-0X114650",
+  "version": "1.0.0"
 }
 ```
 
@@ -210,17 +223,42 @@ ghid lock
 ghid sleep --countdown 5
 ```
 
-### Quick Send: Keystroke Typing and Raw Reports (`quick`)
-Unified entry point for ad-hoc text typing and raw HID hex reports:
+### Bi-directional Sync (`sync`) & Android Single Source of Truth (SSOT)
+Android flash storage (`/sdcard/Android/data/com.sj010.ghid/files/`) is the authoritative Single Source of Truth (SSOT) for all combos and snippets.
+The CLI automatically pulls changes from the phone on startup (<15ms check), and any CLI modifications (`combo save/delete`, `snippets set/delete`) push directly to the phone, restart the app to reload in-memory state, and restore Bluetooth connectivity:
+
+```bash
+# Full bi-directional sync (pull from phone, merge additions, push back, restart & reconnect)
+ghid sync
+
+# Pull only (replaces local combo/snippet cache with phone state)
+ghid sync --pull
+
+# Push only (pushes local cache to phone, scrubs secrets, restarts app, reconnects)
+ghid sync --push
+
+# Machine-readable automation output
+ghid sync --json
+```
+
+### Quick Send: Keystroke Typing, Raw Reports & Media Control (`quick`)
+Unified entry point for ad-hoc text typing, composite action sequences, and raw HID reports.
+Target HID collection (Report ID) is automatically inferred from the payload length:
 
 ```bash
 # Type text through the virtual keyboard (default)
 ghid quick "git status"
 ghid quick "Administrator" --json
 
-# Transmit raw 8-byte HID report (16 hex chars)
-ghid quick --raw "08000f0000000000"
-ghid quick "raw:08000f0000000000" --json
+# Send composite sequences containing raw steps
+ghid quick "raw:cd00 ->{0.06} raw:0000" --json  # Consumer Play/Pause toggle
+ghid quick "raw:02 ->{0.06} raw:00" --json      # System Control Sleep
+
+# Transmit length-inferred raw HID reports directly
+ghid quick --raw "02"               # 1 byte  -> Report ID 3 (System Control: Sleep)
+ghid quick --raw "cd00"             # 2 bytes -> Report ID 4 (Consumer: Play/Pause)
+ghid quick --raw "01000000"         # 4 bytes -> Report ID 2 (Mouse: Left Click)
+ghid quick --raw "08000f0000000000" # 8 bytes -> Report ID 1 (Keyboard: Win/Cmd + L)
 ```
 
 ### Combo Macros and Mouse Gestures (`combo`)
@@ -248,13 +286,24 @@ ghid combo schema --json
 # Validate a chained sequence before saving
 ghid combo validate "win+s ->{0.7} type:rustdesk ->{0.4} enter" --json
 
-# Save a named combo (updates if already exists)
-ghid combo save "Open RustDesk" "win+s ->{0.7} type:rustdesk ->{0.4} enter" --json
+# Save a named combo for a host OS (updates if already exists)
+ghid combo save "Open RustDesk" "win+s ->{0.7} type:rustdesk ->{0.4} enter" --os windows --emoji "🚀" --json
+ghid combo save "Spotlight" "cmd+space" --os macos --emoji "🔎" --json
+ghid combo save "PlayPause" "raw:cd00 ->{0.06} raw:0000" --os macos --json
 
-# List saved combos
+# --emoji is optional metadata: it overrides the OS logo on the Android combo card
+# and replaces the [win] / [mac] / [linux] badge in 'ghid combo list'
+
+# List saved combos, optionally scoped to one OS
 ghid combo list --json
+ghid combo list --os macos --json
 
-# Send a saved combo by name
+# Built-in macOS shortcuts
+ghid combo send "MacSleep" --json      # cmd+ctrl+q ->{0.5} esc (Locks screen & sleeps display)
+ghid combo send "ForceQuit" --json     # cmd+opt+esc ->{0.4} enter ->{0.3} enter (Force quits frontmost app)
+ghid combo send "PlayPause" --json     # raw:cd00 ->{0.06} raw:0000 (Consumer Control toggle)
+
+# Send any saved combo by name
 ghid combo send "Open RustDesk" --json
 
 # Delete a saved combo
@@ -267,19 +316,27 @@ Saved combos are stored in `~/.config/ghid/combos.json`.
 Manage multiple target computers (for example, switching between a work laptop and a home Mac):
 
 ```bash
-# List all registered devices
+# Scan/list bonded Bluetooth devices directly from the phone (zero manual MAC typing)
+ghid devices scan
+ghid devices scan --json
+
+# List all registered devices in local config
+ghid devices list
 ghid devices list --json
 
 # Add a target device and set it as active
 ghid devices add --name "MacBook Pro M3" --addr "F8:FF:C2:11:22:33" --os macos --select
 
-# Switch connection to a different device by ID or address
+# Switch connection to a different device by ID, address, or name
 ghid devices select "dev-1"
-ghid devices select "38:FC:98:E8:E3:87"
+ghid devices select "F8:FF:C2:11:22:33"
+ghid devices select "MacBook Pro M3"
 
 # Unregister a target device
 ghid devices delete "F8:FF:C2:11:22:33" -f
 ```
+
+In the interactive TUI (`ghid`), pressing `[d]` -> `[a]` lets you select your OS (Mac/Windows), displays a step-by-step pairing checklist with phone Bluetooth name detection, and enters an interactive device picker loaded live from the phone. Selecting a device auto-registers and connects immediately without manual MAC address entry.
 
 Device profiles are stored in `~/.config/ghid/config.json`.
 
@@ -360,18 +417,22 @@ To ensure Windows binds the phone as a Bluetooth HID keyboard rather than an aud
 
 Prerequisites:
 - OpenJDK 17
-- Android SDK command-line tools (`aapt2`, `d8`, `zipalign`, `apksigner`)
-- Android target platform android-34 (`platforms/android-34/android.jar`)
+- Android SDK with platform `android-35` and `android/local.properties` pointing at it
+- Network access on the first build (Gradle resolves AGP/Kotlin/AndroidX)
 
-Build the APK:
+Build the **release** APK:
 ```bash
-./build.sh
+./build.sh        # android/gradlew :app:assembleRelease -> build/ghost-hid.apk
+# or
+ghid build
 ```
 
 Install to connected phone:
 ```bash
 ghid install-apk
 ```
+
+See [Android Build Toolchain](docs/build-and-toolchain.md) for the full pipeline.
 
 ### CLI Binary (`ghid`)
 

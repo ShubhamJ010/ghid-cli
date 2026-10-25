@@ -14,13 +14,16 @@ import (
 )
 
 const (
-	PackageName      = "com.poc.hiddebug"
-	ServiceName      = "com.poc.hiddebug/.HidService"
-	ReceiverName     = "com.poc.hiddebug/.HidCommandReceiver"
-	ActionCmd        = "com.poc.hiddebug.ACTION_CMD"
-	ActionLock       = "com.poc.hiddebug.ACTION_LOCK"
-	StatusFileRemote = "/sdcard/Android/data/com.poc.hiddebug/files/status.json"
-	LogFileRemote    = "/sdcard/Android/data/com.poc.hiddebug/files/gateway.log"
+	PackageName           = "com.sj010.ghid"
+	ServiceName           = "com.sj010.ghid/.service.HidService"
+	ReceiverName          = "com.sj010.ghid/.service.HidCommandReceiver"
+	ActionCmd             = "com.sj010.ghid.ACTION_CMD"
+	ActionLock            = "com.sj010.ghid.ACTION_LOCK"
+	StatusFileRemote      = "/sdcard/Android/data/com.sj010.ghid/files/status.json"
+	LogFileRemote         = "/sdcard/Android/data/com.sj010.ghid/files/gateway.log"
+	AppMainActivity       = "com.sj010.ghid/.MainActivity"
+	AppCombosFileRemote   = "/sdcard/Android/data/com.sj010.ghid/files/combos.json"
+	AppSnippetsFileRemote = "/sdcard/Android/data/com.sj010.ghid/files/snippets.json"
 )
 
 type Device struct {
@@ -29,30 +32,25 @@ type Device struct {
 	Model  string `json:"model,omitempty"`
 }
 
+// GatewayStatus mirrors status.json on the Android host. OS fields come from
+// the passive fingerprinting engine (ADR-007) and stay empty on older builds.
 type GatewayStatus struct {
-	Registered bool   `json:"registered"`
-	Connected  bool   `json:"connected"`
-	State      string `json:"state"`
-	Target     string `json:"target"`
-	Address    string `json:"address"`
-	Updated    string `json:"updated"`
+	Registered      bool   `json:"registered"`
+	Connected       bool   `json:"connected"`
+	State           string `json:"state"`
+	Target          string `json:"target"`
+	Address         string `json:"address"`
+	OS              string `json:"os"`
+	OSConfidence    string `json:"os_confidence,omitempty"`
+	DetectionMethod string `json:"detection_method,omitempty"`
+	Updated         string `json:"updated"`
 }
-
-// DirectiveHandler is invoked when a combo encounters a !DIRECTIVE step.
-// If handled is true, the directive was processed.
-type DirectiveHandler func(directive string) (bool, error)
 
 type Manager struct {
-	AdbPath          string
-	Serial           string
-	Root             string
-	runner           Runner
-	DirectiveHandler DirectiveHandler
-}
-
-// SetDirectiveHandler registers a custom handler for directives like !COMBO:SEND:<name>.
-func (m *Manager) SetDirectiveHandler(h DirectiveHandler) {
-	m.DirectiveHandler = h
+	AdbPath string
+	Serial  string
+	Root    string
+	runner  Runner
 }
 
 func NewManager(serial string) (*Manager, error) {
@@ -70,16 +68,9 @@ func NewManager(serial string) (*Manager, error) {
 	}, nil
 }
 
-func NewManagerWithRunner(runner Runner, serial, root string) *Manager {
-	if root == "" {
-		root, _ = os.Getwd()
-	}
-	return &Manager{
-		AdbPath: runner.AdbPath(),
-		Serial:  serial,
-		Root:    root,
-		runner:  runner,
-	}
+// IsAvailable reports whether this manager is initialized with an active device serial.
+func (m *Manager) IsAvailable() bool {
+	return m != nil && m.Serial != ""
 }
 
 func (m *Manager) Run(args ...string) (string, error) {
@@ -269,6 +260,88 @@ func (m *Manager) GetDeviceModel() string {
 	return strings.TrimSpace(out)
 }
 
+// GetDeviceName retrieves the dynamic, user-facing Bluetooth or device name of the connected phone.
+// It queries Bluetooth/device name settings, marketing name, and model properties in order of preference.
+func (m *Manager) GetDeviceName() string {
+	cmd := `for k in "secure bluetooth_name" "global bluetooth_name" "global device_name" "system bluetooth_name"; do v=$(settings get $k 2>/dev/null); if [ -n "$v" ] && [ "$v" != "null" ]; then echo "$v"; exit 0; fi; done; m=$(getprop ro.product.marketname); if [ -n "$m" ]; then echo "$m"; exit 0; fi; getprop ro.product.model`
+	out, err := m.Run("shell", cmd)
+	if err == nil {
+		name := strings.TrimSpace(out)
+		if name != "" && name != "null" {
+			return name
+		}
+	}
+
+	model := m.GetDeviceModel()
+	if model != "" && model != "Android Device" {
+		return model
+	}
+
+	return "Android Device"
+}
+
+type BondedDevice struct {
+	Address string `json:"address"`
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+}
+
+var (
+	macRegex  = regexp.MustCompile(`(?i)\b([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})\b`)
+	typeRegex = regexp.MustCompile(`\[\s*([^\]]+)\s*\]`)
+)
+
+// GetBondedBluetoothDevices parses bonded/paired devices from dumpsys bluetooth_manager.
+func (m *Manager) GetBondedBluetoothDevices() ([]BondedDevice, error) {
+	out, err := m.Run("shell", "dumpsys", "bluetooth_manager")
+	if err != nil {
+		return nil, err
+	}
+	return parseBondedDevices(out), nil
+}
+
+func parseBondedDevices(out string) []BondedDevice {
+	var devices []BondedDevice
+	lines := strings.Split(out, "\n")
+	inBonded := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "Bonded devices:") {
+			inBonded = true
+			continue
+		}
+		if inBonded {
+			if trimmed == "" || strings.HasPrefix(trimmed, "AdapterState:") || strings.HasPrefix(trimmed, "mSnoopLogSetting") || strings.HasPrefix(trimmed, "Bond Events:") {
+				break
+			}
+			macMatch := macRegex.FindString(trimmed)
+			if macMatch == "" {
+				continue
+			}
+			devType := "BR/EDR"
+			if tMatch := typeRegex.FindStringSubmatch(trimmed); len(tMatch) > 1 {
+				devType = strings.TrimSpace(tMatch[1])
+			}
+			name := ""
+			if idx := strings.Index(trimmed, "]"); idx != -1 && idx+1 < len(trimmed) {
+				name = strings.TrimSpace(trimmed[idx+1:])
+			} else {
+				name = strings.TrimSpace(strings.Replace(trimmed, macMatch, "", 1))
+			}
+			if name == "" {
+				name = "Bluetooth Device"
+			}
+			devices = append(devices, BondedDevice{
+				Address: strings.ToUpper(macMatch),
+				Name:    name,
+				Type:    devType,
+			})
+		}
+	}
+	return devices
+}
+
 func (m *Manager) StartGateway() error {
 	_, _ = m.Run("shell", "dumpsys", "deviceidle", "whitelist", "+"+PackageName)
 	_, err := m.Run("shell", "am", "start-foreground-service", "-n", ServiceName)
@@ -282,6 +355,14 @@ func (m *Manager) StopGateway() error {
 	return err
 }
 
+func (m *Manager) RestartAppAndReconnect() error {
+	_, _ = m.Run("shell", "am", "force-stop", PackageName)
+	_, _ = m.Run("shell", "am", "start", "-n", AppMainActivity)
+	time.Sleep(1500 * time.Millisecond)
+	_, err := m.Run("shell", "am", "broadcast", "-a", ActionCmd, "-n", ReceiverName, "--es", "cmd", "connect")
+	return err
+}
+
 func (m *Manager) GetStatus() GatewayStatus {
 	fallback := GatewayStatus{
 		Registered: false,
@@ -289,11 +370,12 @@ func (m *Manager) GetStatus() GatewayStatus {
 		State:      "OFFLINE",
 		Target:     "none",
 		Address:    "none",
+		OS:         "unknown",
 		Updated:    "none",
 	}
 
 	out, err := m.Run("shell", "cat", StatusFileRemote)
-	if err != nil {
+	if err != nil || !strings.HasPrefix(strings.TrimSpace(out), "{") {
 		return fallback
 	}
 
@@ -301,6 +383,9 @@ func (m *Manager) GetStatus() GatewayStatus {
 	if strings.HasPrefix(out, "{") && strings.HasSuffix(out, "}") {
 		var status GatewayStatus
 		if err := json.Unmarshal([]byte(out), &status); err == nil {
+			if strings.TrimSpace(status.OS) == "" {
+				status.OS = "unknown"
+			}
 			return status
 		}
 	}
@@ -359,23 +444,7 @@ func (m *Manager) SendComboWithResolver(keys string, resolver func(string) (stri
 		return err
 	}
 	for _, step := range steps {
-		if step.Directive != "" {
-			if m.DirectiveHandler != nil {
-				handled, err := m.DirectiveHandler(step.Directive)
-				if handled {
-					if err != nil {
-						return err
-					}
-					if step.Delay > 0 {
-						time.Sleep(step.Delay)
-					}
-					continue
-				}
-			}
-			if err := m.ExecuteBuiltinDirective(step.Directive); err != nil {
-				return err
-			}
-		} else if step.Variable != "" {
+		if step.Variable != "" {
 			if resolver == nil {
 				return fmt.Errorf("snippet variable $%s requires a resolver", step.Variable)
 			}
@@ -386,7 +455,20 @@ func (m *Manager) SendComboWithResolver(keys string, resolver func(string) (stri
 			if strings.TrimSpace(val) == "" {
 				return fmt.Errorf("snippet variable $%s is empty", step.Variable)
 			}
-			if err := m.TypeText(val); err != nil {
+			cleanVal := strings.TrimSpace(val)
+			cleanHex := strings.TrimPrefix(strings.ToLower(cleanVal), "raw:")
+			cleanHex = strings.ReplaceAll(cleanHex, " ", "")
+			if _, rawErr := hid.ValidateRaw(cleanHex); rawErr == nil {
+				if err := m.SendRaw(cleanHex); err != nil {
+					return err
+				}
+			} else {
+				if err := m.TypeText(val); err != nil {
+					return err
+				}
+			}
+		} else if step.Raw != "" {
+			if err := m.SendRaw(step.Raw); err != nil {
 				return err
 			}
 		} else if step.Text != "" {
@@ -414,41 +496,6 @@ func (m *Manager) SendComboWithResolver(keys string, resolver func(string) (stri
 	return nil
 }
 
-// ExecuteBuiltinDirective executes standard lifecycle directives:
-// !EXIT, !DISCONNECT, !CONNECT, !RECONNECT, !START, !STOP, !RESTART, !UNPAIR.
-func (m *Manager) ExecuteBuiltinDirective(directive string) error {
-	upper := strings.ToUpper(strings.TrimSpace(directive))
-	switch {
-	case upper == "!EXIT":
-		return hid.ErrExitRequested
-	case upper == "!DISCONNECT":
-		return m.DisconnectTarget()
-	case upper == "!CONNECT":
-		return m.ConnectTarget("")
-	case strings.HasPrefix(upper, "!CONNECT:"):
-		target := strings.TrimPrefix(directive, "!CONNECT:")
-		return m.ConnectTarget(strings.TrimSpace(target))
-	case upper == "!RECONNECT":
-		_ = m.DisconnectTarget()
-		time.Sleep(500 * time.Millisecond)
-		return m.ConnectTarget("")
-	case upper == "!START":
-		return m.StartGateway()
-	case upper == "!STOP":
-		return m.StopGateway()
-	case upper == "!RESTART":
-		_ = m.StopGateway()
-		time.Sleep(500 * time.Millisecond)
-		return m.StartGateway()
-	case upper == "!UNPAIR":
-		return m.UnpairTarget()
-	case strings.HasPrefix(upper, "!COMBO:SEND:"):
-		return fmt.Errorf("directive %s requires combo store context", directive)
-	default:
-		return fmt.Errorf("unsupported directive %q", directive)
-	}
-}
-
 // SendMouse dispatches a single Windows mouse gesture through the phone.
 func (m *Manager) SendMouse(action string) error {
 	parsed, ok, err := hid.ParseMouseAction(action)
@@ -472,23 +519,26 @@ func (m *Manager) TypeText(text string) error {
 }
 
 func (m *Manager) SendRaw(hexReport string) error {
-	if len(hexReport) != 16 {
-		return fmt.Errorf("raw report must be exactly 16 hex characters (8 bytes), got %d", len(hexReport))
+	cleanHex := strings.ReplaceAll(hexReport, " ", "")
+	if _, err := hid.ValidateRaw(cleanHex); err != nil {
+		return err
 	}
-	_, err := m.Run("shell", "am", "broadcast", "-n", ReceiverName, "-a", ActionCmd, "--es", "cmd", "raw", "--es", "hex", hexReport)
+	_, err := m.Run("shell", "am", "broadcast", "-n", ReceiverName, "-a", ActionCmd, "--es", "cmd", "raw", "--es", "hex", cleanHex)
+	return err
+}
+
+func (m *Manager) SendInstantSleep() error {
+	_, err := m.Run("shell", "am", "broadcast", "-n", ReceiverName, "-a", ActionCmd, "--es", "cmd", "sleep")
+	return err
+}
+
+func (m *Manager) SendMediaKey(key string) error {
+	_, err := m.Run("shell", "am", "broadcast", "-n", ReceiverName, "-a", ActionCmd, "--es", "cmd", "media", "--es", "key", key)
 	return err
 }
 
 func (m *Manager) SendSleepSequence() error {
-	_ = m.SendCombo("esc")
-	time.Sleep(300 * time.Millisecond)
-	_ = m.SendCombo("esc")
-	time.Sleep(400 * time.Millisecond)
-	_ = m.SendCombo("win+x")
-	time.Sleep(600 * time.Millisecond)
-	_ = m.SendCombo("u")
-	time.Sleep(400 * time.Millisecond)
-	return m.SendCombo("s")
+	return m.SendInstantSleep()
 }
 
 func (m *Manager) GetLogs(lines int) (string, error) {

@@ -28,9 +28,18 @@ Inspects live connection status between phone and target computer.
   "state": "CONNECTED",
   "target": "LP-TZD-0X114650",
   "address": "38:FC:98:E8:E3:87",
+  "os": "windows",
+  "os_confidence": "high",
+  "detection_method": "hid_led_handshake",
   "updated": "2026-10-23 01:15:30.122"
 }
 ```
+
+`os` is the passively fingerprinted host (`windows`, `macos`, `linux`, or `unknown`).
+`os_confidence` is `high`, `medium`, `low`, or `none`; `detection_method` is one of
+`apple_oui`, `apple_sdp_uuid`, `hid_led_handshake`, `name_heuristic`, `fallback`,
+or `none`. Older Android builds omit all three fields; treat them as absent, not
+as an error.
 
 Exit code: `0` if `connected == true`, `1` if disconnected.
 
@@ -47,6 +56,7 @@ Runs a complete hardware, transport, and credentials health check.
   "adb_available": true,
   "device_connected": true,
   "device_model": "KB2001",
+  "device_name": "SJ's OnePlus 8T",
   "device_serial": "192.168.1.80:41839",
   "apk_installed": true,
   "bluetooth_on": true,
@@ -65,19 +75,14 @@ Runs a complete hardware, transport, and credentials health check.
   "keychain_available": true,
   "cached_user": "Administrator",
   "has_cached_password": true,
-  "checks": [
-    {"name": "ADB Host Binary", "pass": true, "detail": "/opt/homebrew/bin/adb"},
-    {"name": "Device Transport", "pass": true, "detail": "KB2001 (192.168.1.80:41839)"},
-    {"name": "Gateway Package", "pass": true, "detail": "com.poc.hiddebug installed"},
-    {"name": "Phone Bluetooth Radio", "pass": true, "detail": "Radio active"},
-    {"name": "HID SDP Registration", "pass": true, "detail": "SDP registered"},
-    {"name": "Host Connection", "pass": true, "detail": "Connected to LP-TZD-0X114650"},
-    {"name": "macOS Keychain Vault", "pass": true, "detail": "Vault accessible, user Administrator cached"}
-  ]
+  "snippets_count": 3
 }
 ```
 
-Exit code: `0` if all essential checks pass, `1` if any critical component is missing.
+`apk_installed` reflects package `com.sj010.ghid`. Exit code: `0` whenever a report is
+produced (judge health from the booleans), `2` if the ADB gateway cannot be constructed — then
+stdout carries `{"error": "..."}` instead. The human-readable `ghid doctor` run prints the
+per-check list; the JSON form carries the same facts as flat booleans.
 
 ---
 
@@ -92,22 +97,14 @@ Returns the complete list of valid key tokens, modifier names, and mouse actions
     "keyboard chord: ctrl+shift+esc",
     "mouse gesture: click-left, scroll-up",
     "variable injection: $USERNAME, $PASSWORD, ${PIN}",
-    "typed text: type:rustdesk or type:\"rust desk\"",
-    "event directive: !EXIT, !DISCONNECT, !CONNECT, !RECONNECT, !START, !STOP, !RESTART, !UNPAIR, !COMBO:SEND:lock"
-  ],
-  "directives": [
-    "!EXIT",
-    "!CONNECT",
-    "!DISCONNECT",
-    "!RECONNECT",
-    "!START",
-    "!STOP",
-    "!RESTART",
-    "!UNPAIR",
-    "!COMBO:SEND:<name>"
+    "typed text: type:rustdesk or type:\"rust desk\""
   ],
   "keyboard": ["win", "ctrl", "alt", "shift", "enter", "esc", "tab", "space", "..."],
-  "mouse": ["click-left", "click-right", "click-middle", "double-click", "scroll-up", "scroll-down"]
+  "mouse": ["click-left", "click-right", "click-middle", "double-click", "scroll-up", "scroll-down"],
+  "os_tags": ["windows", "macos", "linux"],
+  "default_os": "windows",
+  "emoji": "optional single emoji shown as the combo icon on Android and instead of the OS badge in the CLI",
+  "os_note": "The win token is the HID GUI modifier: Windows/Linux Super, macOS Command."
 }
 ```
 
@@ -151,6 +148,7 @@ Returns all saved combos in the local library (`~/.config/ghid/combos.json`).
   {
     "name": "Login",
     "keys": "ctrl+alt+del ->{1.0} esc ->{0.8} $USERNAME ->{0.8} tab ->{0.8} $PASSWORD ->{0.8} enter",
+    "os": "windows",
     "emoji": "🔑",
     "description": "Windows unlock & credential injection",
     "favorite": true,
@@ -159,6 +157,7 @@ Returns all saved combos in the local library (`~/.config/ghid/combos.json`).
   {
     "name": "Lock",
     "keys": "win+l",
+    "os": "windows",
     "emoji": "🔒",
     "description": "Instant Windows lock screen (Win + L)",
     "favorite": true,
@@ -166,14 +165,28 @@ Returns all saved combos in the local library (`~/.config/ghid/combos.json`).
   },
   {
     "name": "Sleep",
-    "keys": "win+x ->{0.5} u ->{0.3} s ->{5.0} !DISCONNECT ->{0.5} !EXIT",
-    "emoji": "🌙",
-    "description": "Windows sleep sequence + countdown exit",
+    "keys": "raw:02 ->{0.06} raw:00",
+    "os": "windows",
+    "emoji": "😴",
+    "description": "Hardware ACPI sleep sequence",
     "favorite": true,
     "created_at": "2026-10-23T01:00:00Z"
   }
 ]
 ```
+
+Filter the library by target OS with `ghid combo list --os macos --json`.
+Combos saved before OS tagging existed report `os: "windows"`. Tag a combo at
+save time with `--os windows|macos|linux`; without the flag, updates keep the
+existing tag. The same `os` value selects the matching filters and profile in
+the Android app.
+
+The optional `emoji` string is combo icon metadata. When present it overrides the
+OS logo on the Android card and replaces the `[win]` / `[mac]` / `[linux]` badge
+in `ghid combo list` and the TUI. Set it at save time with `--emoji <e>`; without
+the flag, updates keep the existing emoji. Values must be an emoji (no ASCII
+letters, digits or spaces, at most 12 code points) or the save fails with
+`{"status":"error","error":"..."}` and exit 1.
 
 ---
 
@@ -277,6 +290,27 @@ ghid snippets delete api_token --json
   "status": "success",
   "deleted": "api_token"
 }
+```
+
+---
+
+### `ghid devices scan --json`
+Queries the phone directly over ADB (`dumpsys bluetooth_manager`) for bonded Bluetooth devices. Enables zero-touch registration without needing to manually transcribe MAC addresses.
+
+#### Response
+```json
+[
+  {
+    "address": "A0:9A:8E:57:36:DA",
+    "name": "Shubham’s MacBook Air",
+    "type": "DUAL"
+  },
+  {
+    "address": "38:FC:98:E8:E3:87",
+    "name": "LP-TZD-0X114650",
+    "type": "BR/EDR"
+  }
+]
 ```
 
 ---

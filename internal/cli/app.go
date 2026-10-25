@@ -18,6 +18,7 @@ import (
 	"github.com/ghost-hid/ghid/internal/gateway"
 	"github.com/ghost-hid/ghid/internal/hid"
 	"github.com/ghost-hid/ghid/internal/snippets"
+	"github.com/ghost-hid/ghid/internal/syncer"
 	"github.com/ghost-hid/ghid/internal/tui"
 	"github.com/ghost-hid/ghid/internal/vault"
 	"github.com/mattn/go-runewidth"
@@ -42,9 +43,7 @@ func NewApp(version string) *App {
 	store := config.NewStore("")
 	vlt := vault.NewKeychainVault("")
 	cStore := combos.NewStore("")
-	_, _ = cStore.EnsureDefaults()
 	sStore := snippets.NewStore("", vlt)
-	_, _ = sStore.EnsureDefaults()
 
 	return &App{
 		Version:      version,
@@ -105,6 +104,20 @@ func (a *App) Run(args []string) int {
 		}
 	}
 
+	// Android is Single Source of Truth: if connected, auto-pull latest phone state on start
+	pulled := false
+	if mgr, err := adb.NewManager(serial); err == nil {
+		pulled = syncer.AutoPullIfConnected(mgr, a.ComboStore, a.SnippetStore)
+	}
+	if !pulled {
+		if a.ComboStore != nil {
+			_, _ = a.ComboStore.EnsureDefaults()
+		}
+		if a.SnippetStore != nil {
+			_, _ = a.SnippetStore.EnsureDefaults()
+		}
+	}
+
 	if len(filteredArgs) == 0 {
 		return a.runInteractive(cfg, serial)
 	}
@@ -146,7 +159,7 @@ func (a *App) Run(args []string) int {
 		return a.handleQuick(serial, cmdArgs, jsonOutput)
 
 	case "snippets", "snippet":
-		return a.handleSnippets(cmdArgs, jsonOutput)
+		return a.handleSnippets(serial, cmdArgs, jsonOutput)
 
 	case "devices", "device":
 		return a.handleDevices(cfg, serial, cmdArgs, jsonOutput)
@@ -174,6 +187,9 @@ func (a *App) Run(args []string) int {
 
 	case "filelog":
 		return a.handleFileLog(serial)
+
+	case "sync":
+		return a.handleSync(serial, cmdArgs, jsonOutput)
 
 	case "build":
 		return a.handleBuild()
@@ -246,6 +262,7 @@ func (a *App) handleStatus(cfg config.Config, serial string, jsonOutput bool) in
 		} else {
 			fmt.Fprintf(a.Stdout, "  Target:         %s [%s]\n", status.Target, status.Address)
 		}
+		fmt.Fprintf(a.Stdout, "  Target OS:      %s\n", describeStatusOS(status))
 		fmt.Fprintf(a.Stdout, "  Updated:        %s\n", status.Updated)
 	}
 
@@ -253,6 +270,23 @@ func (a *App) handleStatus(cfg config.Config, serial string, jsonOutput bool) in
 		return 1
 	}
 	return 0
+}
+
+// describeStatusOS renders the fingerprint result for humans.
+func describeStatusOS(status adb.GatewayStatus) string {
+	osName := strings.ToLower(strings.TrimSpace(status.OS))
+	if osName == "" || osName == "unknown" {
+		return "Unknown (waiting for a connected host)"
+	}
+	description := combos.OSLabel(osName)
+	if status.OSConfidence != "" {
+		description += " (" + status.OSConfidence + " confidence"
+		if status.DetectionMethod != "" {
+			description += " via " + status.DetectionMethod
+		}
+		description += ")"
+	}
+	return description
 }
 
 func (a *App) handleDoctor(cfg config.Config, serial string, jsonOutput bool) int {
@@ -292,6 +326,7 @@ func (a *App) handleDoctor(cfg config.Config, serial string, jsonOutput bool) in
 			"adb_available":       report.AdbAvailable,
 			"device_connected":    report.DeviceConnected,
 			"device_model":        report.DeviceModel,
+			"device_name":         report.DeviceName,
 			"device_serial":       report.DeviceSerial,
 			"apk_installed":       report.ApkInstalled,
 			"bluetooth_on":        report.BluetoothOn,
@@ -477,6 +512,64 @@ func (a *App) handleSleep(serial string, args []string, jsonOutput bool) int {
 	return a.dispatchCombo(serial, "Sleep", sleepKeys, jsonOutput)
 }
 
+func (a *App) handleRaw(serial string, args []string, jsonOutput bool) int {
+	if len(args) == 0 {
+		if jsonOutput {
+			res, _ := json.Marshal(map[string]interface{}{"status": "error", "error": "usage: ghid raw <hex>"})
+			fmt.Fprintln(a.Stdout, string(res))
+		} else {
+			fmt.Fprintf(a.Stderr, "Usage: ghid raw <hex>\n  2 hex chars (1 byte)  -> Report 3 (System Control / Sleep)\n  4 hex chars (2 bytes) -> Report 4 (Consumer / Media)\n  8 hex chars (4 bytes) -> Report 2 (Mouse)\n  16 hex chars (8 bytes)-> Report 1 (Keyboard)\n")
+		}
+		return 1
+	}
+	cleanHex := strings.ReplaceAll(strings.Join(args, ""), " ", "")
+	rawBytes, err := hid.ValidateRaw(cleanHex)
+	if err != nil {
+		if jsonOutput {
+			res, _ := json.Marshal(map[string]interface{}{"status": "error", "error": err.Error()})
+			fmt.Fprintln(a.Stdout, string(res))
+		} else {
+			fmt.Fprintf(a.Stderr, "Error: %v\n", err)
+		}
+		return 1
+	}
+	reportID, _ := hid.ReportIDForLength(len(rawBytes))
+
+	gw, err := a.GatewayFactory(serial)
+	if err != nil {
+		if jsonOutput {
+			res, _ := json.Marshal(map[string]interface{}{"status": "error", "error": err.Error()})
+			fmt.Fprintln(a.Stdout, string(res))
+		} else {
+			fmt.Fprintf(a.Stderr, "Error: %v\n", err)
+		}
+		return 1
+	}
+
+	if err := gw.Raw(cleanHex); err != nil {
+		if jsonOutput {
+			res, _ := json.Marshal(map[string]interface{}{"status": "error", "error": err.Error()})
+			fmt.Fprintln(a.Stdout, string(res))
+		} else {
+			fmt.Fprintf(a.Stderr, "Raw report failed: %v\n", err)
+		}
+		return 1
+	}
+
+	if jsonOutput {
+		res, _ := json.Marshal(map[string]interface{}{
+			"status":    "success",
+			"raw":       cleanHex,
+			"report_id": reportID,
+			"bytes":     len(rawBytes),
+		})
+		fmt.Fprintln(a.Stdout, string(res))
+	} else {
+		fmt.Fprintf(a.Stdout, "✔ Dispatched raw HID report %s (Report ID %d, %d bytes)\n", cleanHex, reportID, len(rawBytes))
+	}
+	return 0
+}
+
 func (a *App) handleQuick(serial string, args []string, jsonOutput bool) int {
 	if len(args) == 0 {
 		fmt.Fprintf(a.Stderr, "Usage: ghid quick <text...> or ghid quick --raw <16-hex-chars>\n")
@@ -499,6 +592,9 @@ func (a *App) handleQuick(serial string, args []string, jsonOutput bool) int {
 	}
 
 	payload := strings.Join(filtered, " ")
+	if !isRaw && strings.Contains(payload, "->") {
+		return a.dispatchCombo(serial, "", payload, jsonOutput)
+	}
 	if !isRaw && strings.HasPrefix(strings.ToLower(payload), "raw:") {
 		isRaw = true
 		payload = strings.TrimSpace(payload[4:])
@@ -520,15 +616,17 @@ func (a *App) handleQuick(serial string, args []string, jsonOutput bool) int {
 
 	if isRaw {
 		cleanHex := strings.ReplaceAll(payload, " ", "")
-		if len(cleanHex) != 16 {
+		rawBytes, valErr := hid.ValidateRaw(cleanHex)
+		if valErr != nil {
 			if jsonOutput {
-				res, _ := json.Marshal(map[string]interface{}{"status": "error", "error": "raw HID report must be exactly 16 hexadecimal characters (8 bytes)"})
+				res, _ := json.Marshal(map[string]interface{}{"status": "error", "error": valErr.Error()})
 				fmt.Fprintln(a.Stdout, string(res))
 			} else {
-				fmt.Fprintf(a.Stderr, "Error: Raw HID report must be exactly 16 hexadecimal characters (8 bytes), got %d: %q\n", len(cleanHex), cleanHex)
+				fmt.Fprintf(a.Stderr, "Error: %v\n", valErr)
 			}
 			return 1
 		}
+		reportID, _ := hid.ReportIDForLength(len(rawBytes))
 		err = gw.Raw(cleanHex)
 		if err != nil {
 			if jsonOutput {
@@ -540,10 +638,16 @@ func (a *App) handleQuick(serial string, args []string, jsonOutput bool) int {
 			return 1
 		}
 		if jsonOutput {
-			res, _ := json.Marshal(map[string]interface{}{"status": "success", "mode": "raw", "raw": cleanHex})
+			res, _ := json.Marshal(map[string]interface{}{
+				"status":    "success",
+				"mode":      "raw",
+				"raw":       cleanHex,
+				"report_id": reportID,
+				"bytes":     len(rawBytes),
+			})
 			fmt.Fprintln(a.Stdout, string(res))
 		} else {
-			fmt.Fprintf(a.Stdout, "✔ Dispatched raw HID report: %s\n", cleanHex)
+			fmt.Fprintf(a.Stdout, "✔ Dispatched raw HID report: %s (Report ID %d, %d bytes)\n", cleanHex, reportID, len(rawBytes))
 		}
 		return 0
 	}
@@ -575,7 +679,7 @@ func (a *App) handleCombo(serial string, args []string, jsonOutput bool) int {
 	// single command. Without a terminal, fall back to listing the library.
 	if len(args) == 0 {
 		if !stdinIsTerminal() {
-			return a.listCombos(store, jsonOutput)
+			return a.listCombos(store, jsonOutput, "")
 		}
 		return a.openComboStudio(store, serial)
 	}
@@ -583,12 +687,16 @@ func (a *App) handleCombo(serial string, args []string, jsonOutput bool) int {
 	switch args[0] {
 	case "studio", "new", "ui", "interactive":
 		if !stdinIsTerminal() {
-			return a.listCombos(store, jsonOutput)
+			return a.listCombos(store, jsonOutput, "")
 		}
 		return a.openComboStudio(store, serial)
 
 	case "list", "ls":
-		return a.listCombos(store, jsonOutput)
+		osFilter, _, err := parseComboOSArgs(args[1:])
+		if err != nil {
+			return a.comboFail(jsonOutput, "%v", err)
+		}
+		return a.listCombos(store, jsonOutput, osFilter)
 
 	case "fav", "favorite":
 		if len(args) < 2 {
@@ -609,6 +717,9 @@ func (a *App) handleCombo(serial string, args []string, jsonOutput bool) int {
 				break
 			}
 		}
+		if mgr, err := adb.NewManager(serial); err == nil {
+			_ = syncer.AutoPushIfConnected(mgr, a.ComboStore, a.SnippetStore)
+		}
 		if jsonOutput {
 			writeJSONIndent(a.Stdout, map[string]interface{}{
 				"status":   "success",
@@ -620,7 +731,7 @@ func (a *App) handleCombo(serial string, args []string, jsonOutput bool) int {
 			if c.Favorite {
 				status = "pinned to favorites (❤️)"
 			}
-			fmt.Fprintf(a.Stdout, "✔ Combo %q is now %s\n", c.Name, status)
+			fmt.Fprintf(a.Stdout, "✔ Combo %q is now %s (synced to Android)\n", c.Name, status)
 		}
 		return 0
 
@@ -636,14 +747,29 @@ func (a *App) handleCombo(serial string, args []string, jsonOutput bool) int {
 	case "save", "add", "set", "edit":
 		var positional []string
 		isFav := false
-		emoji := ""
+		osName := ""
 		description := ""
+		emoji := ""
 
 		for i := 1; i < len(args); i++ {
 			arg := args[i]
 			switch {
 			case arg == "--fav" || arg == "--favorite" || arg == "-f":
 				isFav = true
+			case arg == "--os" || arg == "-o":
+				if i+1 < len(args) {
+					osName = args[i+1]
+					i++
+				}
+			case strings.HasPrefix(arg, "--os="):
+				osName = strings.TrimPrefix(arg, "--os=")
+			case strings.HasPrefix(arg, "-o="):
+				osName = strings.TrimPrefix(arg, "-o=")
+			case arg == "--desc" || arg == "--description" || arg == "-d":
+				if i+1 < len(args) {
+					description = args[i+1]
+					i++
+				}
 			case arg == "--emoji" || arg == "-e":
 				if i+1 < len(args) {
 					emoji = args[i+1]
@@ -651,13 +777,6 @@ func (a *App) handleCombo(serial string, args []string, jsonOutput bool) int {
 				}
 			case strings.HasPrefix(arg, "--emoji="):
 				emoji = strings.TrimPrefix(arg, "--emoji=")
-			case strings.HasPrefix(arg, "-e="):
-				emoji = strings.TrimPrefix(arg, "-e=")
-			case arg == "--desc" || arg == "--description" || arg == "-d":
-				if i+1 < len(args) {
-					description = args[i+1]
-					i++
-				}
 			case strings.HasPrefix(arg, "--desc="):
 				description = strings.TrimPrefix(arg, "--desc=")
 			case strings.HasPrefix(arg, "--description="):
@@ -670,14 +789,19 @@ func (a *App) handleCombo(serial string, args []string, jsonOutput bool) int {
 		}
 
 		if len(positional) < 2 {
-			return a.comboFail(jsonOutput, "usage: ghid combo save <name> <keys...> [--emoji <e>] [--desc <d>] [--fav]")
+			return a.comboFail(jsonOutput, "usage: ghid combo save <name> <keys...> [--os windows|macos|linux] [--emoji <e>] [--desc <d>] [--fav]")
 		}
 		name := positional[0]
 		keys := strings.Join(positional[1:], " ")
+		normalizedOS, err := combos.NormalizeOS(osName)
+		if err != nil {
+			return a.comboFail(jsonOutput, "%v", err)
+		}
 		_, existed := store.Find(name)
 		list, err := store.Add(combos.Combo{
 			Name:        name,
 			Keys:        keys,
+			OS:          normalizedOS,
 			Emoji:       emoji,
 			Description: description,
 			Favorite:    isFav,
@@ -685,8 +809,11 @@ func (a *App) handleCombo(serial string, args []string, jsonOutput bool) int {
 		if err != nil {
 			return a.comboFail(jsonOutput, "%v", err)
 		}
+		if mgr, err := adb.NewManager(serial); err == nil {
+			_ = syncer.AutoPushIfConnected(mgr, a.ComboStore, a.SnippetStore)
+		}
 		if jsonOutput {
-			saved := combos.Combo{Name: name, Keys: keys, Emoji: emoji, Description: description, Favorite: isFav}
+			saved := combos.Combo{Name: name, Keys: keys, OS: normalizedOS, Emoji: emoji, Description: description, Favorite: isFav}
 			for _, c := range list {
 				if strings.EqualFold(c.Name, name) {
 					saved = c
@@ -703,11 +830,11 @@ func (a *App) handleCombo(serial string, args []string, jsonOutput bool) int {
 			if isFav {
 				favMsg = " [pinned ❤️]"
 			}
-			emojiMsg := ""
+			osMsg := "[" + combos.OSLabel(normalizedOS) + "] "
 			if emoji != "" {
-				emojiMsg = emoji + " "
+				osMsg = emoji + " "
 			}
-			fmt.Fprintf(a.Stdout, "✔ Saved combo %s%q (%s)%s\n", emojiMsg, name, keys, favMsg)
+			fmt.Fprintf(a.Stdout, "✔ Saved combo %s%q (%s)%s (synced to Android)\n", osMsg, name, keys, favMsg)
 		}
 		return 0
 
@@ -805,17 +932,19 @@ func (a *App) handleComboSchema(store *combos.Store, jsonOutput bool) int {
 			"mouse gesture: click-left, scroll-up",
 			"variable injection: $USERNAME, $PASSWORD, ${PIN}",
 			"typed text: type:rustdesk or type:\"rust desk\"",
-			"event directive: !EXIT, !DISCONNECT, !CONNECT, !RECONNECT, !START, !STOP, !RESTART, !UNPAIR, !COMBO:SEND:lock",
 		},
 		"keyboard":      hid.WindowsKeyboardTokens(),
 		"mouse":         hid.MouseActions(),
-		"directives":    hid.Directives(),
 		"text_prefixes": []string{"type:", "text:", "type ", "text "},
+		"os_tags":       combos.OSTokens(),
+		"default_os":    combos.OSWindows,
+		"emoji":         "optional single emoji shown as the combo icon on Android and instead of the OS badge in the CLI",
+		"os_note":       "The win token is the HID GUI modifier: Windows/Linux Super, macOS Command.",
 		"example":       "ctrl+alt+del ->{1.0} esc ->{0.8} $USERNAME ->{0.8} tab ->{0.8} $PASSWORD ->{0.8} enter",
 		"commands": map[string]string{
 			"list":     "ghid combo list --json",
 			"fav":      "ghid combo fav <name> --json",
-			"save":     "ghid combo save \"Name\" \"keys\" [--emoji <e>] [--desc <d>] [--fav] --json",
+			"save":     "ghid combo save \"Name\" \"keys\" [--os windows|macos|linux] [--emoji <e>] [--desc <d>] [--fav] --json",
 			"send":     "ghid combo send \"Name\" --json",
 			"delete":   "ghid combo delete \"Name\" --json",
 			"validate": "ghid combo validate \"keys\" --json",
@@ -835,7 +964,39 @@ func (a *App) handleComboSchema(store *combos.Store, jsonOutput bool) int {
 	fmt.Fprintln(a.Stdout, "  Keyboard: ", strings.Join(hid.WindowsKeyboardTokens(), " "))
 	fmt.Fprintln(a.Stdout, "  Mouse:    ", strings.Join(hid.MouseActions(), " "))
 	fmt.Fprintln(a.Stdout, "  Text:      type:rustdesk  or  type:\"rust desk\"")
+	fmt.Fprintln(a.Stdout, "  OS tags:   ", strings.Join(combos.OSTokens(), " "))
 	return 0
+}
+
+// parseComboOSArgs extracts an optional --os filter from combo list arguments.
+func parseComboOSArgs(args []string) (string, []string, error) {
+	osFilter := ""
+	var rest []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--os" || arg == "-o":
+			if i+1 >= len(args) {
+				return "", rest, errors.New("--os requires windows, macos or linux")
+			}
+			osFilter = args[i+1]
+			i++
+		case strings.HasPrefix(arg, "--os="):
+			osFilter = strings.TrimPrefix(arg, "--os=")
+		case strings.HasPrefix(arg, "-o="):
+			osFilter = strings.TrimPrefix(arg, "-o=")
+		default:
+			rest = append(rest, arg)
+		}
+	}
+	if osFilter == "" {
+		return "", rest, nil
+	}
+	normalized, err := combos.NormalizeOS(osFilter)
+	if err != nil {
+		return "", rest, err
+	}
+	return normalized, rest, nil
 }
 
 func (a *App) handleComboValidate(keys string, jsonOutput bool) int {
@@ -917,7 +1078,7 @@ func stdinIsTerminal() bool {
 
 func (a *App) openComboStudio(store *combos.Store, serial string) int {
 	if a.ComboStudioFn == nil {
-		return a.listCombos(store, false)
+		return a.listCombos(store, false, "")
 	}
 	send := func(combo combos.Combo) error {
 		gw, err := a.GatewayFactory(serial)
@@ -933,19 +1094,37 @@ func (a *App) openComboStudio(store *combos.Store, serial string) int {
 	return 0
 }
 
-func (a *App) listCombos(store *combos.Store, jsonOutput bool) int {
+func (a *App) listCombos(store *combos.Store, jsonOutput bool, osFilter string) int {
 	list, err := store.Load()
 	if err != nil {
 		fmt.Fprintf(a.Stderr, "Error: %v\n", err)
 		return 1
+	}
+	if osFilter != "" {
+		filtered := make([]combos.Combo, 0, len(list))
+		for _, c := range list {
+			if combos.NormalizeOSDefault(c.OS) == osFilter {
+				filtered = append(filtered, c)
+			}
+		}
+		list = filtered
 	}
 	if jsonOutput {
 		writeJSONIndent(a.Stdout, list)
 		return 0
 	}
 
-	fmt.Fprintln(a.Stdout, "\n🎹 COMBO STUDIO · Windows keyboard + mouse + variables")
+	title := "🎹 COMBO STUDIO · Windows keyboard + mouse + variables"
+	if osFilter != "" {
+		title += " · " + combos.OSLabel(osFilter)
+	}
+	fmt.Fprintln(a.Stdout, "\n"+title)
 	if len(list) == 0 {
+		if osFilter != "" {
+			fmt.Fprintf(a.Stdout, "  No combos tagged for %s.\n", combos.OSLabel(osFilter))
+			fmt.Fprintln(a.Stdout)
+			return 0
+		}
 		fmt.Fprintln(a.Stdout, "  No combos saved yet.")
 		fmt.Fprintln(a.Stdout, "  Create one with 'ghid combo' (interactive) or:")
 		fmt.Fprintln(a.Stdout, "    ghid combo save \"Open Run\" \"win+r\"")
@@ -957,28 +1136,26 @@ func (a *App) listCombos(store *combos.Store, jsonOutput bool) int {
 		if c.Favorite {
 			favIcon = "❤️ "
 		}
-		emojiStr := ""
-		if c.Emoji != "" {
-			emojiStr = c.Emoji + " "
-		}
-		nameWithEmoji := emojiStr + c.Name
-		nameWidth := runewidth.StringWidth(nameWithEmoji)
+		osTag := c.Badge()
+		nameWithOS := osTag + " " + c.Name
+		nameWidth := runewidth.StringWidth(nameWithOS)
 		namePad := ""
-		if nameWidth < 24 {
-			namePad = strings.Repeat(" ", 24-nameWidth)
+		if nameWidth < 26 {
+			namePad = strings.Repeat(" ", 26-nameWidth)
 		}
 		descStr := ""
 		if c.Description != "" {
 			descStr = fmt.Sprintf(" (%s)", c.Description)
 		}
-		fmt.Fprintf(a.Stdout, "  %2d. %s%s%s %-26s%s\n", i+1, favIcon, nameWithEmoji, namePad, c.Keys, descStr)
+		fmt.Fprintf(a.Stdout, "  %2d. %s%s%s %-26s%s\n", i+1, favIcon, nameWithOS, namePad, c.Keys, descStr)
 	}
-	fmt.Fprintf(a.Stdout, "\n  Send one with 'ghid combo send <name>' or toggle favorite with 'ghid combo fav <name>'\n\n")
+	fmt.Fprintf(a.Stdout, "\n  Send one with 'ghid combo send <name>' or filter with 'ghid combo list --os macos'\n\n")
 	return 0
 }
 
-func (a *App) handleSnippets(args []string, jsonOutput bool) int {
+func (a *App) handleSnippets(serial string, args []string, jsonOutput bool) int {
 	store := a.snippetStore()
+	_, _ = store.EnsureDefaults()
 	if len(args) == 0 {
 		args = []string{"list"}
 	}
@@ -1000,15 +1177,16 @@ func (a *App) handleSnippets(args []string, jsonOutput bool) int {
 			fmt.Fprintln(a.Stdout, "  No snippets found.")
 			return 0
 		}
-		fmt.Fprintf(a.Stdout, "  %-3s %-20s %-26s %s\n", "#", "VARIABLE", "VALUE", "SECURITY")
+		fmt.Fprintf(a.Stdout, "  %-3s %-20s %-8s %-26s %s\n", "#", "VARIABLE", "TYPE", "VALUE", "SECURITY")
 		for i, s := range list {
 			varName := "$" + strings.ToUpper(s.Name)
 			displayVal := s.MaskedValue()
+			snType := s.EffectiveType()
 			sec := "[PLAIN]"
 			if s.Secure {
 				sec = "[KEYCHAIN 🔒]"
 			}
-			fmt.Fprintf(a.Stdout, "  %2d. %-20s %-26s %s\n", i+1, varName, displayVal, sec)
+			fmt.Fprintf(a.Stdout, "  %2d. %-20s %-8s %-26s %s\n", i+1, varName, snType, displayVal, sec)
 		}
 		fmt.Fprintln(a.Stdout)
 		return 0
@@ -1037,24 +1215,32 @@ func (a *App) handleSnippets(args []string, jsonOutput bool) int {
 
 	case "set":
 		if len(args) < 3 {
-			fmt.Fprintf(a.Stderr, "Usage: ghid snippets set <name> <value> [--secure]\n")
+			fmt.Fprintf(a.Stderr, "Usage: ghid snippets set <name> <value> [--secure] [--raw]\n")
 			return 1
 		}
 		name := args[1]
 		secure := false
+		snType := "type"
 		var valParts []string
 		for _, arg := range args[2:] {
 			if arg == "--secure" || arg == "-s" {
 				secure = true
+			} else if arg == "--raw" || arg == "-r" {
+				snType = "raw"
+			} else if strings.HasPrefix(arg, "--type=") {
+				snType = strings.TrimPrefix(arg, "--type=")
 			} else {
 				valParts = append(valParts, arg)
 			}
 		}
 		val := strings.Join(valParts, " ")
-		sn, err := store.Set(name, val, secure)
+		sn, err := store.Set(name, val, secure, snType)
 		if err != nil {
 			fmt.Fprintf(a.Stderr, "Error: %v\n", err)
 			return 1
+		}
+		if mgr, err := adb.NewManager(serial); err == nil {
+			_ = syncer.AutoPushIfConnected(mgr, a.ComboStore, a.SnippetStore)
 		}
 		if jsonOutput {
 			writeJSONIndent(a.Stdout, sn)
@@ -1073,7 +1259,7 @@ func (a *App) handleSnippets(args []string, jsonOutput bool) int {
 			return 1
 		}
 		name := args[1]
-		if strings.EqualFold(name, "username") || strings.EqualFold(name, "password") {
+		if strings.EqualFold(name, "username") || strings.EqualFold(name, "password") || strings.EqualFold(name, "email") || strings.EqualFold(name, "sleep_windows") || strings.EqualFold(name, "play_pause") {
 			fmt.Fprintf(a.Stderr, "Error: Default snippet %q cannot be deleted (clear value using 'ghid snippets set %s \"\"' instead)\n", name, name)
 			return 1
 		}
@@ -1086,10 +1272,13 @@ func (a *App) handleSnippets(args []string, jsonOutput bool) int {
 			fmt.Fprintf(a.Stderr, "Snippet %q not found.\n", name)
 			return 1
 		}
+		if mgr, err := adb.NewManager(serial); err == nil {
+			_ = syncer.AutoPushIfConnected(mgr, a.ComboStore, a.SnippetStore)
+		}
 		if jsonOutput {
 			writeJSONIndent(a.Stdout, map[string]interface{}{"status": "deleted", "name": name})
 		} else {
-			fmt.Fprintf(a.Stdout, "✔ Deleted snippet %q\n", name)
+			fmt.Fprintf(a.Stdout, "✔ Deleted snippet %q (synced to Android)\n", name)
 		}
 		return 0
 
@@ -1130,49 +1319,8 @@ func (a *App) dispatchCombo(serial, name, keys string, jsonOutput bool) int {
 		return a.comboFail(jsonOutput, "%v", err)
 	}
 
-	depth := 0
-	var handleDirective func(directive string) (bool, error)
-	handleDirective = func(directive string) (bool, error) {
-		upper := strings.ToUpper(strings.TrimSpace(directive))
-		if strings.HasPrefix(upper, "!COMBO:SEND:") {
-			targetName := strings.TrimSpace(directive[len("!COMBO:SEND:"):])
-			if depth >= 5 {
-				return true, fmt.Errorf("maximum combo nesting depth exceeded at %q", targetName)
-			}
-			targetCombo, found := a.comboStore().Find(targetName)
-			if !found {
-				return true, fmt.Errorf("nested combo %q not found", targetName)
-			}
-			depth++
-			defer func() { depth-- }()
-			return true, gw.ComboWithResolver(targetCombo.Keys, a.snippetResolver())
-		}
-		return false, nil
-	}
-	gw.SetDirectiveHandler(handleDirective)
-
 	err = gw.ComboWithResolver(keys, a.snippetResolver())
 	if err != nil {
-		if errors.Is(err, hid.ErrExitRequested) {
-			if jsonOutput {
-				payload := map[string]interface{}{"status": "success", "exit": true, "combo": keys}
-				if name != "" {
-					payload["name"] = name
-					if strings.EqualFold(name, "Lock") {
-						payload["action"] = "lock"
-					} else if strings.EqualFold(name, "Sleep") {
-						payload["action"] = "sleep"
-					}
-				}
-				res, _ := json.Marshal(payload)
-				fmt.Fprintln(a.Stdout, string(res))
-			} else if strings.EqualFold(name, "Sleep") {
-				fmt.Fprintln(a.Stdout, "✔ Windows host put to sleep. Android gateway stopped.")
-			} else {
-				fmt.Fprintln(a.Stdout, "✔ Sequence completed and terminated via !EXIT")
-			}
-			return 0
-		}
 		return a.comboFail(jsonOutput, "combo failed: %v", err)
 	}
 	if jsonOutput {
@@ -1190,7 +1338,7 @@ func (a *App) dispatchCombo(serial, name, keys string, jsonOutput bool) int {
 	} else if strings.EqualFold(name, "Lock") {
 		fmt.Fprintln(a.Stdout, "✔ Windows lock command dispatched (Win + L)")
 	} else if strings.EqualFold(name, "Sleep") {
-		fmt.Fprintln(a.Stdout, "✔ Windows host put to sleep. Android gateway stopped.")
+		fmt.Fprintln(a.Stdout, "✔ Windows host put to sleep.")
 	} else if name != "" {
 		fmt.Fprintf(a.Stdout, "✔ Dispatched %q: %s\n", name, keys)
 	} else {
@@ -1224,6 +1372,51 @@ func (a *App) handleDevices(cfg config.Config, serial string, args []string, jso
 					osIcon = "🍏"
 				}
 				fmt.Fprintf(a.Stdout, "  %s %-10s %-20s %-20s %s\n", osIcon, fmt.Sprintf("[%s]", d.Platform), d.Name, d.Address, sel)
+			}
+			fmt.Fprintln(a.Stdout)
+		}
+		return 0
+
+	case "scan", "paired":
+		gw, err := a.GatewayFactory(serial)
+		if err != nil {
+			if jsonOutput {
+				res, _ := json.Marshal(map[string]interface{}{"error": err.Error()})
+				fmt.Fprintln(a.Stdout, string(res))
+			} else {
+				fmt.Fprintf(a.Stderr, "Error: %v\n", err)
+			}
+			return 1
+		}
+		bonded, err := gw.GetBondedDevices()
+		if err != nil {
+			if jsonOutput {
+				res, _ := json.Marshal(map[string]interface{}{"error": err.Error()})
+				fmt.Fprintln(a.Stdout, string(res))
+			} else {
+				fmt.Fprintf(a.Stderr, "Error: %v\n", err)
+			}
+			return 1
+		}
+		if jsonOutput {
+			data, _ := json.MarshalIndent(bonded, "", "  ")
+			fmt.Fprintln(a.Stdout, string(data))
+		} else {
+			fmt.Fprintln(a.Stdout, "\n=== Paired Bluetooth Devices on Phone ===")
+			if len(bonded) == 0 {
+				fmt.Fprintln(a.Stdout, "  No bonded devices found on phone.")
+			}
+			for _, d := range bonded {
+				osGuess := "windows"
+				nameLower := strings.ToLower(d.Name)
+				if strings.Contains(nameLower, "mac") || strings.Contains(nameLower, "apple") || strings.Contains(nameLower, "air") {
+					osGuess = "macos"
+				}
+				osIcon := "🪟"
+				if osGuess == "macos" {
+					osIcon = "🍏"
+				}
+				fmt.Fprintf(a.Stdout, "  %s %-10s %-25s %-20s [%s]\n", osIcon, fmt.Sprintf("[%s]", osGuess), d.Name, d.Address, d.Type)
 			}
 			fmt.Fprintln(a.Stdout)
 		}
@@ -1326,7 +1519,7 @@ func (a *App) handleDevices(cfg config.Config, serial string, args []string, jso
 		}
 
 	default:
-		fmt.Fprintf(a.Stderr, "Unknown devices subcommand '%s'. Usage: ghid devices [list|add|select|delete]\n", subcmd)
+		fmt.Fprintf(a.Stderr, "Unknown devices subcommand '%s'. Usage: ghid devices [list|scan|add|select|delete]\n", subcmd)
 		return 1
 	}
 }
@@ -1414,17 +1607,31 @@ func (a *App) handleFileLog(serial string) int {
 	return 0
 }
 
+// handleBuild assembles the release APK. build.sh drives Gradle
+// (:app:assembleRelease) and publishes build/ghost-hid.apk; without it the
+// in-repo Gradle wrapper is used directly.
 func (a *App) handleBuild() int {
-	fmt.Fprintln(a.Stdout, "Building GhostHID APK (./gradlew assembleDebug)...")
-	cmd := exec.Command("./gradlew", "assembleDebug")
+	var cmd *exec.Cmd
+	artifact := "build/ghost-hid.apk"
+	if _, err := os.Stat("build.sh"); err == nil {
+		fmt.Fprintln(a.Stdout, "Building GhostHID release APK (bash build.sh -> :app:assembleRelease)...")
+		cmd = exec.Command("bash", "build.sh")
+	} else if _, err := os.Stat(filepath.Join("android", "gradlew")); err == nil {
+		fmt.Fprintln(a.Stdout, "Building GhostHID release APK (android/gradlew :app:assembleRelease)...")
+		cmd = exec.Command("./gradlew", ":app:assembleRelease")
+		cmd.Dir = "android"
+		artifact = "android/app/build/outputs/apk/release/app-release.apk"
+	} else {
+		fmt.Fprintln(a.Stderr, "Build failed: build.sh not found (run ghid build from the GhostHID repo root)")
+		return 1
+	}
 	cmd.Stdout = a.Stdout
 	cmd.Stderr = a.Stderr
-	err := cmd.Run()
-	if err != nil {
+	if err := cmd.Run(); err != nil {
 		fmt.Fprintf(a.Stderr, "Build failed: %v\n", err)
 		return 1
 	}
-	fmt.Fprintln(a.Stdout, "✔ Build successful: app/build/outputs/apk/debug/app-debug.apk")
+	fmt.Fprintf(a.Stdout, "✔ Build successful: %s (release)\n", artifact)
 	return 0
 }
 
@@ -1435,8 +1642,8 @@ func (a *App) handleInstallApk(serial string, args []string) int {
 	} else {
 		candidates := []string{
 			"build/ghost-hid.apk",
+			"android/app/build/outputs/apk/release/app-release.apk",
 			"ghost-hid.apk",
-			"app/build/outputs/apk/debug/app-debug.apk",
 		}
 		for _, cand := range candidates {
 			if _, err := os.Stat(cand); err == nil {
@@ -1526,8 +1733,83 @@ func (a *App) handleMan() int {
 	return 0
 }
 
+func (a *App) syncFail(jsonOutput bool, format string, args ...interface{}) int {
+	message := fmt.Sprintf(format, args...)
+	if jsonOutput {
+		writeJSONIndent(a.Stdout, map[string]interface{}{
+			"status": "error",
+			"error":  message,
+		})
+	} else {
+		fmt.Fprintf(a.Stderr, "Error: %s\n", message)
+	}
+	return 1
+}
+
+func (a *App) handleSync(serial string, args []string, jsonOutput bool) int {
+	mgr, err := adb.NewManager(serial)
+	if err != nil {
+		return a.syncFail(jsonOutput, "%v", err)
+	}
+	dev, err := mgr.SelectDevice()
+	if err != nil {
+		return a.syncFail(jsonOutput, "no device connected for sync: %v", err)
+	}
+
+	mode := "full"
+	for _, arg := range args {
+		switch arg {
+		case "--pull":
+			mode = "pull"
+		case "--push":
+			mode = "push"
+		}
+	}
+
+	var report *syncer.SyncReport
+	switch mode {
+	case "pull":
+		report, err = syncer.Pull(mgr, a.ComboStore, a.SnippetStore)
+	case "push":
+		report, err = syncer.Push(mgr, a.ComboStore, a.SnippetStore)
+	default:
+		report, err = syncer.Sync(mgr, a.ComboStore, a.SnippetStore)
+	}
+
+	if err != nil {
+		return a.syncFail(jsonOutput, "sync error: %v", err)
+	}
+
+	if jsonOutput {
+		writeJSONIndent(a.Stdout, map[string]interface{}{
+			"status": "success",
+			"mode":   mode,
+			"device": dev.Serial,
+			"report": report,
+		})
+		return 0
+	}
+
+	fmt.Fprintf(a.Stdout, "\n🔄 GHOST-HID SYNC COMPLETE (%s)\n", dev.Serial)
+	fmt.Fprintf(a.Stdout, "  Mode:             %s\n", mode)
+	if report.CombosPulled > 0 || report.SnippetsPulled > 0 {
+		fmt.Fprintf(a.Stdout, "  Pulled (Android): %d combos, %d snippets\n", report.CombosPulled, report.SnippetsPulled)
+	}
+	if report.CombosPushed > 0 || report.SnippetsPushed > 0 {
+		fmt.Fprintf(a.Stdout, "  Pushed (Android): %d combos, %d snippets\n", report.CombosPushed, report.SnippetsPushed)
+	}
+	if report.AppRestarted {
+		fmt.Fprintf(a.Stdout, "  App Restarted:    ✔ com.sj010.ghid\n")
+	}
+	if report.Reconnected {
+		fmt.Fprintf(a.Stdout, "  Bluetooth Link:   ✔ Reconnect broadcast dispatched\n")
+	}
+	fmt.Fprintln(a.Stdout)
+	return 0
+}
+
 func (a *App) printHelp() {
-	fmt.Fprintln(a.Stdout, `GhostHID - Headless Android Bluetooth HID Keyboard Controller (Go/Charm TUI)
+	fmt.Fprintln(a.Stdout, `GhostHID - Android Bluetooth HID Keyboard Controller (Go/Charm TUI)
 
 Usage:
   ghid [command] [options]
@@ -1544,18 +1826,20 @@ Commands:
   snippets delete <name> Delete a snippet
   login             Automated Windows unlock & credential injection
   lock              Instant Windows lock screen (Win + L)
-  sleep             Windows sleep sequence + countdown exit
+  sleep             Hardware ACPI sleep sequence
   combo [keys]      Interactive Windows combo studio (create, send, delete)
-  combo list        List saved combos (--json supported)
+  combo list [--os <os>]  List saved combos, optionally filtered by target OS (--json supported)
   combo fav <name>  Toggle favorite (pin with ❤️ to top of dashboard action list)
   combo schema      Grammar + every accepted token (JSON for AI agents)
   combo validate <keys>  Validate without saving or sending
-  combo save <name> <keys...> [--emoji <e>] [--desc <d>] [--fav]   Save a named combo (keyboard + mouse + text + $VAR)
+  combo save <name> <keys...> [--os windows|macos|linux] [--emoji <e>] [--desc <d>] [--fav]   Save a named combo (keyboard + mouse + text + $VAR)
   combo send <name> Send a saved combo
   combo delete <name> [-f]      Delete a combo (--json skips confirmation)
   combo <keys>      Send a one-shot shortcut (e.g. 'win+d', 'ctrl+alt+del')
   combo mouse       Send a mouse gesture (click-left, scroll-up, double-click)
-  quick <text...>   Quick send keystrokes (default: type; use --raw for 16-hex HID report)
+  raw <hex>         Send raw HID report with auto-inferred Report ID (1B, 2B, 4B, 8B)
+  sync [--pull|--push] Bi-directional sync with Android device (pull, push, restart app, reconnect)
+  quick <text...>   Quick send keystrokes (default: type; use --raw for hex HID report)
   connect [addr]    Connect Bluetooth to target laptop MAC
   disconnect        Disconnect Bluetooth HID
   unpair            Unpair phone Bluetooth bond
@@ -1564,8 +1848,8 @@ Commands:
   restart           Restart Android service
   logs              Live stream Android Logcat
   filelog           Dump persisted file log
-  build             Assemble Android debug APK
-  install-apk       Install APK via adb
+  build             Assemble Android release APK
+  install-apk       Install release APK via adb
   install-bin       Install ghid binary into ~/.local/bin and manpage
   uninstall-bin     Uninstall ghid binary and manpage
   man               Open manual page

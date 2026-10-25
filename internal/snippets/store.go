@@ -4,35 +4,24 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/ghost-hid/ghid/internal/hid"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/ghost-hid/ghid/internal/hid"
 	"github.com/ghost-hid/ghid/internal/vault"
 )
 
-// Store manages snippet persistence on disk with secure storage offload to Vault.
+// Store manages snippets stored on disk (JSON) and secure snippets backed by Vault (Keychain).
 type Store struct {
-	mu    sync.RWMutex
 	Path  string
 	Vault vault.Vault
+	mu    sync.RWMutex
 }
 
-// NewStore initializes a snippet store at path. If path is empty, default location is used.
-func NewStore(path string, vlt vault.Vault) *Store {
-	if strings.TrimSpace(path) == "" {
-		path = GetDefaultPath()
-	}
-	return &Store{
-		Path:  path,
-		Vault: vlt,
-	}
-}
-
-// GetDefaultPath returns the per-user snippets JSON file location.
+// GetDefaultPath returns the default path to snippets.json in the user config dir.
 func GetDefaultPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -41,44 +30,60 @@ func GetDefaultPath() string {
 	return filepath.Join(home, ".config", "ghid", "snippets.json")
 }
 
-func (s *Store) vaultKey(name string) string {
-	return "ghost-hid:snippet:" + strings.ToLower(strings.TrimSpace(name))
+// NewStore initializes a snippets Store.
+func NewStore(path string, v vault.Vault) *Store {
+	if strings.TrimSpace(path) == "" {
+		path = GetDefaultPath()
+	}
+	return &Store{
+		Path:  path,
+		Vault: v,
+	}
 }
 
-// Load retrieves all snippets from disk. For secure snippets,
-// their values are populated on-the-fly from Vault if available.
+func (s *Store) vaultKey(name string) string {
+	return "ghid_snippet_" + strings.ToLower(strings.TrimSpace(name))
+}
+
+// Load loads all snippets from disk and populates secure snippet values from Vault.
 func (s *Store) Load() ([]Snippet, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	data, err := os.ReadFile(s.Path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		if os.IsNotExist(err) {
 			return []Snippet{}, nil
 		}
 		return nil, err
 	}
+
 	if len(strings.TrimSpace(string(data))) == 0 {
 		return []Snippet{}, nil
 	}
 
 	var list []Snippet
 	if err := json.Unmarshal(data, &list); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", s.Path, err)
+		return nil, fmt.Errorf("parse snippets: %w", err)
 	}
 
-	// For secure snippets, populate Value from vault if available
-	if s.Vault != nil && s.Vault.IsAvailable() {
-		for i := range list {
-			if list[i].Secure {
-				key := s.vaultKey(list[i].Name)
-				if val, err := s.Vault.Get(key); err == nil && val != "" {
+	// Populate secure snippets from vault and normalize types
+	for i := range list {
+		if list[i].Type == "" {
+			list[i].Type = "type"
+		}
+		if list[i].Secure {
+			if s.Vault != nil && s.Vault.IsAvailable() {
+				val, err := s.Vault.Get(s.vaultKey(list[i].Name))
+				if err == nil && val != "" {
 					list[i].Value = val
-				} else if strings.EqualFold(list[i].Name, "password") {
-					// Fallback check for old credential format if present
-					if legacyPass, lerr := s.Vault.Get("password"); lerr == nil && legacyPass != "" {
-						list[i].Value = legacyPass
-					}
+				}
+			}
+			// Fallback check for legacy password key
+			if strings.EqualFold(list[i].Name, "password") && list[i].Value == "" && s.Vault != nil && s.Vault.IsAvailable() {
+				legacyPass, err := s.Vault.Get("ghid_password")
+				if err == nil && legacyPass != "" {
+					list[i].Value = legacyPass
 				}
 			}
 		}
@@ -98,6 +103,24 @@ func (s *Store) Resolver() hid.VariableResolver {
 			return "", err
 		}
 		if !ok {
+			// Handle aliases
+			if strings.EqualFold(name, "sleep") {
+				if sn, ok2, _ := s.Get("sleep_windows"); ok2 {
+					return sn.Value, nil
+				}
+			} else if strings.EqualFold(name, "sleep_windows") {
+				if sn, ok2, _ := s.Get("sleep"); ok2 {
+					return sn.Value, nil
+				}
+			} else if strings.EqualFold(name, "playpause") {
+				if sn, ok2, _ := s.Get("play_pause"); ok2 {
+					return sn.Value, nil
+				}
+			} else if strings.EqualFold(name, "play_pause") {
+				if sn, ok2, _ := s.Get("playpause"); ok2 {
+					return sn.Value, nil
+				}
+			}
 			return "", fmt.Errorf("snippet %q not found", name)
 		}
 		return snip.Value, nil
@@ -107,6 +130,13 @@ func (s *Store) Resolver() hid.VariableResolver {
 // List returns all snippets in the store (alias for Load).
 func (s *Store) List() ([]Snippet, error) {
 	return s.Load()
+}
+
+// SaveAll persists a complete list of snippets to disk, properly delegating secure values.
+func (s *Store) SaveAll(list []Snippet) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.save(list)
 }
 
 func (s *Store) save(list []Snippet) error {
@@ -121,6 +151,9 @@ func (s *Store) save(list []Snippet) error {
 	toSave := make([]Snippet, len(list))
 	for i, sn := range list {
 		toSave[i] = sn
+		if toSave[i].Type == "" {
+			toSave[i].Type = "type"
+		}
 		if sn.Secure && s.Vault != nil && s.Vault.IsAvailable() {
 			toSave[i].Value = ""
 		}
@@ -133,8 +166,12 @@ func (s *Store) save(list []Snippet) error {
 	return os.WriteFile(s.Path, data, 0600)
 }
 
-// EnsureDefaults seeds the two default snippets ("username" and "password")
-// if they are not already present in the store. Password is a secure snippet.
+// EnsureDefaults seeds the default snippets:
+// - "username" (type: "type", secure: false)
+// - "password" (type: "type", secure: true)
+// - "email" (type: "type", secure: true)
+// - "sleep_windows" (type: "raw", value: "02", secure: false)
+// - "play_pause" (type: "raw", value: "cd00", secure: false)
 func (s *Store) EnsureDefaults() ([]Snippet, error) {
 	list, err := s.Load()
 	if err != nil {
@@ -143,20 +180,46 @@ func (s *Store) EnsureDefaults() ([]Snippet, error) {
 
 	hasUser := false
 	hasPass := false
-	for _, sn := range list {
-		if strings.EqualFold(sn.Name, "username") {
+	hasEmail := false
+	hasSleep := false
+	hasPlayPause := false
+
+	for i := range list {
+		if strings.EqualFold(list[i].Name, "username") {
 			hasUser = true
 		}
-		if strings.EqualFold(sn.Name, "password") {
+		if strings.EqualFold(list[i].Name, "password") {
 			hasPass = true
+		}
+		if strings.EqualFold(list[i].Name, "email") {
+			hasEmail = true
+			if !list[i].Secure {
+				list[i].Secure = true
+			}
+		}
+		if strings.EqualFold(list[i].Name, "sleep_windows") || strings.EqualFold(list[i].Name, "sleep") {
+			hasSleep = true
+			if list[i].Type != "raw" || list[i].Value == "" {
+				list[i].Type = "raw"
+				list[i].Value = "02"
+			}
+		}
+		if strings.EqualFold(list[i].Name, "play_pause") || strings.EqualFold(list[i].Name, "playpause") {
+			hasPlayPause = true
+			if list[i].Type != "raw" || list[i].Value == "" {
+				list[i].Type = "raw"
+				list[i].Value = "cd00"
+			}
 		}
 	}
 
 	now := time.Now().UTC()
 	changed := false
+
 	if !hasUser {
 		list = append(list, Snippet{
 			Name:      "username",
+			Type:      "type",
 			Value:     "",
 			Secure:    false,
 			CreatedAt: now,
@@ -167,8 +230,42 @@ func (s *Store) EnsureDefaults() ([]Snippet, error) {
 	if !hasPass {
 		list = append(list, Snippet{
 			Name:      "password",
+			Type:      "type",
 			Value:     "",
 			Secure:    true,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		changed = true
+	}
+	if !hasEmail {
+		list = append(list, Snippet{
+			Name:      "email",
+			Type:      "type",
+			Value:     "",
+			Secure:    true,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		changed = true
+	}
+	if !hasSleep {
+		list = append(list, Snippet{
+			Name:      "sleep_windows",
+			Type:      "raw",
+			Value:     "02",
+			Secure:    false,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		changed = true
+	}
+	if !hasPlayPause {
+		list = append(list, Snippet{
+			Name:      "play_pause",
+			Type:      "raw",
+			Value:     "cd00",
+			Secure:    false,
 			CreatedAt: now,
 			UpdatedAt: now,
 		})
@@ -213,10 +310,16 @@ func (s *Store) Resolve(name string) (string, bool, error) {
 }
 
 // Set creates or updates a snippet.
-func (s *Store) Set(name, value string, secure bool) (Snippet, error) {
+// Optional snType can be "type" or "raw" (defaults to "type").
+func (s *Store) Set(name, value string, secure bool, snType ...string) (Snippet, error) {
 	cleanName, err := ValidateName(name)
 	if err != nil {
 		return Snippet{}, err
+	}
+
+	targetType := "type"
+	if len(snType) > 0 && strings.EqualFold(snType[0], "raw") {
+		targetType = "raw"
 	}
 
 	s.mu.Lock()
@@ -243,6 +346,7 @@ func (s *Store) Set(name, value string, secure bool) (Snippet, error) {
 	for i := range list {
 		if strings.EqualFold(list[i].Name, cleanName) {
 			list[i].Name = cleanName
+			list[i].Type = targetType
 			list[i].Secure = secure
 			if !secure || s.Vault == nil || !s.Vault.IsAvailable() {
 				list[i].Value = value
@@ -263,6 +367,7 @@ func (s *Store) Set(name, value string, secure bool) (Snippet, error) {
 		}
 		newSn := Snippet{
 			Name:      cleanName,
+			Type:      targetType,
 			Secure:    secure,
 			CreatedAt: now,
 			UpdatedAt: now,
@@ -297,25 +402,25 @@ func (s *Store) Delete(name string) ([]Snippet, bool, error) {
 		_ = json.Unmarshal(data, &list)
 	}
 
-	remaining := make([]Snippet, 0, len(list))
-	deleted := false
+	found := false
+	filtered := make([]Snippet, 0, len(list))
 	for _, sn := range list {
-		if !deleted && strings.EqualFold(sn.Name, cleanName) {
-			deleted = true
+		if strings.EqualFold(sn.Name, cleanName) {
+			found = true
 			if sn.Secure && s.Vault != nil && s.Vault.IsAvailable() {
-				_ = s.Vault.Delete(s.vaultKey(sn.Name))
+				_ = s.Vault.Delete(s.vaultKey(cleanName))
 			}
-			continue
+		} else {
+			filtered = append(filtered, sn)
 		}
-		remaining = append(remaining, sn)
 	}
 
-	if !deleted {
+	if !found {
 		return list, false, nil
 	}
 
-	if err := s.save(remaining); err != nil {
+	if err := s.save(filtered); err != nil {
 		return nil, false, err
 	}
-	return remaining, true, nil
+	return filtered, true, nil
 }

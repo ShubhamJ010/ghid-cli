@@ -53,6 +53,13 @@ var (
 			Padding(0, 1).
 			SetString("CONNECTED")
 
+	BadgeSelected = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(ColorBgDark).
+			Background(ColorCyan).
+			Padding(0, 1).
+			SetString("TARGET")
+
 	BadgeDisconnected = lipgloss.NewStyle().
 				Bold(true).
 				Foreground(ColorFgBright).
