@@ -26,9 +26,9 @@ Communication between the Android phone and the host computer uses two Logical L
 +-------------------------------------------------------------+
 ```
 
-### Dual-Report Input Structures
+### Composite Multi-Report Input Structures
 
-GhostHID registers a composite SDP descriptor (`SUBCLASS1_COMBO`, 0x50) that multiplexes keyboard and mouse reports using 1-byte Report IDs.
+GhostHID registers a composite SDP descriptor (`SUBCLASS1_COMBO`, 0x50) that multiplexes keyboard, mouse, system control, and consumer control reports using 1-byte Report IDs.
 
 #### Keyboard Input Report (Report ID 1)
 Total payload size: 8 bytes.
@@ -82,6 +82,47 @@ Examples:
 - Scroll wheel up: `00 00 00 01`
 - Scroll wheel down: `00 00 00 FF` (two's complement -1)
 - Release all mouse buttons: `00 00 00 00`
+
+#### System Control Input Report (Report ID 3)
+Total payload size: 1 byte. Usage Page 0x01 (Generic Desktop), Usage 0x80 (System Control).
+
+```text
+Byte 0: System Control Bitfield
+  Bit 0: System Power Down (0x01)
+  Bit 1: System Sleep      (0x02)
+  Bit 2: System Wake Up    (0x04)
+  Bits 3 to 7: Padding     (0x00)
+```
+
+Examples:
+- Instant System Sleep press: `02`
+- Release: `00`
+- Complete Sleep Sequence: `raw:02 ->{0.06} raw:00`
+
+#### Consumer Control Input Report (Report ID 4)
+Total payload size: 2 bytes (16-bit little-endian HID usage code). Usage Page 0x0C (Consumer), Usage 0x01 (Consumer Control).
+
+```text
+Bytes 0-1: 16-bit Consumer Usage Code (Little-Endian)
+```
+
+Examples:
+- Play/Pause toggle: `raw:cd00 ->{0.06} raw:0000` (Usage 0x00CD)
+- Scan Next Track: `raw:b500 ->{0.06} raw:0000` (Usage 0x00B5)
+- Scan Previous Track: `raw:b600 ->{0.06} raw:0000` (Usage 0x00B6)
+- Volume Increment: `raw:e900 ->{0.06} raw:0000` (Usage 0x00E9)
+- Volume Decrement: `raw:ea00 ->{0.06} raw:0000` (Usage 0x00EA)
+- Mute: `raw:e200 ->{0.06} raw:0000` (Usage 0x00E2)
+
+#### Auto-Inferred Length-Based Raw Report Routing
+Raw HID report payloads automatically infer the target Report ID from their byte length:
+
+| Byte Length | Hex Digits | Target Report ID | Target Collection | Typical Usage |
+|:---|:---|:---|:---|:---|
+| **1 byte** | 2 hex | **3** | System Control | Instant Sleep (`02`), Wake (`04`), Release (`00`) |
+| **2 bytes** | 4 hex | **4** | Consumer Control | Play/Pause (`cd00`), Volume (`e900`), Release (`0000`) |
+| **4 bytes** | 8 hex | **2** | Mouse Pointer | Mouse buttons and relative movement (`01000000`) |
+| **8 bytes** | 16 hex | **1** | Keyboard | Key modifiers and codes (`08000f0000000000`) |
 
 #### Keyboard LED Output Report
 The target host transmits 1-byte output reports to report lock key statuses:
@@ -175,10 +216,20 @@ The host triggers commands by dispatching Android broadcast intents via `adb she
 
 ```bash
 adb shell am broadcast \
-  -a com.poc.hiddebug.ACTION_CMD \
-  -n com.poc.hiddebug/.HidCommandReceiver \
+  -a com.sj010.ghid.ACTION_CMD \
+  -n com.sj010.ghid/.service.HidCommandReceiver \
   --es cmd "<command>" \
   [optional arguments]
+```
+
+Two action-only variants carry no `cmd` extra:
+- `com.sj010.ghid.ACTION_LOCK` — instant screen lock.
+- `com.sj010.ghid.ACTION_TYPE` — type `--es text "<string>"`.
+
+Service lifecycle uses the component directly, with no extras:
+```bash
+adb shell am start-foreground-service -n com.sj010.ghid/.service.HidService   # ghid start
+adb shell am stopservice -n com.sj010.ghid/.service.HidService                # ghid stop
 ```
 
 ### Command Specifications
@@ -199,22 +250,28 @@ Types an ASCII string with automatic key down and key up delays.
 - Behavior: Iterates through characters, maps to modifier + keycode, sleeps 25 ms down, sleeps 25 ms up.
 
 #### `combo`
-Executes a single keyboard chord.
+Executes a keyboard chord, or a full `step ->{seconds} step` sequence.
 - Extras: `--es keys "<modifiers+keys>"`
 - Example: `--es keys "ctrl+shift+esc"`
-- Behavior: Sends down report, sleeps 60 ms, sends release report.
+- Behavior: Sends down report, sleeps 60 ms, sends release report. The host CLI parses chained
+  sequences itself and dispatches each step as its own broadcast, applying the delays locally;
+  the phone-side parser exists for the on-device Combo Studio.
 
 #### `mouse`
 Transmits a pointer gesture using Report ID 2.
 - Extras: `--es action "<action_token>"`
 - Supported actions: `click-left`, `click-right`, `click-middle`, `double-click`, `scroll-up`, `scroll-down`.
-- Behavior: Sends 4-byte report with button bitmask or wheel value, sleeps 45 ms, sends release report. For `double-click`, repeats after an 80 ms pause.
+- Behavior: Sends a 4-byte button report, holds it for 48 ms, then sends a release report. `double-click` is two complete press/release cycles separated by a 90 ms gap, so Windows and macOS both synthesize a native double click instead of receiving a vendor-specific gesture. Relative motion is coalesced and split into ≤127-count reports, so fast drags are never clipped by the 8-bit HID field.
 
 #### `raw`
-Transmits an explicit 8-byte hexadecimal report.
-- Extras: `--es hex "<16_hex_characters>"`
-- Example: `--es hex "08000F0000000000"` (Win + L)
-- Behavior: Parses byte array and dispatches directly via `BluetoothHidDevice.sendReport(target, 1, bytes)`.
+Transmits an explicit hexadecimal raw HID report. The Report ID is auto-inferred from length (or overridden via `--ei id <N>`).
+- Extras: `--es hex "<hex>"` (even-length, 1–8 bytes), optional `--ei id <report_id>`
+- Examples:
+  - System Sleep: `--es hex "02"` (inferred Report ID 3)
+  - Play/Pause: `--es hex "cd00"` (inferred Report ID 4)
+  - Mouse Click: `--es hex "01000000"` (inferred Report ID 2)
+  - Win/Cmd + L: `--es hex "08000F0000000000"` (inferred Report ID 1)
+- Behavior: Dispatches report via `BluetoothHidDevice.sendReport(target, reportId, bytes)`.
 
 #### `stop`
 Gracefully cleans up Bluetooth resources and kills the Android foreground service.
@@ -225,7 +282,7 @@ Gracefully cleans up Bluetooth resources and kills the Android foreground servic
 
 ## 4. Filesystem State and Logging Protocol
 
-The Android gateway writes state and log files directly to external application storage (`/sdcard/Android/data/com.poc.hiddebug/files/`).
+The Android gateway writes state and log files directly to external application storage (`/sdcard/Android/data/com.sj010.ghid/files/`). This is the only location the CLI reads; there is no legacy fallback path.
 
 ### Status File (`status.json`)
 The service overwrites this file on every state transition (SDP registration, connection change, disconnect).
@@ -237,6 +294,9 @@ The service overwrites this file on every state transition (SDP registration, co
   "state": "CONNECTED",
   "target": "LP-TZD-0X114650",
   "address": "38:FC:98:E8:E3:87",
+  "os": "windows",
+  "os_confidence": "high",
+  "detection_method": "hid_led_handshake",
   "updated": "2026-10-23 01:15:30.122"
 }
 ```
@@ -247,22 +307,27 @@ Field definitions:
 - `state` (string): Current state representation: `DISCONNECTED`, `CONNECTING...`, `CONNECTED`, or `DISCONNECTING...`.
 - `target` (string): Bluetooth friendly name of connected host.
 - `address` (string): MAC address of target host.
+- `os` (string): Passively fingerprinted host OS: `windows`, `macos`, `linux`, or `unknown` (see ADR-007).
+- `os_confidence` (string): `high`, `medium`, `low`, or `none`.
+- `detection_method` (string): `apple_oui`, `apple_sdp_uuid`, `hid_led_handshake`, `name_heuristic`, `fallback`, or `none`.
 - `updated` (string): Timestamp formatted as `yyyy-MM-dd HH:mm:ss.SSS`.
+
+The OS fields are part of the schema: the CLI fills a missing `os` with `unknown` rather than
+failing to parse the file.
 
 ### Gateway Log File (`gateway.log`)
 Appended line by line on each service operation.
 
 Example content:
 ```text
-[2026-10-23 01:15:20.001] GhostHID Gateway Service started (Headless Mode).
+[2026-10-23 01:15:20.001] GhostHID Service started.
 [2026-10-23 01:15:20.015] Bluetooth enabled=true, LocalName=KB2001
 [2026-10-23 01:15:20.040] BluetoothHidDevice proxy connected.
 [2026-10-23 01:15:20.052] registerApp() returned: true
 [2026-10-23 01:15:20.089] onAppStatusChanged: registered=true
-[2026-10-23 01:15:21.100] Target laptop matched: LP-TZD-0X114650 [38:FC:98:E8:E3:87]
+[2026-10-23 01:15:21.100] Target explicitly selected: LP-TZD-0X114650 [38:FC:98:E8:E3:87]
 [2026-10-23 01:15:21.105] Connecting to LP-TZD-0X114650 [38:FC:98:E8:E3:87]...
-[2026-10-23 01:15:21.112] connect() returned: true
 [2026-10-23 01:15:22.340] onConnectionStateChanged: [LP-TZD-0X114650] -> CONNECTED
-[2026-10-23 01:15:25.410] >>> Executing combo: ctrl+alt+del
-[2026-10-23 01:15:25.480] Combo sent: mod=5, key=76
+[2026-10-23 01:15:25.410] >>> Executing sequence (win+l)
+[2026-10-23 01:15:25.480] >>> Sequence finished.
 ```

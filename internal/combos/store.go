@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/ghost-hid/ghid/internal/hid"
 )
@@ -18,26 +19,130 @@ import (
 const (
 	DefaultLoginKeys = "ctrl+alt+del ->{1.0} esc ->{0.8} $USERNAME ->{0.8} tab ->{0.8} $PASSWORD ->{0.8} enter"
 	DefaultLockKeys  = "win+l"
-	DefaultSleepKeys = "win+x ->{0.5} u ->{0.3} s ->{5.0} !DISCONNECT ->{0.5} !EXIT"
+	DefaultSleepKeys = "$SLEEP_WINDOWS ->{0.06} raw:00"
+
+	DefaultMacSleepKeys     = "cmd+ctrl+q ->{0.5} esc"
+	DefaultMacForceQuitKeys = "cmd+opt+esc ->{0.4} enter ->{0.3} enter"
+	DefaultMacPlayPauseKeys = "$PLAY_PAUSE ->{0.06} raw:0000"
 )
 
-// Combo is a named, replayable sequence of Windows keyboard chords, mouse
-// gestures, typed text and directives. Keys uses the ghid sequence grammar, e.g.
-// "win+r ->{0.6} type:rustdesk ->{0.3} enter".
+// Target operating systems a combo is written for. The tag drives the combo
+// icon and the OS filters in the CLI and Android app.
+const (
+	OSWindows = "windows"
+	OSMacOS   = "macos"
+	OSLinux   = "linux"
+)
+
+// OSTokens lists every valid combo OS tag in display order.
+func OSTokens() []string {
+	return []string{OSWindows, OSMacOS, OSLinux}
+}
+
+// OSLabel returns the human-readable name for an OS tag.
+func OSLabel(osName string) string {
+	switch NormalizeOSDefault(osName) {
+	case OSMacOS:
+		return "macOS"
+	case OSLinux:
+		return "Linux"
+	default:
+		return "Windows"
+	}
+}
+
+// NormalizeOS canonicalizes the accepted OS aliases. An unknown token is an
+// error; callers persisting combos use it to reject typos.
+func NormalizeOS(osName string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(osName)) {
+	case "", OSWindows, "win", "windows-11", "windows11":
+		return OSWindows, nil
+	case OSMacOS, "mac", "osx", "darwin", "apple":
+		return OSMacOS, nil
+	case OSLinux, "gnu/linux", "ubuntu", "arch", "fedora":
+		return OSLinux, nil
+	default:
+		return "", fmt.Errorf("unknown os %q (use %s)", osName, strings.Join(OSTokens(), ", "))
+	}
+}
+
+// NormalizeOSDefault canonicalizes an OS tag, falling back to Windows for
+// legacy combos saved before OS tagging existed.
+func NormalizeOSDefault(osName string) string {
+	normalized, err := NormalizeOS(osName)
+	if err != nil {
+		return OSWindows
+	}
+	return normalized
+}
+
+// MaxEmojiRunes caps a combo icon. Zero-width joiners and variation selectors
+// make multi-codepoint emoji long, so the limit is generous.
+const MaxEmojiRunes = 12
+
+// ValidateEmoji trims an optional combo icon and rejects plain ASCII text so the
+// stored value really is an emoji. An empty value clears the custom icon.
+func ValidateEmoji(emoji string) (string, error) {
+	clean := strings.TrimSpace(emoji)
+	if clean == "" {
+		return "", nil
+	}
+	if len([]rune(clean)) > MaxEmojiRunes {
+		return "", fmt.Errorf("combo emoji must be %d characters or fewer", MaxEmojiRunes)
+	}
+	for _, r := range clean {
+		if unicode.IsSpace(r) {
+			return "", errors.New("combo emoji cannot contain spaces")
+		}
+		if r < 0x80 && (unicode.IsLetter(r) || unicode.IsDigit(r)) {
+			return "", errors.New("combo emoji must be an emoji, not text")
+		}
+	}
+	return clean, nil
+}
+
+// OSShortTag is the compact ASCII badge used in terminal listings.
+func OSShortTag(osName string) string {
+	switch NormalizeOSDefault(osName) {
+	case OSMacOS:
+		return "mac"
+	case OSLinux:
+		return "linux"
+	default:
+		return "win"
+	}
+}
+
+// Combo is a named, replayable sequence of keyboard chords, mouse gestures,
+// typed text and directives. Keys uses the ghid sequence grammar, e.g.
+// "win+r ->{0.6} type:rustdesk ->{0.3} enter". OS tags which host the combo was
+// authored for. Emoji is an optional custom icon that overrides the OS logo in
+// the Android app and the OS badge in the CLI and TUI.
 type Combo struct {
 	Name        string    `json:"name"`
 	Keys        string    `json:"keys"`
+	OS          string    `json:"os"`
 	Emoji       string    `json:"emoji,omitempty"`
 	Description string    `json:"description,omitempty"`
 	Favorite    bool      `json:"favorite,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 }
 
-// DefaultCombos defines the built-in system combos with their emojis and descriptions.
+// Badge is the short icon used in terminal listings: the custom emoji when set,
+// otherwise the bracketed target OS tag.
+func (c Combo) Badge() string {
+	if emoji := strings.TrimSpace(c.Emoji); emoji != "" {
+		return emoji
+	}
+	return "[" + OSShortTag(c.OS) + "]"
+}
+
+// DefaultCombos defines the built-in system combos with their target OS and descriptions.
 var DefaultCombos = []Combo{
 	{
 		Name:        "Login",
 		Keys:        DefaultLoginKeys,
+		OS:          OSWindows,
 		Emoji:       "🔑",
 		Description: "Windows unlock & credential injection",
 		Favorite:    true,
@@ -45,6 +150,7 @@ var DefaultCombos = []Combo{
 	{
 		Name:        "Lock",
 		Keys:        DefaultLockKeys,
+		OS:          OSWindows,
 		Emoji:       "🔒",
 		Description: "Instant Windows lock screen (Win + L)",
 		Favorite:    true,
@@ -52,8 +158,33 @@ var DefaultCombos = []Combo{
 	{
 		Name:        "Sleep",
 		Keys:        DefaultSleepKeys,
+		OS:          OSWindows,
+		Emoji:       "😴",
+		Description: "Hardware ACPI sleep sequence",
+		Favorite:    true,
+	},
+	{
+		Name:        "MacSleep",
+		Keys:        DefaultMacSleepKeys,
+		OS:          OSMacOS,
 		Emoji:       "🌙",
-		Description: "Windows sleep sequence + countdown exit",
+		Description: "Instant macOS lock and display sleep",
+		Favorite:    true,
+	},
+	{
+		Name:        "ForceQuit",
+		Keys:        DefaultMacForceQuitKeys,
+		OS:          OSMacOS,
+		Emoji:       "⚡",
+		Description: "Force quit frontmost unresponsive app",
+		Favorite:    true,
+	},
+	{
+		Name:        "PlayPause",
+		Keys:        DefaultMacPlayPauseKeys,
+		OS:          OSMacOS,
+		Emoji:       "⏯️",
+		Description: "Consumer media play/pause toggle",
 		Favorite:    true,
 	},
 }
@@ -99,7 +230,16 @@ func (s *Store) Load() ([]Combo, error) {
 	if err := json.Unmarshal(data, &list); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", s.Path, err)
 	}
+	// Legacy libraries predate OS tagging: treat them as Windows combos.
+	for i := range list {
+		list[i].OS = NormalizeOSDefault(list[i].OS)
+	}
 	return list, nil
+}
+
+// SaveAll persists a complete list of combos to disk.
+func (s *Store) SaveAll(list []Combo) error {
+	return s.save(list)
 }
 
 func (s *Store) save(list []Combo) error {
@@ -117,7 +257,7 @@ func (s *Store) save(list []Combo) error {
 }
 
 // EnsureDefaults seeds the default built-in combos (Login, Lock, Sleep) if empty,
-// and ensures existing built-ins have their emoji and description populated.
+// and ensures existing built-ins have their OS tag and description populated.
 func (s *Store) EnsureDefaults() ([]Combo, error) {
 	list, err := s.Load()
 	if err != nil {
@@ -137,17 +277,37 @@ func (s *Store) EnsureDefaults() ([]Combo, error) {
 	}
 
 	modified := false
+	for i := range list {
+		if list[i].OS == "" {
+			list[i].OS = OSWindows
+			modified = true
+		}
+	}
 	for _, def := range DefaultCombos {
 		found := false
 		for i := range list {
 			if strings.EqualFold(list[i].Name, def.Name) {
 				found = true
-				if list[i].Emoji == "" && def.Emoji != "" {
-					list[i].Emoji = def.Emoji
+				if strings.EqualFold(def.Name, "Sleep") && (strings.Contains(list[i].Keys, "win+x") || list[i].Keys == "raw:02 ->{0.06} raw:00") {
+					list[i].Keys = DefaultSleepKeys
+					list[i].Description = def.Description
+					modified = true
+				}
+				if strings.EqualFold(def.Name, "PlayPause") && list[i].Keys == "raw:cd00 ->{0.06} raw:0000" {
+					list[i].Keys = DefaultMacPlayPauseKeys
+					list[i].Description = def.Description
+					modified = true
+				}
+				if list[i].OS == "" && def.OS != "" {
+					list[i].OS = def.OS
 					modified = true
 				}
 				if list[i].Description == "" && def.Description != "" {
 					list[i].Description = def.Description
+					modified = true
+				}
+				if list[i].Emoji == "" && def.Emoji != "" {
+					list[i].Emoji = def.Emoji
 					modified = true
 				}
 				break
@@ -214,9 +374,16 @@ func ValidateName(name string) (string, error) {
 	return clean, nil
 }
 
-// Validate checks that every step is a real Windows keyboard chord, variable,
-// or one of the supported mouse gestures. macOS-only aliases are rejected on purpose.
+// Validate checks that every step is a real keyboard chord, variable, raw report,
+// or one of the supported mouse gestures. When validating without an explicit OS,
+// it validates against the default Windows keyboard layout (rejecting macOS-only aliases).
 func Validate(keys string) error {
+	return ValidateForOS(keys, OSWindows)
+}
+
+// ValidateForOS validates a combo sequence against a specific target operating system.
+// On macOS, aliases such as cmd, command, opt, and option are recognized as valid modifiers.
+func ValidateForOS(keys string, osName string) error {
 	steps, err := hid.ParseActionSequence(keys)
 	if err != nil {
 		if strings.Contains(err.Error(), "unknown key token") {
@@ -228,10 +395,9 @@ func Validate(keys string) error {
 		return errors.New("combo has no steps")
 	}
 
+	isMac := NormalizeOSDefault(osName) == OSMacOS
+
 	for _, step := range steps {
-		if step.Directive != "" {
-			continue
-		}
 		if step.Variable != "" {
 			continue
 		}
@@ -243,15 +409,18 @@ func Validate(keys string) error {
 			}
 			continue
 		}
+		if step.Raw != "" {
+			continue
+		}
 		if step.Mouse != nil {
 			continue
 		}
 		for _, token := range strings.Split(step.Combo, "+") {
-			if !hid.IsWindowsKeyToken(token) {
-				trimmed := strings.TrimSpace(token)
-				if isMacAlias(trimmed) {
-					return fmt.Errorf("%q is a macOS key name; use a Windows key such as win, ctrl or alt", trimmed)
-				}
+			trimmed := strings.TrimSpace(token)
+			if !isMac && isMacAlias(trimmed) {
+				return fmt.Errorf("%q is a macOS key name; use a Windows key such as win, ctrl or alt", trimmed)
+			}
+			if !hid.IsWindowsKeyToken(trimmed) && !(isMac && isMacAlias(trimmed)) {
 				return fmt.Errorf("unknown Windows key %q", trimmed)
 			}
 		}
@@ -274,10 +443,19 @@ func (s *Store) Add(c Combo) ([]Combo, error) {
 	if err != nil {
 		return nil, err
 	}
-	keys := strings.TrimSpace(c.Keys)
-	if err := Validate(keys); err != nil {
+	osName, err := NormalizeOS(c.OS)
+	if err != nil {
 		return nil, err
 	}
+	em, err := ValidateEmoji(c.Emoji)
+	if err != nil {
+		return nil, err
+	}
+	keys := strings.TrimSpace(c.Keys)
+	if err := ValidateForOS(keys, osName); err != nil {
+		return nil, err
+	}
+	osSpecified := strings.TrimSpace(c.OS) != ""
 
 	list, err := s.Load()
 	if err != nil {
@@ -286,6 +464,8 @@ func (s *Store) Add(c Combo) ([]Combo, error) {
 
 	c.Name = name
 	c.Keys = keys
+	c.OS = osName
+	c.Emoji = em
 	if c.CreatedAt.IsZero() {
 		c.CreatedAt = time.Now().UTC()
 	}
@@ -296,11 +476,14 @@ func (s *Store) Add(c Combo) ([]Combo, error) {
 			if !c.Favorite && list[i].Favorite {
 				c.Favorite = true
 			}
-			if c.Emoji == "" && list[i].Emoji != "" {
-				c.Emoji = list[i].Emoji
+			if !osSpecified && list[i].OS != "" {
+				c.OS = list[i].OS
 			}
 			if c.Description == "" && list[i].Description != "" {
 				c.Description = list[i].Description
+			}
+			if c.Emoji == "" && list[i].Emoji != "" {
+				c.Emoji = list[i].Emoji
 			}
 			list[i] = c
 			replaced = true

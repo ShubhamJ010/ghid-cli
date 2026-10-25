@@ -7,10 +7,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 )
 
-// Runner abstracts process execution for ADB commands, enabling mock test adapters.
+// Runner abstracts process execution for ADB commands so callers can swap the transport.
 type Runner interface {
 	AdbPath() string
 	Run(serial string, args ...string) (string, error)
@@ -88,56 +87,4 @@ func LocateAdb() (string, error) {
 	}
 
 	return "", errors.New("Android Debug Bridge ('adb') was not found in PATH or standard directories")
-}
-
-// FakeRunner is a test stand-in for Runner.
-type FakeRunner struct {
-	mu           sync.Mutex
-	Path         string
-	Responses    map[string]fakeResponse
-	CommandCalls [][]string
-	Calls        [][]string
-}
-
-type fakeResponse struct {
-	output string
-	err    error
-}
-
-func NewFakeRunner() *FakeRunner {
-	return &FakeRunner{
-		Path:      "/mock/bin/adb",
-		Responses: make(map[string]fakeResponse),
-	}
-}
-
-func (f *FakeRunner) AdbPath() string {
-	return f.Path
-}
-
-func (f *FakeRunner) Register(key string, output string, err error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.Responses[key] = fakeResponse{output: output, err: err}
-}
-
-func (f *FakeRunner) Run(serial string, args ...string) (string, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	callKey := strings.Join(args, " ")
-	f.Calls = append(f.Calls, append([]string{serial}, args...))
-
-	for key, resp := range f.Responses {
-		if strings.Contains(callKey, key) {
-			return resp.output, resp.err
-		}
-	}
-	return "", nil
-}
-
-func (f *FakeRunner) RunCommand(dir string, name string, args ...string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.CommandCalls = append(f.CommandCalls, append([]string{name}, args...))
-	return nil
 }

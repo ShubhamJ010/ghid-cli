@@ -29,6 +29,7 @@ type SnippetStudioModel struct {
 	formFocus  int // 0 = name, 1 = value, 2 = secure toggle, 3 = save
 	nameInput  textinput.Model
 	valueInput textinput.Model
+	snipType   string // "type" or "raw"
 	isSecure   bool
 	editing    string // non-empty if editing existing snippet
 	notice     string
@@ -194,7 +195,7 @@ func (m SnippetStudioModel) startDelete() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	snip := m.list[m.index]
-	if strings.EqualFold(snip.Name, "username") || strings.EqualFold(snip.Name, "password") {
+	if strings.EqualFold(snip.Name, "username") || strings.EqualFold(snip.Name, "password") || strings.EqualFold(snip.Name, "email") || strings.EqualFold(snip.Name, "sleep_windows") || strings.EqualFold(snip.Name, "play_pause") {
 		m.notice = fmt.Sprintf("✖ Default snippet %q cannot be deleted (clear value instead)", snip.Name)
 		m.isError = true
 		return m, nil
@@ -219,6 +220,7 @@ func (m SnippetStudioModel) openCreate(existing snippets.Snippet) (tea.Model, te
 	}
 
 	m.valueInput.SetValue(existing.Value)
+	m.snipType = existing.EffectiveType()
 	m.isSecure = existing.Secure
 	m.setEchoMode()
 
@@ -264,6 +266,14 @@ func (m SnippetStudioModel) updateCreate(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case " ":
 		if m.formFocus == 2 {
+			if m.snipType == "raw" {
+				m.snipType = "type"
+			} else {
+				m.snipType = "raw"
+			}
+			return m, nil
+		}
+		if m.formFocus == 3 {
 			m.isSecure = !m.isSecure
 			m.setEchoMode()
 			return m, nil
@@ -278,10 +288,17 @@ func (m SnippetStudioModel) updateCreate(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.focusFormField(1)
 			return m, textinput.Blink
 		case 2:
+			if m.snipType == "raw" {
+				m.snipType = "type"
+			} else {
+				m.snipType = "raw"
+			}
+			return m, nil
+		case 3:
 			m.isSecure = !m.isSecure
 			m.setEchoMode()
 			return m, nil
-		case 3:
+		case 4:
 			return m.saveSnippet()
 		}
 	}
@@ -298,9 +315,9 @@ func (m SnippetStudioModel) updateCreate(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *SnippetStudioModel) focusFormField(delta int) {
 	// If editing default snippet, name is locked
-	order := []int{0, 1, 2, 3}
+	order := []int{0, 1, 2, 3, 4}
 	if m.editing != "" {
-		order = []int{1, 2, 3}
+		order = []int{1, 2, 3, 4}
 	}
 
 	current := 0
@@ -338,7 +355,7 @@ func (m SnippetStudioModel) saveSnippet() (tea.Model, tea.Cmd) {
 
 	val := m.valueInput.Value()
 	if m.store != nil {
-		_, err = m.store.Set(cleanName, val, m.isSecure)
+		_, err = m.store.Set(cleanName, val, m.isSecure, m.snipType)
 		if err != nil {
 			m.notice = fmt.Sprintf("✖ Failed to save snippet: %v", err)
 			m.isError = true
@@ -459,19 +476,21 @@ func (m SnippetStudioModel) renderSnippetTable() string {
 	innerWidth := cardWidth - 6
 
 	colNum := 5
-	colVar := 20
+	colVar := 18
+	colType := 8
 	colSec := 15
-	valWidth := innerWidth - colNum - colVar - colSec - 6
-	if valWidth < 16 {
-		valWidth = 16
+	valWidth := innerWidth - colNum - colVar - colType - colSec - 8
+	if valWidth < 14 {
+		valWidth = 14
 	}
 
 	headerPrefix := "  "
 	headerNum := padRight("  #", colNum)
 	headerVar := padRight("VARIABLE", colVar)
+	headerType := padRight("TYPE", colType)
 	headerVal := padRight("VALUE", valWidth)
 	headerSec := padRight("SECURITY", colSec)
-	headerLine := fmt.Sprintf("%s%s %s %s %s", headerPrefix, headerNum, headerVar, headerVal, headerSec)
+	headerLine := fmt.Sprintf("%s%s %s %s %s %s", headerPrefix, headerNum, headerVar, headerType, headerVal, headerSec)
 	header := lipgloss.NewStyle().Foreground(ColorFgMuted).Render(headerLine)
 
 	var rows []string
@@ -480,6 +499,7 @@ func (m SnippetStudioModel) renderSnippetTable() string {
 		varName := "$" + strings.ToUpper(s.Name)
 		numCol := padRight(fmt.Sprintf("   %-2d", i+1), colNum)
 		varCol := padRight(truncate(varName, colVar), colVar)
+		typeCol := padRight(strings.ToUpper(s.EffectiveType()), colType)
 		valCol := padRight(truncate(s.MaskedValue(), valWidth), valWidth)
 
 		var secCol string
@@ -491,7 +511,7 @@ func (m SnippetStudioModel) renderSnippetTable() string {
 
 		if i == m.index {
 			prefix := "▸ "
-			line := fmt.Sprintf("%s%s %s %s %s", prefix, numCol, varCol, valCol, secCol)
+			line := fmt.Sprintf("%s%s %s %s %s %s", prefix, numCol, varCol, typeCol, valCol, secCol)
 			if m.focus == 0 {
 				rows = append(rows, lipgloss.NewStyle().
 					Bold(true).
@@ -505,7 +525,7 @@ func (m SnippetStudioModel) renderSnippetTable() string {
 			}
 		} else {
 			prefix := "  "
-			line := fmt.Sprintf("%s%s %s %s %s", prefix, numCol, varCol, valCol, secCol)
+			line := fmt.Sprintf("%s%s %s %s %s %s", prefix, numCol, varCol, typeCol, valCol, secCol)
 			rows = append(rows, lipgloss.NewStyle().
 				Foreground(ColorFgLight).
 				Render(line))
@@ -557,12 +577,22 @@ func (m SnippetStudioModel) renderCreateForm() string {
 		valField = SubtitleStyle.Render(val)
 	}
 
+	typeLabel := "[Type: TEXT]"
+	if m.snipType == "raw" {
+		typeLabel = "[Type: RAW REPORT]"
+	}
+	typeStyle := lipgloss.NewStyle().Foreground(ColorCyan)
+	if m.formFocus == 2 {
+		typeStyle = lipgloss.NewStyle().Bold(true).Foreground(ColorBgDark).Background(ColorCyan).Padding(0, 1)
+	}
+	typeBtn := typeStyle.Render(typeLabel)
+
 	toggleLabel := "[ ] Plaintext storage"
 	if m.isSecure {
 		toggleLabel = "[✔] Secure in macOS Keychain"
 	}
 	toggleStyle := lipgloss.NewStyle().Foreground(ColorGreen)
-	if m.formFocus == 2 {
+	if m.formFocus == 3 {
 		toggleStyle = lipgloss.NewStyle().Bold(true).Foreground(ColorBgDark).Background(ColorCyan).Padding(0, 1)
 	}
 	toggleBtn := toggleStyle.Render(toggleLabel)
@@ -572,7 +602,7 @@ func (m SnippetStudioModel) renderCreateForm() string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(ColorFgMuted).
 		Padding(0, 2)
-	if m.formFocus == 3 {
+	if m.formFocus == 4 {
 		saveBtnStyle = saveBtnStyle.
 			Bold(true).
 			Foreground(ColorBgDark).
@@ -587,10 +617,11 @@ func (m SnippetStudioModel) renderCreateForm() string {
 	}
 
 	form := fmt.Sprintf(
-		"%s\n\n%s  %s\n%s  %s\n\nSecurity:   %s\n\n%s",
+		"%s\n\n%s  %s\n%s  %s\n\nMode:       %s\n\nSecurity:   %s\n\n%s",
 		TitleStyle.Render(title),
 		nameLabel, nameField,
 		valLabel, valField,
+		typeBtn,
 		toggleBtn,
 		saveBtn,
 	)

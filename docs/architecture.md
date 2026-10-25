@@ -6,7 +6,7 @@ GhostHID turns an Android smartphone into a hardware Bluetooth Human Interface D
 
 The system comprises three physical or logical tiers:
 1. **Host Workstation:** Runs the Go CLI (`ghid`), automation scripts, or AI agent workloads.
-2. **Android Gateway Phone:** Runs the headless `com.poc.hiddebug` foreground service and handles Bluetooth HID profile communications.
+2. **Android Gateway Phone:** Runs the `com.sj010.ghid` app (Material 3 Compose UI + `HidService` foreground service) and handles Bluetooth HID profile communications.
 3. **Target Computer:** Any computer running Windows, macOS, or Linux paired with the phone over Bluetooth Classic.
 
 ```mermaid
@@ -53,70 +53,37 @@ flowchart TB
 
 ## Android Gateway Subsystem
 
-The Android package `com.poc.hiddebug` runs headlessly without a permanent graphical activity.
+The Android package `com.sj010.ghid` is the single shipping app. It has a launcher activity (`MainActivity`, Material 3 Expressive dashboard, Combo Studio, trackpad), but the gateway itself never depends on the UI: `HidService` is an always-on foreground service that can be started, stopped, and commanded entirely over ADB with the screen off. A separate headless build is no longer maintained — see `docs/prompts/headless-android-app.md` if you want to code your own.
 
 ### Service Lifecycle and Notification Channel
 The gateway implements `android.app.Service` as an ongoing foreground service:
 - **Notification Channel:** ID `ghost_hid_gateway` with `IMPORTANCE_LOW` priority.
-- **Notification:** ID `1001` with ongoing status message displaying the active connection target.
-- **Process Survival:** Android's low-memory killer preserves foreground services with ongoing notifications during periods of low system memory.
+- **Service Type:** `ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE` for API 29+ compliance.
+- **Auto-restart:** `START_STICKY` with internal restart loop if the Android system reclaims resources.
 
-### Bluetooth HID Device Profile Registration
-`HidService` binds the system Bluetooth HID profile proxy through `BluetoothAdapter.getProfileProxy(Context, ServiceListener, BluetoothProfile.HID_DEVICE)`:
-1. When `onServiceConnected` fires, the service casts the proxy to `android.bluetooth.BluetoothHidDevice`.
-2. The service registers an SDP record with `BluetoothHidDeviceAppSdpSettings`:
-   - Application Name: `GhostHID Keyboard & Mouse`
-   - Description: `Virtual HID Keyboard + Mouse Gateway`
-   - Provider: `Android`
-   - Subclass: `BluetoothHidDevice.SUBCLASS1_COMBO` (0x50)
-   - Descriptor: Dual-report binary descriptor (Report ID 1 keyboard, Report ID 2 mouse).
-3. The registration callback sets `mIsRegistered = true` and updates `status.json`.
+### Bluetooth HID Profile Implementation
+The gateway exposes the HID profile through `android.bluetooth.BluetoothHidDevice`.
 
-### HID Descriptor Structure
+#### SDP Service Record
+- **Service Name:** `GhostHID Keyboard & Mouse`
+- **Description:** `Virtual HID Keyboard + Mouse Gateway`
+- **Provider Name:** `Android`
+- **Subclass:** `BluetoothHidDevice.SUBCLASS1_COMBO` (`0xC0` — keyboard + mouse composite)
 
-The custom HID descriptor contains two top-level application collections:
+#### HID Report Descriptor
+GhostHID uses a standard composite keyboard and mouse report descriptor (ADR-002, ADR-008):
 
-#### 1. Mouse Collection (Report ID 2)
-```text
-Usage Page: Generic Desktop (0x01)
-Usage: Mouse (0x02)
-Collection: Application (0x01)
-  Report ID: 2
-  Usage: Pointer (0x01)
-  Collection: Physical (0x00)
-    Usage Page: Buttons (0x09)
-    Usage Minimum: 1, Usage Maximum: 3
-    Logical Minimum: 0, Logical Maximum: 1
-    Report Count: 3, Report Size: 1 bit  -> Button 1 (Left), Button 2 (Right), Button 3 (Middle)
-    Input (Data, Variable, Absolute)
-    Report Count: 1, Report Size: 5 bits -> Constant padding bits (0x00)
-    Input (Constant)
-    Usage Page: Generic Desktop (0x01)
-    Usage: X (0x30), Usage: Y (0x31), Usage: Wheel (0x38)
-    Logical Minimum: -127, Logical Maximum: 127
-    Report Size: 8 bits, Report Count: 3
-    Input (Data, Variable, Relative)     -> 1 byte dX, 1 byte dY, 1 byte dWheel
-  End Collection (Physical)
-End Collection (Application)
-```
-Total mouse report size: 4 bytes.
-- Byte 0: Button mask (Bit 0 = Left, Bit 1 = Right, Bit 2 = Middle).
-- Byte 1: Relative X displacement (-127 to +127).
-- Byte 2: Relative Y displacement (-127 to +127).
-- Byte 3: Relative scroll wheel ticks (-127 to +127).
-
-#### 2. Keyboard Collection (Report ID 1)
 ```text
 Usage Page: Generic Desktop (0x01)
 Usage: Keyboard (0x06)
-Collection: Application (0x01)
+Collection (Application)
   Report ID: 1
   Usage Page: Key Codes (0x07)
-  Usage Minimum: 224 (0xE0), Usage Maximum: 231 (0xE7)
+  Usage Minimum: 224, Usage Maximum: 231
   Logical Minimum: 0, Logical Maximum: 1
   Report Size: 1 bit, Report Count: 8
-  Input (Data, Variable, Absolute)       -> Modifier bitmap (Ctrl, Shift, Alt, GUI)
-  Report Size: 8 bits, Report Count: 1
+  Input (Data, Variable, Absolute)       -> Modifier byte (Ctrl, Shift, Alt, GUI)
+  Report Count: 1, Report Size: 8 bits
   Input (Constant)                       -> Reserved padding byte (0x00)
   Usage Page: LEDs (0x08)
   Usage Minimum: 1, Usage Maximum: 5
@@ -137,13 +104,13 @@ Total keyboard input report size: 8 bytes.
 - Bytes 2-7: Up to 6 simultaneous HID usage codes.
 
 ### ADB IPC and Intent Routing
-The Android application defines `HidCommandReceiver` in `AndroidManifest.xml` with `exported="true"`.
+The Android application defines `HidCommandReceiver` in `android/app/src/main/AndroidManifest.xml` with `exported="true"`.
 The host triggers actions by sending broadcast intents through ADB:
 
 ```bash
 adb shell am broadcast \
-  -a com.poc.hiddebug.ACTION_CMD \
-  -n com.poc.hiddebug/.HidCommandReceiver \
+  -a com.sj010.ghid.ACTION_CMD \
+  -n com.sj010.ghid/.service.HidCommandReceiver \
   --es cmd "<action>" \
   [--es <param> "<value>"]
 ```
@@ -155,16 +122,24 @@ Supported intent actions and parameters:
 | `disconnect` | none | Closes Bluetooth connection |
 | `unpair` | `--es address <MAC>` | Invokes hidden `removeBond` reflection on bonded device |
 | `register` | none | Re-registers the Bluetooth SDP application record |
-| `lock` | none | Dispatches `Win + L` keyboard sequence |
-| `type` | `--es text "<string>"` | Translates ASCII characters into down/up report pairs |
+| `lock` (or action `ACTION_LOCK`) | none | Dispatches `Win + L` (`cmd+ctrl+q` on macOS targets) |
+| `sleep` | none | System Control Sleep (macOS targets run the sleep combo instead) |
+| `type` (or action `ACTION_TYPE`) | `--es text "<string>"` | Translates ASCII characters into down/up report pairs |
 | `combo` | `--es keys "<tokens>"` | Parses chord tokens and dispatches timed reports |
 | `mouse` | `--es action "<token>"` | Emits mouse button or wheel reports (Report ID 2) |
-| `raw` | `--es hex "<16-hex-chars>"`| Sends an explicit 8-byte raw HID report |
+| `media` | `--es key "<token>"` | Consumer-control keys: play/pause, next, prev, volup, voldown, mute |
+| `raw` | `--es hex "<hex>"` `[--es id <n>]` | Sends an explicit raw report; Report ID inferred from length when omitted |
 | `status` | none | Forces immediate write of current status to flash |
 | `stop` | none | Cleans up connections, unregisters SDP, and kills service |
 
+The service itself is started with no extras at all:
+
+```bash
+adb shell am start-foreground-service -n com.sj010.ghid/.service.HidService
+```
+
 ### State Persistence Protocol
-The service writes status snapshots to `/sdcard/Android/data/com.poc.hiddebug/files/status.json` whenever connection, pairing, or registration state changes:
+The service writes status snapshots to `/sdcard/Android/data/com.sj010.ghid/files/status.json` whenever connection, pairing, or registration state changes:
 
 ```json
 {
@@ -173,11 +148,14 @@ The service writes status snapshots to `/sdcard/Android/data/com.poc.hiddebug/fi
   "state": "CONNECTED",
   "target": "LP-TZD-0X114650",
   "address": "38:FC:98:E8:E3:87",
+  "os": "windows",
+  "os_confidence": "high",
+  "detection_method": "hid_led_handshake",
   "updated": "2026-03-28 14:15:22.104"
 }
 ```
 
-The host CLI inspects this file with `adb shell cat <path>` to verify readiness before dispatching keystrokes.
+The host CLI inspects this file with `adb shell cat <path>` to verify readiness before dispatching keystrokes — it reads exactly one path and falls back to an offline status if the file is missing or malformed (no compatibility probing of legacy locations). The Android UI mirrors the passive host OS fingerprint (ADR-007) into the same `status.json`, from which it picks the OS logo, the default combo filter, and the pinned/most-used scoping.
 
 ---
 
@@ -245,23 +223,7 @@ flowchart TD
     classDef ui fill:#E8EAF6,stroke:#3F51B5,stroke-width:2px,color:#1A237E
     classDef domain fill:#E0F2F1,stroke:#009688,stroke-width:2px,color:#004D40
     classDef transport fill:#FFF3E0,stroke:#FB8C00,stroke-width:2px,color:#E65100
-
-    class CLIHandler,InteractiveTUI,ComboStudio,SnippetStudio,QuickSendView,JSONFormatter ui
-    class GatewayCtrl,GatewayImpl,HIDEngine,ComboStore,SnippetStore,ConfigStore,Vault domain
-    class ADBManager,Runner,NativeKeychain,SubprocessOS transport
 ```
-
-### Module Responsibilities
-
-1. **`internal/adb`:** Manages detection of USB and Wi-Fi devices, shell command execution through an abstract `Runner` interface, APK installation, log tailing, and status file retrieval. Provides `SendComboWithResolver` to evaluate dynamic variables on the fly.
-2. **`internal/gateway`:** Orchestrates multi-step operations such as system health diagnostics (`Doctor`), ACPI sleep countdowns, and connection lifecycle management.
-3. **`internal/hid`:** Implements keycode mapping tables for printable US ASCII characters, parses keyboard combo strings into AST steps, extracts variable references (`$NAME` / `${NAME}`), and serializes mouse actions.
-4. **`internal/combos`:** Handles disk persistence for named macros in `~/.config/ghid/combos.json`. Supports favorite toggling (`Favorite bool`), step sequence grammar validation, and seeds default macros such as `Login`.
-5. **`internal/snippets`:** Manages user text variables and secure secrets in `~/.config/ghid/snippets.json`. Automatically bridges sensitive variables (`password`) into `internal/vault` with macOS Keychain encryption. Seeds default `username` and `password` variables.
-6. **`internal/vault`:** Abstracts credential storage. Uses `/usr/bin/security` on macOS with service name `ghost-hid` to save, fetch, and purge passwords securely.
-7. **`internal/config`:** Manages configuration parameters in `~/.config/ghid/config.json`, including registered target devices, active target device selection, and delay timings.
-8. **`internal/tui`:** Renders full-screen interactive consoles, full-screen **Combo Studio**, full-screen **Snippet Studio**, and the unified **Quick Send** modal using Bubble Tea, Bubbles text inputs, and Lip Gloss styling. Pins favorite combos at the top of the action list with heart badges (`❤️`).
-9. **`internal/cli`:** Command-line argument parser supporting dual execution modes: interactive TUI when invoked without arguments, and direct CLI subcommands (`quick`, `combo`, `snippets`, `doctor`, etc.) with comprehensive `--json` output. Root `type` and `raw` commands are cleanly superseded by `quick`.
 
 ---
 
@@ -278,3 +240,34 @@ Automated login requires passing sensitive user passwords to the target host. To
 - When pairing for the first time, both the Android phone and the target host display a matching numeric comparison passkey.
 - Once paired, link keys are stored in the Android system Bluetooth keystore and the target host's operating system credentials.
 - GhostHID does not accept incoming unauthenticated connection requests. The connection is initiated from the phone to a known target MAC address.
+
+---
+
+## Cross-Platform Host Adaptation & Vector Iconography
+
+See [ADR-010](decisions/ADR-010-macos-and-cross-platform-gesture-adaptation.md) and [ADR-011](decisions/ADR-011-quick-send-unified-iconography-and-host-coupling.md).
+
+### Host Target Adaptation
+GhostHID supports heterogeneous environments where the target machine may run Windows, macOS, or Linux:
+- **Fingerprinting & Auto-Detection**: Bluetooth device names (e.g., `Shubham’s MacBook Air`) automatically configure the initial default target OS to `macOS` (see ADR-007).
+- **Dynamic Gesture Resolution**: The virtual trackpad multi-finger gesture subsystem (`TrackpadGesture.kt`) maps 3-finger and 4-finger swipes dynamically based on the current target OS:
+  - *macOS*: Mission Control (`ctrl+up`), Show Desktop (`cmd+f3`), Spaces navigation (`ctrl+left`/`ctrl+right`), App Exposé (`ctrl+down`), and Minimize All (`cmd+opt+m`).
+  - *Windows*: Task View (`win+tab`), Show Desktop (`win+d`), App Switching (`alt+tab`), Action Center (`win+a`), Minimize All (`win+m`), and Virtual Desktops (`ctrl+win+left`/`right`).
+- **Quick Send Adapters & Device-Coupling**:
+  - Quick Send placeholders and sequence parsing automatically adapt keyboard shortcut defaults (e.g. `cmd+space` on macOS vs `win+r` on Windows).
+  - Quick Send OS target is strictly driven by the active or last-connected target device (`effectiveTargetOs`), removing detached manual toggle controls.
+  - When no device is selected (`targetDevice == null`), Quick Send displays the Ghost mascot icon and renders the full send history.
+
+### Canonical Vector Iconography
+Generic system/laptop icons are superseded by branded vector silhouettes:
+- `ic_os_apple.xml`: Canonical Apple silhouette for macOS targets.
+- `ic_os_windows.xml`: Canonical 4-pane silhouette for Windows targets.
+- `ic_os_linux.xml`: Canonical silhouette for Linux targets.
+- Uniformly rendered via `OsGlyph(os = targetOs, modifier, tint)`.
+- Combo identity uses `ComboGlyph(combo, size, tint)`: the combo's optional `emoji` metadata wins, otherwise it delegates to the target OS logo. The same emoji replaces the `[win]` / `[mac]` / `[linux]` badge in `ghid combo list` and the TUI.
+- Quick Send header merges the previous toggle pill and lightning bolt into a single 44dp clover container (`MaterialShapes.ShapeClover4`) holding the active `OsGlyph` or `ic_notification_ghost`.
+
+### Inset-Aware PullDownShade Architecture
+The pull-down morphing shade (`PullDownShade.kt`) computes travel distance and available surface bounds accounting for both status bar and navigation bar system insets:
+`availableHeight = maxHeight - navBarBottom - 16.dp`
+This ensures the bottom dock controls never overlap the Android system navigation bar or gesture pill on modern edge-to-edge displays.

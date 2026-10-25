@@ -148,7 +148,7 @@ sequenceDiagram
     participant BTDaemon as BluetoothHidDevice Proxy
     participant Host as Target Host Controller
 
-    CLI->>ADB: am start-foreground-service com.poc.hiddebug/.HidService
+    CLI->>ADB: am start-foreground-service com.sj010.ghid/.service.HidService
     ADB->>Service: onCreate()
     Service->>Service: createNotificationChannel()
     Service->>Service: startForeground(1001, "GhostHID Gateway: Ready")
@@ -169,7 +169,7 @@ sequenceDiagram
     Service->>Service: writeStatusFile("connected": true, "state": "CONNECTED")
     Service->>Service: updateNotification("Connected to LP-TZD-0X114650")
     
-    CLI->>ADB: cat /sdcard/Android/data/com.poc.hiddebug/files/status.json
+    CLI->>ADB: cat /sdcard/Android/data/com.sj010.ghid/files/status.json
     ADB-->>CLI: Return JSON (connected: true)
     CLI-->>CLI: Ready for command dispatch
 ```
@@ -192,20 +192,14 @@ sequenceDiagram
 
     Operator->>CLI: ghid sleep --countdown 5
     
-    Note over CLI,Target: Trigger Windows Sleep Sequence
-    CLI->>ADB: Broadcast ACTION_CMD (combo "win+x")
-    ADB->>Service: sendCombo("win+x")
-    Service->>Target: Keystroke Win+X (Quick Link Menu)
-    CLI->>CLI: Sleep(1.2s)
-    
-    CLI->>ADB: Broadcast ACTION_CMD (combo "u")
-    ADB->>Service: sendCombo("u")
-    Service->>Target: Keystroke U (Shut down or sign out sub-menu)
-    CLI->>CLI: Sleep(0.6s)
-
-    CLI->>ADB: Broadcast ACTION_CMD (combo "s")
-    ADB->>Service: sendCombo("s")
-    Service->>Target: Keystroke S (Enter Modern Standby / Sleep)
+    Note over CLI,Target: Trigger Hardware ACPI Sleep
+    CLI->>ADB: Broadcast ACTION_CMD (raw "02")
+    ADB->>Service: sendRawReport([0x02]) -> System Control (Report 3)
+    Service->>Target: ACPI System Sleep (0x82)
+    CLI->>CLI: Sleep(60ms settle)
+    CLI->>ADB: Broadcast ACTION_CMD (raw "00")
+    ADB->>Service: sendRawReport([0x00]) -> System Control (Report 3)
+    Service->>Target: ACPI Sleep Release (0x00)
     
     Note over CLI: Operator Feedback Countdown
     loop Countdown 5 down to 1
@@ -239,7 +233,7 @@ flowchart TD
 
     ScanDevices -->|No| FailDev[Issue: No Android devices detected]
     ScanDevices -->|Unauthorized| FailAuth[Issue: Device unauthorized - approve RSA key on phone]
-    ScanDevices -->|Yes| CheckAPK{Package com.poc.hiddebug installed?}
+    ScanDevices -->|Yes| CheckAPK{Package com.sj010.ghid installed?}
 
     CheckAPK -->|No| FailAPK[Issue: Gateway APK not installed on device]
     CheckAPK -->|Yes| CheckBT{Phone Bluetooth Radio Enabled?}
@@ -361,4 +355,49 @@ flowchart TD
     class Trigger,ExtractVars,CheckVars,QueryStore,Interpolate,DispatchADB,SendHID normal
     class PromptUser,CaptureInput,SaveSnippets,ResumeCombo prompt
     class ExecDirect exec
+```
+
+
+## 8. Bi-directional Synchronization and Reconnect Flow (Android SSOT)
+
+The synchronization pipeline enforces the Android smartphone as the Single Source of Truth (SSOT). Remote phone combos and snippets are pulled into the local cache on startup. Local mutations automatically push back to Android, restart the application to invalidate in-memory repositories, and restore the active Bluetooth link.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Operator as Operator / CLI Command
+    participant CLI as ghid CLI (syncer)
+    participant Local as Local Store (~/.config/ghid/)
+    participant Keychain as macOS Keychain
+    participant ADB as ADB Transport
+    participant PhoneDisk as Android Flash (/sdcard/.../files/)
+    participant App as GhostHID App (com.sj010.ghid)
+    participant Target as Target Computer (Bluetooth)
+
+    Note over CLI,PhoneDisk: Phase 1: Pull from SSOT (Android)
+    CLI->>ADB: shell cat combos.json & snippets.json
+    ADB->>PhoneDisk: Read JSON files
+    PhoneDisk-->>CLI: Return remote JSON
+    CLI->>Keychain: Resolve local secrets for secure snippets
+    CLI->>Local: Overwrite local stores (SaveAll)
+
+    opt When Push or Mutation Triggered
+        Note over CLI,PhoneDisk: Phase 2: Push Sanitized State
+        CLI->>Local: Load active combos & snippets
+        CLI->>CLI: Sanitize snippets (strip secrets: Value = "")
+        CLI->>ADB: push combos.json & snippets.json
+        ADB->>PhoneDisk: Write updated JSON files
+
+        Note over CLI,Target: Phase 3: Reload Memory & Restore Connection
+        CLI->>ADB: shell am force-stop com.sj010.ghid
+        ADB->>App: Process terminated
+        Target-->>Target: Bluetooth link momentarily dropped
+        CLI->>ADB: shell am start -n com.sj010.ghid/.MainActivity
+        ADB->>App: Process started, load() reads fresh JSON
+        CLI->>CLI: Sleep 1500ms (Compose UI & service init)
+        CLI->>ADB: broadcast ACTION_CMD --es cmd connect
+        ADB->>App: HidCommandReceiver -> HidService.connectTarget()
+        App->>Target: Bluetooth HID connect (L2CAP PSM 0x11/0x13)
+        Target-->>App: Reconnected to active laptop
+    end
 ```

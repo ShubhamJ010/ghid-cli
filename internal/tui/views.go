@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/ghost-hid/ghid/internal/combos"
 )
 
 func (m Model) View() string {
@@ -53,6 +54,8 @@ func (m Model) View() string {
 		sb.WriteString(m.renderRegisterPlatform())
 	case StateDeviceRegisterGuide:
 		sb.WriteString(m.renderRegisterGuide())
+	case StateDeviceRegisterPicker:
+		sb.WriteString(m.renderRegisterPicker())
 	case StateDeviceRegisterInput:
 		sb.WriteString(m.renderRegisterInput())
 	case StateDeviceDeleteConfirm:
@@ -71,7 +74,7 @@ func (m Model) renderBanner() string {
 		Padding(0, 1).
 		Render("v1.0.0")
 
-	tagline := SubtitleStyle.Render("Headless Android Bluetooth HID Automation Gateway")
+	tagline := SubtitleStyle.Render("Android Bluetooth HID Automation Gateway")
 	return fmt.Sprintf("%s %s\n%s\n", title, badge, tagline)
 }
 
@@ -91,7 +94,7 @@ func (m Model) renderInit() string {
 func (m Model) renderTelemetryCard() string {
 	devText := "None (waiting for adb link)"
 	if m.device != nil {
-		devText = fmt.Sprintf("%s (%s)", m.deviceModel, m.device.Serial)
+		devText = fmt.Sprintf("%s (%s)", m.phoneDisplayName(), m.device.Serial)
 	}
 
 	var sdpBadge string
@@ -263,7 +266,7 @@ func (m Model) renderRegisterGuide() string {
 			KeyBadgeStyle.Render("✦ STEP-BY-STEP PAIRING:"),
 			lipgloss.NewStyle().Bold(true).Render("System Settings"),
 			lipgloss.NewStyle().Bold(true).Render("Bluetooth"),
-			lipgloss.NewStyle().Bold(true).Foreground(ColorCyan).Render(m.deviceModel),
+			lipgloss.NewStyle().Bold(true).Foreground(ColorCyan).Render(m.phoneDisplayName()),
 			lipgloss.NewStyle().Bold(true).Render("Connect"),
 		)
 		docWidth := m.cardWidth() - 6
@@ -284,8 +287,8 @@ func (m Model) renderRegisterGuide() string {
 				"   'Bluetooth devices discovery' and change dropdown from Default to %s.\n"+
 				"2. Clear Stale Pairing: If your phone is listed under 'Other devices', click %s.\n"+
 				"3. Ensure SDP Ready: GhostHID foreground service must be running.\n"+
-				"4. Pair Device: Click %s ➔ %s, select your phone (%s),\n"+
-				"   and confirm the 6-digit PIN on both your phone and laptop.\n"+
+				"4. Pair Device: Click %s ➔ %s. If 2 entries show, pick the one\n"+
+				"   with ⌨️ Keyboard icon (%s) [NOT audio/phone icon]. Confirm PIN.\n"+
 				"5. Ready: Windows binds the device under 'Input (Mouse, keyboard & pen)'.",
 			NoticeStyle.Render("✦ CRITICAL WINDOWS CO-EXISTENCE RULE:"),
 			KeyBadgeStyle.Render("✦ STEP-BY-STEP PAIRING:"),
@@ -295,7 +298,7 @@ func (m Model) renderRegisterGuide() string {
 			lipgloss.NewStyle().Bold(true).Foreground(ColorRed).Render("Remove device"),
 			lipgloss.NewStyle().Bold(true).Render("Add device"),
 			lipgloss.NewStyle().Bold(true).Render("Bluetooth"),
-			lipgloss.NewStyle().Bold(true).Foreground(ColorCyan).Render(m.deviceModel),
+			lipgloss.NewStyle().Bold(true).Foreground(ColorCyan).Render(m.phoneDisplayName()),
 		)
 		docWidth := m.cardWidth() - 6
 		if docWidth < 60 {
@@ -306,6 +309,99 @@ func (m Model) renderRegisterGuide() string {
 
 	sb.WriteString("\n\n")
 	sb.WriteString(HelpStyle.Render("[Enter / Space]: Next step • [Esc]: Cancel"))
+	return FocusCardStyle.Width(m.cardWidth()).Render(sb.String())
+}
+
+func (m Model) renderRegisterPicker() string {
+	var sb strings.Builder
+	sb.WriteString(TitleStyle.Render("📱 Select Target Device from Phone (Step 3 of 3)"))
+	sb.WriteString("\n\n")
+
+	if m.pickerLoading {
+		sb.WriteString(lipgloss.NewStyle().Foreground(ColorYellow).Render("⟳ Querying phone's Bluetooth paired devices via ADB..."))
+		sb.WriteString("\n\n")
+		sb.WriteString(HelpStyle.Render("[Esc]: Back"))
+		return FocusCardStyle.Width(m.cardWidth()).Render(sb.String())
+	}
+
+	sb.WriteString(SubtitleStyle.Render("Select a machine paired with your phone, or enter a new MAC manually:"))
+	sb.WriteString("\n\n")
+
+	cursorPrefix := lipgloss.NewStyle().Foreground(ColorCyan).Bold(true).Render("▶ ")
+
+	if len(m.pickerDevices) == 0 {
+		sb.WriteString(SubtitleStyle.Render("  (No paired Bluetooth devices detected on phone)"))
+		sb.WriteString("\n\n")
+	} else {
+		for i, dev := range m.pickerDevices {
+			cursor := "  "
+			if i == m.pickerIndex {
+				cursor = cursorPrefix
+			}
+
+			icon := "💻"
+			nameLower := strings.ToLower(dev.Name)
+			if strings.Contains(nameLower, "mac") || strings.Contains(nameLower, "apple") || strings.Contains(nameLower, "air") {
+				icon = "🍏"
+			} else if strings.Contains(nameLower, "windows") || strings.Contains(nameLower, "thinkpad") || strings.Contains(nameLower, "lp-") || strings.Contains(nameLower, "pc") {
+				icon = "🪟"
+			} else if strings.Contains(nameLower, "bud") || strings.Contains(nameLower, "headphone") || strings.Contains(nameLower, "flow") || strings.Contains(nameLower, "audio") {
+				icon = "🎧"
+			}
+
+			isRegistered := false
+			for _, rd := range m.cfg.Devices {
+				if strings.EqualFold(rd.Address, dev.Address) {
+					isRegistered = true
+					break
+				}
+			}
+
+			regTag := ""
+			if isRegistered {
+				regTag = lipgloss.NewStyle().Foreground(ColorFgMuted).Render("[REGISTERED]")
+			} else {
+				regTag = lipgloss.NewStyle().Foreground(ColorCyan).Render("[PAIRED]")
+			}
+
+			typeTag := lipgloss.NewStyle().Foreground(ColorFgMuted).Render(fmt.Sprintf("[%s]", dev.Type))
+
+			nameStr := padRight(truncate(dev.Name, 24), 24)
+			addrStr := padRight(truncate(dev.Address, 18), 18)
+
+			row := fmt.Sprintf("%s%s %s %s %s %s",
+				cursor,
+				icon,
+				nameStr,
+				addrStr,
+				typeTag,
+				regTag,
+			)
+
+			if i == m.pickerIndex {
+				sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(ColorFgBright).Render(row))
+			} else {
+				sb.WriteString(row)
+			}
+			sb.WriteString("\n")
+		}
+		sb.WriteString("\n")
+	}
+
+	manualIdx := len(m.pickerDevices)
+	manCursor := "  "
+	if m.pickerIndex == manualIdx {
+		manCursor = cursorPrefix
+	}
+	manRow := fmt.Sprintf("%s✍️  Manual MAC address entry...", manCursor)
+	if m.pickerIndex == manualIdx {
+		sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(ColorYellow).Render(manRow))
+	} else {
+		sb.WriteString(SubtitleStyle.Render(manRow))
+	}
+
+	sb.WriteString("\n\n")
+	sb.WriteString(HelpStyle.Render("[↑/↓]: Navigate • [Enter]: Select & Register • [e]: Edit name • [m]: Manual • [r]: Refresh • [Esc]: Back"))
 	return FocusCardStyle.Width(m.cardWidth()).Render(sb.String())
 }
 
@@ -356,8 +452,12 @@ func (m Model) renderDevicesList() string {
 			}
 
 			activeBadge := ""
-			if dev.Address == m.cfg.TargetAddress {
+			isTarget := strings.EqualFold(dev.Address, m.cfg.TargetAddress)
+			isLiveConnected := m.status.Connected && (strings.EqualFold(dev.Address, m.status.Address) || isTarget)
+			if isLiveConnected {
 				activeBadge = BadgeConnected.Render()
+			} else if isTarget {
+				activeBadge = BadgeSelected.Render()
 			}
 
 			nameStr := lipgloss.NewStyle().Bold(true).Render(padRight(truncate(dev.Name, 20), 20))
@@ -449,13 +549,11 @@ func (m Model) renderComboCountdown() string {
 		}
 	}
 
-	emoji := "⚡"
+	osTag := "[" + combos.OSShortTag("") + "]"
 	name := "Combo Sequence"
 	desc := ""
 	if m.execCombo != nil {
-		if m.execCombo.Emoji != "" {
-			emoji = m.execCombo.Emoji
-		}
+		osTag = m.execCombo.Badge()
 		if m.execCombo.Name != "" {
 			name = m.execCombo.Name
 		}
@@ -484,7 +582,7 @@ func (m Model) renderComboCountdown() string {
 
 	content := fmt.Sprintf(
 		"%s %s\n\n%s\n\n%s\n\n%s\nRemaining: %.1fs\n\n%s",
-		emoji,
+		osTag,
 		TitleStyle.Render(name),
 		SubtitleStyle.Render(desc),
 		lipgloss.NewStyle().Foreground(ColorCyan).Bold(true).Render(stepInfo),
