@@ -191,7 +191,7 @@ Example output:
   "payloads_count": 3,
   "target_address": "38:FC:98:E8:E3:87",
   "target_laptop": "LP-TZD-0X114650",
-  "version": "1.0.0"
+  "version": "0.1.0"
 }
 ```
 

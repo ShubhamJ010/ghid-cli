@@ -72,7 +72,7 @@ func (m Model) renderBanner() string {
 		Foreground(ColorBgDark).
 		Background(ColorMagenta).
 		Padding(0, 1).
-		Render("v1.0.0")
+		Render("v0.1.0")
 
 	tagline := SubtitleStyle.Render("Android Bluetooth HID Automation Gateway")
 	return fmt.Sprintf("%s %s\n%s\n", title, badge, tagline)

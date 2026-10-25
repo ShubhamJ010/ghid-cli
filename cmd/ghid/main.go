@@ -6,7 +6,7 @@ import (
 	"github.com/ghost-hid/ghid/internal/cli"
 )
 
-const Version = "1.0.0"
+const Version = "0.1.0"
 
 func main() {
 	app := cli.NewApp(Version)

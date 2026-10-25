@@ -51,7 +51,7 @@ Runs a complete hardware, transport, and credentials health check.
 #### Response
 ```json
 {
-  "version": "1.0.0",
+  "version": "0.1.0",
   "adb_path": "/opt/homebrew/bin/adb",
   "adb_available": true,
   "device_connected": true,
