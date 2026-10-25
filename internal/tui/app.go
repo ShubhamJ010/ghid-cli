@@ -260,15 +260,7 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		m.spinner.Tick,
 		m.statusTick(),
-		func() tea.Msg {
-			if m.manager != nil {
-				devs, err := m.manager.GetDevices()
-				if err == nil && len(devs) > 0 {
-					return &devs[0]
-				}
-			}
-			return nil
-		},
+		refreshDeviceCmd(m.manager),
 	)
 }
 
@@ -368,6 +360,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.deviceModel == "" {
 				m.deviceModel = m.manager.GetDeviceModel()
 			}
+		}
+		// Re-attach when the phone appears after launch, or when a stale ADB serial
+		// stops answering (wireless port change, transport drop).
+		if m.device == nil || m.status.State == "OFFLINE" {
+			cmds = append(cmds, refreshDeviceCmd(m.manager))
 		}
 		cmds = append(cmds, m.statusTick())
 
@@ -1349,6 +1346,21 @@ func (m Model) updateLoginPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.passInput, cmd = m.passInput.Update(msg)
 	}
 	return m, cmd
+}
+
+// refreshDeviceCmd re-attaches the ADB link and reports the device so the dashboard
+// never stays stuck on "waiting for adb link" after the phone connects.
+func refreshDeviceCmd(mgr *adb.Manager) tea.Cmd {
+	return func() tea.Msg {
+		if mgr == nil {
+			return nil
+		}
+		dev, err := mgr.RediscoverDevice()
+		if err != nil || dev == nil {
+			return nil
+		}
+		return dev
+	}
 }
 
 func fetchBondedDevicesCmd(mgr *adb.Manager) tea.Cmd {

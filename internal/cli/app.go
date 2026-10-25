@@ -223,6 +223,12 @@ func (a *App) runInteractive(cfg config.Config, serial string) int {
 		fmt.Fprintf(a.Stderr, "Warning: %v\n", err)
 	}
 
+	// Pin the ADB serial up front when a phone is already attached. The TUI keeps
+	// retrying on its own when the link appears later.
+	if mgr != nil {
+		_, _ = mgr.SelectDevice()
+	}
+
 	if a.InteractiveFn != nil {
 		if err := a.InteractiveFn(mgr, cfg); err != nil {
 			fmt.Fprintf(a.Stderr, "Interactive error: %v\n", err)
