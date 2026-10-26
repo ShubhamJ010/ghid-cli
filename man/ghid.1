@@ -166,6 +166,36 @@ triggering S3/Modern Standby at the kernel level.
 .B type \fItext...\fR
 Type arbitrary string arguments through virtual keyboard.
 .TP
+.B click \fR[\fIleft\fR|\fIright\fR|\fImiddle\fR|\fIdouble\fR] [\fB\-b\fR, \fB\-\-button\fR \fIb\fR] [\fB\-d\fR, \fB\-\-double\fR] [\fB\-c\fR, \fB\-\-count\fR \fIn\fR] [\fB\-\-json\fR]
+Dispatch an in-place mouse click at the cursor's current resting position on the target screen.
+.PP
+.RS 4
+\fBArchitectural Note for AI Agents and Headless Automation:\fR
+GhostHID operates strictly as a hardware-layer Bluetooth Human Interface Device peripheral.
+It does \fBnot\fR possess host screen resolution, window bounds, display geometry, or absolute pointer coordinate awareness.
+\fBNo pointer coordinates or cursor movement\fR (\fImove x, y\fR / relative \fIdx, dy\fR) are supported.
+Clicks occur strictly wherever the host system's cursor currently happens to be resting on screen.
+To interact with specific UI elements, autonomous agents should leverage keyboard-driven navigation (such as Tab cycling, Windows/Cmd application launcher shortcuts, directional arrows, or accelerated hotkeys), or utilize host-side visual grounding to confirm resting cursor alignment prior to clicking.
+.PP
+Arguments & Options:
+.br
+\fBleft\fR (default) \- Primary mouse button click (HID usage bit 0, byte value 0x01).
+.br
+\fBright\fR \- Secondary mouse button / context menu click (HID usage bit 1, byte value 0x02).
+.br
+\fBmiddle\fR \- Middle mouse button / scroll wheel click (HID usage bit 2, byte value 0x04).
+.br
+\fBdouble\fR or \fB\-\-double\fR \- Dispatches a native double-click (two real press/release cycles separated by 90ms).
+.br
+\fB\-\-count\fR \fIn\fR \- Number of consecutive clicks to dispatch (e.g. \fI\-\-count 2\fR or \fI\-c 3\fR).
+.br
+\fB\-\-json\fR \- Emits structured JSON output with report ID, raw bytes, button mask, and contextual agent metadata.
+.RE
+.TP
+.B mouse \fR[\fIclick-left\fR|\fIclick-right\fR|\fIclick-middle\fR|\fIdouble-click\fR|\fIscroll-up\fR|\fIscroll-down\fR] [\fB\-\-json\fR]
+Direct top-level mouse gesture dispatcher. Supports clicks and vertical scroll increments without cursor translation.
+.TP
+.TP
 .B combo \fR[\fIkeys\fR | \fBlist\fR | \fBsave\fR | \fBsend\fR | \fBdelete\fR | \fBmouse\fR]
 With no arguments, opens the interactive Windows Combo Studio: saved combos
 are listed (or an empty-state card is shown), \fBEnter\fR sends the selected

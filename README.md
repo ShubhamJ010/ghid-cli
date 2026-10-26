@@ -269,6 +269,33 @@ ghid quick --raw "01000000"         # 4 bytes -> Report ID 2 (Mouse: Left Click)
 ghid quick --raw "08000f0000000000" # 8 bytes -> Report ID 1 (Keyboard: Win/Cmd + L)
 ```
 
+### In-Place Mouse Clicking (`click`)
+GhostHID provides a dedicated top-level `click` command optimized for autonomous AI agents and automated workflows:
+
+> [!NOTE]
+> **No pointer coordinates or cursor movement** (`move x, y` / relative `dx, dy`). GhostHID operates at the USB HID hardware peripheral layer without knowledge of screen geometry or cursor coordinates. `ghid click` clicks wherever the target system's cursor is currently resting on screen.
+
+```bash
+# In-place clicking at resting cursor position
+ghid click                          # Default left click
+ghid click left                     # Explicit primary click
+ghid click right                    # Right click (context menu)
+ghid click middle                   # Middle click / scroll-wheel button
+ghid click double                   # Double-click (native 2-cycle press/release)
+ghid click --double                 # Double-click via flag
+ghid click --count 3                # Consecutive clicks
+
+# Structured machine-readable JSON output for AI agents
+ghid click --json
+ghid click right --json
+ghid click --double --json
+
+# Top-level mouse gesture dispatcher
+ghid mouse click-left
+ghid mouse scroll-up
+ghid mouse scroll-down
+```
+
 ### Combo Macros and Mouse Gestures (`combo`)
 ```bash
 # One-shot keyboard combos

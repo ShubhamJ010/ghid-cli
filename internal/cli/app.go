@@ -219,6 +219,24 @@ func (a *App) Run(args []string) int {
 	case "man":
 		return a.handleMan()
 
+	case "click":
+		return a.handleClick(serial, cmdArgs, jsonOutput)
+
+	case "click-left", "left-click":
+		return a.handleClick(serial, append([]string{"left"}, cmdArgs...), jsonOutput)
+
+	case "click-right", "right-click":
+		return a.handleClick(serial, append([]string{"right"}, cmdArgs...), jsonOutput)
+
+	case "click-middle", "middle-click":
+		return a.handleClick(serial, append([]string{"middle"}, cmdArgs...), jsonOutput)
+
+	case "double-click", "doubleclick":
+		return a.handleClick(serial, append([]string{"double"}, cmdArgs...), jsonOutput)
+
+	case "mouse":
+		return a.handleMouse(serial, cmdArgs, jsonOutput)
+
 	case "raw":
 		return a.handleRaw(serial, cmdArgs, jsonOutput)
 
@@ -1152,7 +1170,9 @@ func (a *App) handleComboSchema(store *combos.Store, jsonOutput bool) int {
 		"mod_note":           "The 'mod' modifier maps dynamically to Cmd on macOS, and Ctrl on Windows/Linux.",
 		"payload_note":       "Secure payload values live in the macOS Keychain and never cross to Android; pushed entries carry a scrubbed value (ADR-009). Create phone-only secrets on the phone.",
 		"example":            "user{Tab}{PASSWORD}{Enter}{500ms}{mod+s}",
+		"mouse_note":         "No pointer coordinates or cursor movement (move x, y / relative dx, dy) are supported. GhostHID clicks wherever the cursor currently rests on the target screen.",
 		"commands": map[string]string{
+			"click":    "ghid click [left|right|middle|double] [--double] [--count <n>] --json (clicks at resting cursor position; no coordinates)",
 			"list":     "ghid combo list --json",
 			"show":     "ghid combo show \"Name\" --json",
 			"fav":      "ghid combo fav <name> --json",
@@ -2021,6 +2041,213 @@ func (a *App) dispatchMouse(serial, action string, jsonOutput bool) int {
 	return 0
 }
 
+func (a *App) clickError(jsonOutput bool, format string, args ...interface{}) int {
+	message := fmt.Sprintf(format, args...)
+	if jsonOutput {
+		writeJSONIndent(a.Stdout, map[string]interface{}{
+			"status": "error",
+			"error":  message,
+		})
+	} else {
+		fmt.Fprintf(a.Stderr, "Error: %s\n", message)
+	}
+	return 1
+}
+
+func (a *App) printClickHelp() {
+	fmt.Fprintln(a.Stdout, `GhostHID Click - Mouse Button Dispatcher
+
+Usage:
+  ghid click [left|right|middle|double] [flags]
+
+Buttons:
+  left              Primary click (default)
+  right             Secondary / context menu click
+  middle            Middle mouse button / wheel click
+  double            Double left-click (native 2-cycle press/release)
+
+Flags:
+  -b, --button <b>  Select button: left, right, middle
+  -d, --double      Double-click (equivalent to count=2 on left button)
+  -c, --count <n>   Number of clicks to dispatch (default: 1)
+  --json            Emit machine-readable JSON output (for AI agents & scripts)
+  -h, --help        Show this help message
+
+Important Architectural Notice for AI Agents:
+  No pointer coordinates or cursor movement (move x, y / relative dx, dy) are supported.
+  GhostHID operates strictly at the USB HID hardware layer as a Bluetooth peripheral.
+  It has no awareness of host screen resolution, window bounds, or cursor coordinates.
+  Clicks are dispatched wherever the cursor currently happens to be resting on screen.
+  Use keyboard navigation (Tab, arrow keys, shortcuts, search) to reach target elements.`)
+}
+
+func (a *App) handleClick(serial string, args []string, jsonOutput bool) int {
+	// 1. Check for coordinate or movement attempts
+	if isCoord, detail := hid.IsCoordinateOrMoveAttempt(args); isCoord {
+		if jsonOutput {
+			writeJSONIndent(a.Stdout, map[string]interface{}{
+				"status":                    "error",
+				"error":                     fmt.Sprintf("%s (%s)", hid.NoCoordinatesExplanation, detail),
+				"code":                      "COORDINATES_NOT_SUPPORTED",
+				"coordinates_supported":     false,
+				"cursor_movement_supported": false,
+				"usage":                     "ghid click [left|right|middle|double] [--double] [--count <n>] [--json]",
+			})
+		} else {
+			fmt.Fprintf(a.Stderr, "✖ Error: %s\n", hid.NoCoordinatesExplanation)
+			fmt.Fprintf(a.Stderr, "  Detail: %s\n", detail)
+			fmt.Fprintf(a.Stderr, "  Usage: ghid click [left|right|middle|double] [--double] [--count <n>] [--json]\n")
+		}
+		return 1
+	}
+
+	button := "left"
+	count := 1
+	doubleClick := false
+
+	// Parse flags and positional arguments
+	var positional []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--help" || arg == "-h":
+			a.printClickHelp()
+			return 0
+		case arg == "--double" || arg == "-d":
+			doubleClick = true
+		case arg == "--button" || arg == "-b":
+			if i+1 < len(args) {
+				button = args[i+1]
+				i++
+			}
+		case strings.HasPrefix(arg, "--button="):
+			button = strings.TrimPrefix(arg, "--button=")
+		case arg == "--count" || arg == "-c":
+			if i+1 < len(args) {
+				n, err := strconv.Atoi(args[i+1])
+				if err != nil || n < 1 {
+					return a.clickError(jsonOutput, "invalid click count %q: must be a positive integer", args[i+1])
+				}
+				count = n
+				i++
+			}
+		case strings.HasPrefix(arg, "--count="):
+			n, err := strconv.Atoi(strings.TrimPrefix(arg, "--count="))
+			if err != nil || n < 1 {
+				return a.clickError(jsonOutput, "invalid click count %q: must be a positive integer", arg)
+			}
+			count = n
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return a.clickError(jsonOutput, "unknown flag %q; run 'ghid click --help'", arg)
+			}
+			positional = append(positional, arg)
+		}
+	}
+
+	if len(positional) > 1 {
+		return a.clickError(jsonOutput, "too many arguments %v; usage: ghid click [left|right|middle|double]", positional)
+	}
+	if len(positional) == 1 {
+		button = positional[0]
+	}
+
+	normButton, isDouble, err := hid.NormalizeClickButton(button)
+	if err != nil {
+		return a.clickError(jsonOutput, "%s", err.Error())
+	}
+	if isDouble {
+		doubleClick = true
+	}
+	if doubleClick && count == 1 {
+		count = 2
+	}
+
+	gw, err := a.GatewayFactory(serial)
+	if err != nil {
+		if jsonOutput {
+			writeJSONIndent(a.Stdout, map[string]interface{}{
+				"status": "error",
+				"error":  err.Error(),
+			})
+		} else {
+			fmt.Fprintf(a.Stderr, "Error: %v\n", err)
+		}
+		return 1
+	}
+
+	if err := gw.Click(normButton, count); err != nil {
+		if jsonOutput {
+			writeJSONIndent(a.Stdout, map[string]interface{}{
+				"status": "error",
+				"error":  fmt.Sprintf("click failed: %v", err),
+			})
+		} else {
+			fmt.Fprintf(a.Stderr, "Error: click failed: %v\n", err)
+		}
+		return 1
+	}
+
+	actionName := "click-" + normButton
+	if count == 2 && normButton == "left" {
+		actionName = "double-click"
+	}
+	reportHex := hid.MouseReportHex(normButton)
+
+	if jsonOutput {
+		out := map[string]interface{}{
+			"status":                "success",
+			"command":               "click",
+			"button":                normButton,
+			"clicks":                count,
+			"action":                actionName,
+			"report_id":             hid.ReportIDMouse,
+			"report_hex":            reportHex,
+			"coordinates_supported": false,
+			"cursor_context":        "resting_position",
+			"note":                  "Clicked at resting cursor position. No pointer coordinates or cursor movement (move x, y / relative dx, dy) are supported by GhostHID.",
+		}
+		writeJSONIndent(a.Stdout, out)
+	} else {
+		if count == 2 && normButton == "left" {
+			fmt.Fprintln(a.Stdout, "✔ Dispatched double-click at resting cursor position (no coordinates)")
+		} else if count > 1 {
+			fmt.Fprintf(a.Stdout, "✔ Dispatched %s click x%d at resting cursor position (no coordinates)\n", normButton, count)
+		} else {
+			fmt.Fprintf(a.Stdout, "✔ Dispatched %s click at resting cursor position (no coordinates)\n", normButton)
+		}
+	}
+	return 0
+}
+
+func (a *App) handleMouse(serial string, args []string, jsonOutput bool) int {
+	if len(args) == 0 {
+		return a.handleClick(serial, nil, jsonOutput)
+	}
+	// Check for coordinates attempt
+	if isCoord, _ := hid.IsCoordinateOrMoveAttempt(args); isCoord {
+		return a.handleClick(serial, args, jsonOutput)
+	}
+	first := strings.ToLower(args[0])
+	switch first {
+	case "--help", "-h":
+		a.printClickHelp()
+		return 0
+	case "click":
+		return a.handleClick(serial, args[1:], jsonOutput)
+	case "click-left", "left-click", "click-right", "right-click", "click-middle", "middle-click", "double-click", "doubleclick":
+		return a.handleClick(serial, args, jsonOutput)
+	case "scroll-up", "scrollup", "wheel-up", "scroll-down", "scrolldown", "wheel-down":
+		return a.dispatchMouse(serial, first, jsonOutput)
+	default:
+		// Attempt click or mouse action
+		if _, _, err := hid.NormalizeClickButton(first); err == nil {
+			return a.handleClick(serial, args, jsonOutput)
+		}
+		return a.dispatchMouse(serial, first, jsonOutput)
+	}
+}
+
 func (a *App) dispatchCombo(serial, name, sequence string, jsonOutput bool) int {
 	gw, err := a.GatewayFactory(serial)
 	if err != nil {
@@ -2552,6 +2779,9 @@ Commands:
   combo delete <name> [-f]      Delete a combo (--json skips confirmation)
   combo <sequence>  Send a one-shot sequence (e.g. '{mod+d}', '{mod+s}'); add --dry-run
   combo mouse       Send a mouse gesture (click-left, scroll-up, double-click)
+  click [button]    Click mouse at resting cursor position (left, right, middle, double)
+                    (--double, --count <n>, --json; no pointer coordinates or movement)
+  mouse <action>    Send mouse gesture or click (click-left, scroll-up, double-click)
   raw <hex>         Send raw HID report with auto-inferred Report ID (1B, 2B, 4B, 8B)
   sync [--pull|--push] Bi-directional sync with Android device (pull, push, restart app, reconnect)
   quick <text...>   Quick send keystrokes (default: type; use --raw for hex HID report)
