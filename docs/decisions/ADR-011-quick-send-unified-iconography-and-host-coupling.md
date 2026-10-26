@@ -16,7 +16,7 @@ In previous iterations of the Quick Send modal sheet:
 
 1. **Merged Single Icon Badge**:
    - Eliminated the redundant OS pill and the lightning bolt icon in `QuickSendSheetHeader`.
-   - Merged both into a single 44dp 4-petal clover badge (`MaterialShapes.ShapeClover4`) on the right side of the header.
+   - Merged both into a single 44dp 4-petal clover badge (`ExpressiveShapes.Clover4Leaf`) on the right side of the header.
    - When a device is selected (`targetDevice != null`), the badge displays the canonical host OS vector glyph via `OsGlyph(os = currentOs)` (`ic_os_apple`, `ic_os_windows`, `ic_os_linux`).
    - When no device is selected (`targetDevice == null`), the badge displays the Ghost mascot icon (`painterResource(R.drawable.ic_notification_ghost)`).
    - Applied the identical clover badge and device-driven icon to `QuickSendCollapsedButton` when the composer dock is scrolled down.
