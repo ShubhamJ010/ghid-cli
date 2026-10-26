@@ -1534,7 +1534,7 @@ func (a *App) handleComboDryRun(name, sequence, osName string, jsonOutput bool) 
 			out.Type = "payload"
 			out.Payload = step.Payload
 			payload, ok, _ := pStore.Get(step.Payload)
-			value, resolveErr := pStore.Resolver()(step.Payload)
+			value, isRaw, resolveErr := pStore.Resolver()(step.Payload)
 			if !ok || resolveErr != nil {
 				out.ValuePreview = "(unresolved)"
 				break
@@ -1542,15 +1542,26 @@ func (a *App) handleComboDryRun(name, sequence, osName string, jsonOutput bool) 
 			out.PayloadPresent = true
 			out.PayloadType = payload.EffectiveType()
 			out.PayloadSecure = payload.Secure
-			clean := strings.ReplaceAll(strings.TrimSpace(value), " ", "")
-			if rawBytes, rawErr := hid.ValidateRaw(clean); rawErr == nil {
-				out.Type = "raw"
-				out.ReportID, _ = hid.ReportIDForLength(len(rawBytes))
-				if payload.Secure {
-					out.ValuePreview = "•••••••• (secure raw report, hidden)"
+			cleanVal := strings.TrimSpace(value)
+			isExplicitRaw := strings.HasPrefix(strings.ToLower(cleanVal), "raw:")
+			if isRaw || isExplicitRaw {
+				rawHex := cleanVal
+				if isExplicitRaw {
+					rawHex = strings.TrimSpace(cleanVal[4:])
+				}
+				rawHex = strings.ReplaceAll(rawHex, " ", "")
+				if rawBytes, rawErr := hid.ValidateRaw(rawHex); rawErr == nil {
+					out.Type = "raw"
+					out.ReportID, _ = hid.ReportIDForLength(len(rawBytes))
+					if payload.Secure {
+						out.ValuePreview = "•••••••• (secure raw report, hidden)"
+					} else {
+						out.RawHex = rawHex
+						out.ValuePreview = rawHex
+					}
 				} else {
-					out.RawHex = clean
-					out.ValuePreview = clean
+					out.Type = "raw"
+					out.ValuePreview = fmt.Sprintf("(invalid raw hex: %v)", rawErr)
 				}
 			} else {
 				out.Type = "text"
