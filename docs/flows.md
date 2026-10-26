@@ -77,28 +77,34 @@ Timings are configurable in `~/.config/ghid/config.json`:
 
 ## 2. Combo and Action Engine Execution
 
-The combo engine parses chained action strings containing keyboard chords, text typing steps, and mouse gestures separated by timed transitions (`->{seconds}`).
+The combo engine parses unified bracket sequence strings containing keyboard chords `{mod+s}`, timed delays `{700ms}`, literal typed text, and dynamic payloads `{PASSWORD}` / `{WIN_SLEEP}`.
 
 ```mermaid
 flowchart TD
-    Input([Input String e.g. 'win+s ->{0.7} type:rustdesk ->{0.4} enter']) --> Split[Split string on '->']
+    Input([Input String e.g. '{win+s}{700ms}rustdesk{400ms}{enter}']) --> Parse[Tokenize Brackets & Literal Runs]
     
-    subgraph StepParsing["Per-Step Parsing"]
-        Step[Step Segment] --> CheckType{Prefix 'type:' or 'text:'?}
-        CheckType -->|Yes| ParseText[Extract literal string]
-        CheckType -->|No| CheckMouse{Matches Mouse Alias?}
-        CheckMouse -->|Yes| ParseMouse[Map to MouseAction: buttons, wheel]
-        CheckMouse -->|No| ParseKeys[Split on '+' and validate Windows tokens]
+    subgraph StepParsing["Per-Token Parsing"]
+        Token[Braced Token or Literal Run] --> CheckBrace{Enclosed in {...}?}
+        CheckBrace -->|No| ParseLiteral[Emit TypeText Step]
+        CheckBrace -->|Yes| CheckDelay{Delay unit e.g. 500ms, 1s?}
+        CheckDelay -->|Yes| ParseDelay[Emit Delay Step]
+        CheckDelay -->|No| CheckPayload{Registered Payload ID?}
+        CheckPayload -->|Yes| ResolvePayload[Substitute Payload: Type or RawReport]
+        CheckPayload -->|No| CheckMouse{Matches Mouse Gesture?}
+        CheckMouse -->|Yes| ParseMouse[Emit Mouse Gesture Step]
+        CheckMouse -->|No| ParseChord[Split on '+' and resolve Key Codes]
         
-        ParseText --> StepObj[Construct ComboStep]
+        ParseLiteral --> StepObj[Construct Sequence Step]
+        ParseDelay --> StepObj
+        ResolvePayload --> StepObj
         ParseMouse --> StepObj
-        ParseKeys --> StepObj
+        ParseChord --> StepObj
     end
 
-    Split --> Step
-    StepObj --> ValidateGrammar{Validate Step Sequence}
+    Parse --> Token
+    StepObj --> ValidateGrammar{Validate Steps}
     
-    ValidateGrammar -->|Invalid Token or Alias| ReturnErr[Reject: Return Validation Error]
+    ValidateGrammar -->|Invalid Token or Syntax| ReturnErr[Reject: Return Validation Error]
     ValidateGrammar -->|Valid| DispatchLoop[Iterate and Execute Steps]
 
     subgraph Execution["Execution Loop"]
@@ -196,10 +202,9 @@ sequenceDiagram
     CLI->>ADB: Broadcast ACTION_CMD (raw "02")
     ADB->>Service: sendRawReport([0x02]) -> System Control (Report 3)
     Service->>Target: ACPI System Sleep (0x82)
-    CLI->>CLI: Sleep(60ms settle)
-    CLI->>ADB: Broadcast ACTION_CMD (raw "00")
-    ADB->>Service: sendRawReport([0x00]) -> System Control (Report 3)
-    Service->>Target: ACPI Sleep Release (0x00)
+    Note over Service: Auto-release momentary report
+    Service->>Service: Sleep(60ms auto-release)
+    Service->>Target: ACPI Sleep Release (0x00, Report 3 auto-release)
     
     Note over CLI: Operator Feedback Countdown
     loop Countdown 5 down to 1
@@ -324,26 +329,26 @@ sequenceDiagram
 
 ---
 
-## 7. Snippet Variable Resolution & Intercept Flow
+## 7. Payload Reference Resolution & Intercept Flow
 
-When executing macros containing dynamic variable references (e.g. `$USERNAME`, `$PASSWORD`), the execution engine resolves tokens at runtime through the registered `SnippetStore`. If referenced snippets are unpopulated, the interactive dashboard prompts the user immediately instead of failing.
+When executing sequences containing dynamic payload references (e.g. `{USERNAME}`, `{PASSWORD}`, `{WIN_SLEEP}`), the execution engine resolves tokens at runtime through the registered `PayloadStore`. If referenced credentials are unpopulated, the interactive dashboard prompts the user immediately instead of failing.
 
 ```mermaid
 flowchart TD
-    Trigger([Trigger Combo e.g. Login Macro]) --> ExtractVars[hid.ExtractVariables: Scan for $VAR and ${VAR}]
-    ExtractVars --> CheckVars{Any variables in combo?}
+    Trigger([Trigger Combo e.g. Login Macro]) --> ExtractVars[hid.ExtractPayloads: Scan for {PAYLOAD}]
+    ExtractVars --> CheckVars{Any payloads in combo?}
 
     CheckVars -->|No| ExecDirect[Execute Keystrokes & Gestures Directly]
-    CheckVars -->|Yes| QueryStore[Query snippets.Store for each variable]
+    CheckVars -->|Yes| QueryStore[Query payloads.Store for each payload]
 
-    QueryStore --> CheckValues{All variables present & non-empty?}
+    QueryStore --> CheckValues{All payloads present & non-empty?}
 
-    CheckValues -->|No (Empty Snippets)| PromptUser[Intercept: Transition to StateLoginPrompt]
+    CheckValues -->|No (Empty Payloads)| PromptUser[Intercept: Transition to StateLoginPrompt]
     PromptUser --> CaptureInput[User fills Username & Password in TUI]
-    CaptureInput --> SaveSnippets[Save text & store secret in Keychain]
-    SaveSnippets --> ResumeCombo[Auto-resume and re-trigger pending combo]
+    CaptureInput --> SavePayloads[Save text & store secret in Keychain]
+    SavePayloads --> ResumeCombo[Auto-resume and re-trigger pending combo]
 
-    CheckValues -->|Yes| Interpolate[hid.SubstituteVariables: Replace tokens with values]
+    CheckValues -->|Yes| Resolve[hid.PayloadResolver: Resolve text or raw report]
     ResumeCombo --> Interpolate
     Interpolate --> DispatchADB[adb.Manager.SendComboWithResolver]
     DispatchADB --> SendHID[Phone injects resolved HID keystrokes into host]
@@ -353,14 +358,14 @@ flowchart TD
     classDef exec fill:#EBF5FB,stroke:#3498DB,stroke-width:2px,color:#1B4F72
 
     class Trigger,ExtractVars,CheckVars,QueryStore,Interpolate,DispatchADB,SendHID normal
-    class PromptUser,CaptureInput,SaveSnippets,ResumeCombo prompt
+    class PromptUser,CaptureInput,SavePayloads,ResumeCombo prompt
     class ExecDirect exec
 ```
 
 
 ## 8. Bi-directional Synchronization and Reconnect Flow (Android SSOT)
 
-The synchronization pipeline enforces the Android smartphone as the Single Source of Truth (SSOT). Remote phone combos and snippets are pulled into the local cache on startup. Local mutations automatically push back to Android, restart the application to invalidate in-memory repositories, and restore the active Bluetooth link.
+The synchronization pipeline enforces the Android smartphone as the Single Source of Truth (SSOT). Remote phone combos and payloads are pulled into the local cache on startup. Local mutations automatically push back to Android, restart the application to invalidate in-memory repositories, and restore the active Bluetooth link.
 
 ```mermaid
 sequenceDiagram
@@ -375,17 +380,17 @@ sequenceDiagram
     participant Target as Target Computer (Bluetooth)
 
     Note over CLI,PhoneDisk: Phase 1: Pull from SSOT (Android)
-    CLI->>ADB: shell cat combos.json & snippets.json
+    CLI->>ADB: shell cat combos.json & payloads.json
     ADB->>PhoneDisk: Read JSON files
     PhoneDisk-->>CLI: Return remote JSON
-    CLI->>Keychain: Resolve local secrets for secure snippets
+    CLI->>Keychain: Resolve local secrets for secure payloads
     CLI->>Local: Overwrite local stores (SaveAll)
 
     opt When Push or Mutation Triggered
         Note over CLI,PhoneDisk: Phase 2: Push Sanitized State
-        CLI->>Local: Load active combos & snippets
-        CLI->>CLI: Sanitize snippets (strip secrets: Value = "")
-        CLI->>ADB: push combos.json & snippets.json
+        CLI->>Local: Load active combos & payloads
+        CLI->>CLI: Sanitize payloads (strip secrets: Value = "")
+        CLI->>ADB: push combos.json & payloads.json
         ADB->>PhoneDisk: Write updated JSON files
 
         Note over CLI,Target: Phase 3: Reload Memory & Restore Connection

@@ -97,7 +97,7 @@ Byte 0: System Control Bitfield
 Examples:
 - Instant System Sleep press: `02`
 - Release: `00`
-- Complete Sleep Sequence: `raw:02 ->{0.06} raw:00`
+- Complete Sleep Sequence: Single-shot `02` (service automatically dispatches zero-release `00` after 60ms)
 
 #### Consumer Control Input Report (Report ID 4)
 Total payload size: 2 bytes (16-bit little-endian HID usage code). Usage Page 0x0C (Consumer), Usage 0x01 (Consumer Control).
@@ -107,12 +107,12 @@ Bytes 0-1: 16-bit Consumer Usage Code (Little-Endian)
 ```
 
 Examples:
-- Play/Pause toggle: `raw:cd00 ->{0.06} raw:0000` (Usage 0x00CD)
-- Scan Next Track: `raw:b500 ->{0.06} raw:0000` (Usage 0x00B5)
-- Scan Previous Track: `raw:b600 ->{0.06} raw:0000` (Usage 0x00B6)
-- Volume Increment: `raw:e900 ->{0.06} raw:0000` (Usage 0x00E9)
-- Volume Decrement: `raw:ea00 ->{0.06} raw:0000` (Usage 0x00EA)
-- Mute: `raw:e200 ->{0.06} raw:0000` (Usage 0x00E2)
+- Play/Pause toggle: `cd00` (service automatically dispatches zero-release `0000` after 60ms) (Usage 0x00CD)
+- Scan Next Track: `b500` (auto-released after 60ms) (Usage 0x00B5)
+- Scan Previous Track: `b600` (auto-released after 60ms) (Usage 0x00B6)
+- Volume Increment: `e900` (auto-released after 60ms) (Usage 0x00E9)
+- Volume Decrement: `ea00` (auto-released after 60ms) (Usage 0x00EA)
+- Mute: `e200` (auto-released after 60ms) (Usage 0x00E2)
 
 #### Auto-Inferred Length-Based Raw Report Routing
 Raw HID report payloads automatically infer the target Report ID from their byte length:
@@ -250,12 +250,10 @@ Types an ASCII string with automatic key down and key up delays.
 - Behavior: Iterates through characters, maps to modifier + keycode, sleeps 25 ms down, sleeps 25 ms up.
 
 #### `combo`
-Executes a keyboard chord, or a full `step ->{seconds} step` sequence.
-- Extras: `--es keys "<modifiers+keys>"`
-- Example: `--es keys "ctrl+shift+esc"`
-- Behavior: Sends down report, sleeps 60 ms, sends release report. The host CLI parses chained
-  sequences itself and dispatches each step as its own broadcast, applying the delays locally;
-  the phone-side parser exists for the on-device Combo Studio.
+Executes a keyboard chord or full unified bracket sequence DSL (e.g. `{win+r}{500ms}cmd{Enter}`).
+- Extras: `--es keys "<sequence>"`
+- Example: `--es keys "{ctrl+shift+esc}"` or `--es keys "{mod+space}{600ms}terminal{Enter}"`
+- Behavior: Parses unified sequence steps (chords, delays, literal text, payload substitutions). For chords, sends key down report, sleeps 60 ms, and sends all-zero release report.
 
 #### `mouse`
 Transmits a pointer gesture using Report ID 2.

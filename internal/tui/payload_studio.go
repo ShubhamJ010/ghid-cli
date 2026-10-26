@@ -7,58 +7,58 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/ghost-hid/ghid/internal/snippets"
+	"github.com/ghost-hid/ghid/internal/payloads"
 )
 
-type snipStudioMode int
+type payloadStudioMode int
 
 const (
-	snipList snipStudioMode = iota
-	snipCreate
-	snipConfirmDelete
+	payloadList payloadStudioMode = iota
+	payloadCreate
+	payloadConfirmDelete
 )
 
-// SnippetStudioModel allows viewing, creating, editing, and deleting snippets
-// ($USERNAME, $PASSWORD, and any custom text or secrets).
-type SnippetStudioModel struct {
-	store      *snippets.Store
-	list       []snippets.Snippet
-	index      int
-	focus      int // 0 = list, 1 = NEW, 2 = EDIT, 3 = DELETE
-	mode       snipStudioMode
-	formFocus  int // 0 = name, 1 = value, 2 = secure toggle, 3 = save
-	nameInput  textinput.Model
-	valueInput textinput.Model
-	snipType   string // "type" or "raw"
-	isSecure   bool
-	editing    string // non-empty if editing existing snippet
-	notice     string
-	isError    bool
-	pendingDel *snippets.Snippet
-	width      int
-	height     int
-	quitting   bool
+// PayloadStudioModel allows viewing, creating, editing, and deleting payloads
+// ({USERNAME}, {PASSWORD}, and any custom text or secrets).
+type PayloadStudioModel struct {
+	store       *payloads.Store
+	list        []payloads.Payload
+	index       int
+	focus       int // 0 = list, 1 = NEW, 2 = EDIT, 3 = DELETE
+	mode        payloadStudioMode
+	formFocus   int // 0 = name, 1 = value, 2 = type toggle, 3 = secure toggle, 4 = save
+	nameInput   textinput.Model
+	valueInput  textinput.Model
+	payloadType string // "type" or "raw"
+	isSecure    bool
+	editing     string // non-empty if editing existing payload
+	notice      string
+	isError     bool
+	pendingDel  *payloads.Payload
+	width       int
+	height      int
+	quitting    bool
 }
 
-// NewSnippetStudioModel initializes the Snippet Studio.
-func NewSnippetStudioModel(store *snippets.Store) SnippetStudioModel {
+// NewPayloadStudioModel initializes the Payload Studio.
+func NewPayloadStudioModel(store *payloads.Store) PayloadStudioModel {
 	name := textinput.New()
 	name.Placeholder = "e.g. USERNAME, PIN, API_KEY"
 	name.CharLimit = 32
 	name.Width = 36
 
 	val := textinput.New()
-	val.Placeholder = "Snippet text value"
+	val.Placeholder = "Payload text value or raw hex"
 	val.CharLimit = 256
 	val.Width = 36
 
-	var list []snippets.Snippet
+	var list []payloads.Payload
 	var loadErr error
 	if store != nil {
 		list, loadErr = store.List()
 	}
 
-	m := SnippetStudioModel{
+	m := PayloadStudioModel{
 		store:      store,
 		list:       list,
 		nameInput:  name,
@@ -66,17 +66,17 @@ func NewSnippetStudioModel(store *snippets.Store) SnippetStudioModel {
 	}
 
 	if loadErr != nil {
-		m.notice = fmt.Sprintf("Could not load snippets: %v", loadErr)
+		m.notice = fmt.Sprintf("Could not load payloads: %v", loadErr)
 		m.isError = true
 	}
 	return m
 }
 
-func (m SnippetStudioModel) Init() tea.Cmd {
+func (m PayloadStudioModel) Init() tea.Cmd {
 	return nil
 }
 
-func (m SnippetStudioModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m PayloadStudioModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -90,9 +90,9 @@ func (m SnippetStudioModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		switch m.mode {
-		case snipCreate:
+		case payloadCreate:
 			return m.updateCreate(msg)
-		case snipConfirmDelete:
+		case payloadConfirmDelete:
 			return m.updateConfirmDelete(msg)
 		default:
 			return m.updateList(msg)
@@ -101,7 +101,7 @@ func (m SnippetStudioModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m SnippetStudioModel) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m PayloadStudioModel) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
 	switch key {
@@ -148,11 +148,11 @@ func (m SnippetStudioModel) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "n", "a":
-		return m.openCreate(snippets.Snippet{})
+		return m.openCreate(payloads.Payload{})
 
 	case "e", "enter":
 		if m.focus == 1 {
-			return m.openCreate(snippets.Snippet{})
+			return m.openCreate(payloads.Payload{})
 		}
 		if m.focus == 2 || m.focus == 0 {
 			if len(m.list) > 0 && m.index < len(m.list) {
@@ -171,17 +171,17 @@ func (m SnippetStudioModel) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.startDelete()
 
 	case "s":
-		// Toggle secure mode for selected snippet
+		// Toggle secure mode for selected payload
 		if len(m.list) > 0 && m.index < len(m.list) && m.store != nil {
 			target := m.list[m.index]
 			newSecure := !target.Secure
-			_, _ = m.store.Set(target.Name, target.Value, newSecure)
+			_, _ = m.store.Set(target.Name, target.Value, newSecure, target.Type)
 			m.list, _ = m.store.List()
 			status := "plain text"
 			if newSecure {
 				status = "secure (stored in Keychain)"
 			}
-			m.notice = fmt.Sprintf("✔ Snippet %q marked as %s", target.Name, status)
+			m.notice = fmt.Sprintf("✔ Payload {%s} marked as %s", target.Name, status)
 			m.isError = false
 		}
 		return m, nil
@@ -190,24 +190,24 @@ func (m SnippetStudioModel) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m SnippetStudioModel) startDelete() (tea.Model, tea.Cmd) {
+func (m PayloadStudioModel) startDelete() (tea.Model, tea.Cmd) {
 	if len(m.list) == 0 || m.index >= len(m.list) {
 		return m, nil
 	}
-	snip := m.list[m.index]
-	if strings.EqualFold(snip.Name, "username") || strings.EqualFold(snip.Name, "password") || strings.EqualFold(snip.Name, "email") || strings.EqualFold(snip.Name, "sleep_windows") || strings.EqualFold(snip.Name, "play_pause") {
-		m.notice = fmt.Sprintf("✖ Default snippet %q cannot be deleted (clear value instead)", snip.Name)
+	p := m.list[m.index]
+	if strings.EqualFold(p.Name, "username") || strings.EqualFold(p.Name, "password") || strings.EqualFold(p.Name, "email") || strings.EqualFold(p.Name, "WIN_SLEEP") || strings.EqualFold(p.Name, "PLAY_PAUSE") {
+		m.notice = fmt.Sprintf("✖ Default payload {%s} cannot be deleted (clear value instead)", p.Name)
 		m.isError = true
 		return m, nil
 	}
-	m.pendingDel = &snip
-	m.mode = snipConfirmDelete
+	m.pendingDel = &p
+	m.mode = payloadConfirmDelete
 	m.notice = ""
 	return m, nil
 }
 
-func (m SnippetStudioModel) openCreate(existing snippets.Snippet) (tea.Model, tea.Cmd) {
-	m.mode = snipCreate
+func (m PayloadStudioModel) openCreate(existing payloads.Payload) (tea.Model, tea.Cmd) {
+	m.mode = payloadCreate
 	m.editing = existing.Name
 	m.formFocus = 0
 
@@ -220,7 +220,7 @@ func (m SnippetStudioModel) openCreate(existing snippets.Snippet) (tea.Model, te
 	}
 
 	m.valueInput.SetValue(existing.Value)
-	m.snipType = existing.EffectiveType()
+	m.payloadType = existing.EffectiveType()
 	m.isSecure = existing.Secure
 	m.setEchoMode()
 
@@ -235,7 +235,7 @@ func (m SnippetStudioModel) openCreate(existing snippets.Snippet) (tea.Model, te
 	return m, textinput.Blink
 }
 
-func (m *SnippetStudioModel) setEchoMode() {
+func (m *PayloadStudioModel) setEchoMode() {
 	if m.isSecure {
 		m.valueInput.EchoMode = textinput.EchoPassword
 		m.valueInput.EchoCharacter = '•'
@@ -244,17 +244,17 @@ func (m *SnippetStudioModel) setEchoMode() {
 	}
 }
 
-func (m SnippetStudioModel) updateCreate(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m PayloadStudioModel) updateCreate(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
-		m.mode = snipList
+		m.mode = payloadList
 		m.editing = ""
 		m.nameInput.Blur()
 		m.valueInput.Blur()
 		return m, nil
 
 	case "ctrl+s":
-		return m.saveSnippet()
+		return m.savePayload()
 
 	case "tab":
 		m.focusFormField(1)
@@ -266,10 +266,10 @@ func (m SnippetStudioModel) updateCreate(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case " ":
 		if m.formFocus == 2 {
-			if m.snipType == "raw" {
-				m.snipType = "type"
+			if m.payloadType == "raw" {
+				m.payloadType = "type"
 			} else {
-				m.snipType = "raw"
+				m.payloadType = "raw"
 			}
 			return m, nil
 		}
@@ -288,10 +288,10 @@ func (m SnippetStudioModel) updateCreate(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.focusFormField(1)
 			return m, textinput.Blink
 		case 2:
-			if m.snipType == "raw" {
-				m.snipType = "type"
+			if m.payloadType == "raw" {
+				m.payloadType = "type"
 			} else {
-				m.snipType = "raw"
+				m.payloadType = "raw"
 			}
 			return m, nil
 		case 3:
@@ -299,7 +299,7 @@ func (m SnippetStudioModel) updateCreate(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setEchoMode()
 			return m, nil
 		case 4:
-			return m.saveSnippet()
+			return m.savePayload()
 		}
 	}
 
@@ -313,8 +313,7 @@ func (m SnippetStudioModel) updateCreate(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m *SnippetStudioModel) focusFormField(delta int) {
-	// If editing default snippet, name is locked
+func (m *PayloadStudioModel) focusFormField(delta int) {
 	order := []int{0, 1, 2, 3, 4}
 	if m.editing != "" {
 		order = []int{1, 2, 3, 4}
@@ -339,12 +338,12 @@ func (m *SnippetStudioModel) focusFormField(delta int) {
 	}
 }
 
-func (m SnippetStudioModel) saveSnippet() (tea.Model, tea.Cmd) {
+func (m PayloadStudioModel) savePayload() (tea.Model, tea.Cmd) {
 	name := strings.TrimSpace(m.nameInput.Value())
 	if m.editing != "" {
 		name = m.editing
 	}
-	cleanName, err := snippets.ValidateName(name)
+	cleanName, err := payloads.ValidateName(name)
 	if err != nil {
 		m.notice = "✖ " + err.Error()
 		m.isError = true
@@ -355,19 +354,20 @@ func (m SnippetStudioModel) saveSnippet() (tea.Model, tea.Cmd) {
 
 	val := m.valueInput.Value()
 	if m.store != nil {
-		_, err = m.store.Set(cleanName, val, m.isSecure, m.snipType)
+		_, err = m.store.Set(cleanName, val, m.isSecure, m.payloadType)
 		if err != nil {
-			m.notice = fmt.Sprintf("✖ Failed to save snippet: %v", err)
+			m.notice = fmt.Sprintf("✖ Failed to save payload: %v", err)
 			m.isError = true
 			return m, nil
 		}
 		m.list, _ = m.store.List()
 	}
 
-	m.mode = snipList
+	m.mode = payloadList
 	m.editing = ""
-	m.notice = fmt.Sprintf("✔ Snippet %q saved", cleanName)
+	m.notice = fmt.Sprintf("✔ Payload {%s} saved", cleanName)
 	m.isError = false
+
 	for i, s := range m.list {
 		if strings.EqualFold(s.Name, cleanName) {
 			m.index = i
@@ -377,7 +377,7 @@ func (m SnippetStudioModel) saveSnippet() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m SnippetStudioModel) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m PayloadStudioModel) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y", "enter":
 		if m.pendingDel != nil {
@@ -385,25 +385,25 @@ func (m SnippetStudioModel) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.
 			if m.store != nil {
 				_, _, err := m.store.Delete(name)
 				if err != nil {
-					m.notice = fmt.Sprintf("✖ Failed to delete snippet: %v", err)
+					m.notice = fmt.Sprintf("✖ Failed to delete payload: %v", err)
 					m.isError = true
 				} else {
 					m.list, _ = m.store.List()
 					if m.index >= len(m.list) && len(m.list) > 0 {
 						m.index = len(m.list) - 1
 					}
-					m.notice = fmt.Sprintf("✔ Deleted snippet %q", name)
+					m.notice = fmt.Sprintf("✔ Deleted payload {%s}", name)
 					m.isError = false
 				}
 			}
 			m.pendingDel = nil
-			m.mode = snipList
+			m.mode = payloadList
 		}
 		return m, nil
 
 	case "n", "N", "esc", "q":
 		m.pendingDel = nil
-		m.mode = snipList
+		m.mode = payloadList
 		m.notice = "Deletion cancelled."
 		m.isError = false
 		return m, nil
@@ -411,16 +411,16 @@ func (m SnippetStudioModel) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.
 	return m, nil
 }
 
-func (m SnippetStudioModel) cardWidth() int {
+func (m PayloadStudioModel) cardWidth() int {
 	return calculateCardWidth(m.width)
 }
 
-func (m SnippetStudioModel) View() string {
+func (m PayloadStudioModel) View() string {
 	var sb strings.Builder
 
-	sb.WriteString(TitleStyle.Render("📋 SNIPPET STUDIO · Variables & Text Snippets"))
+	sb.WriteString(TitleStyle.Render("📋 PAYLOAD STUDIO · Named Payloads & Secrets"))
 	sb.WriteString("\n")
-	sb.WriteString(SubtitleStyle.Render("Define text and secure variables for combos ($USERNAME, $PASSWORD, $PIN)"))
+	sb.WriteString(SubtitleStyle.Render("Define text and secure payloads for combos ({USERNAME}, {PASSWORD}, {WIN_SLEEP})"))
 	sb.WriteString("\n\n")
 
 	if m.notice != "" {
@@ -433,9 +433,9 @@ func (m SnippetStudioModel) View() string {
 	}
 
 	switch m.mode {
-	case snipCreate:
+	case payloadCreate:
 		sb.WriteString(m.renderCreateForm())
-	case snipConfirmDelete:
+	case payloadConfirmDelete:
 		sb.WriteString(m.renderDeleteConfirm())
 	default:
 		sb.WriteString(m.renderList())
@@ -447,7 +447,7 @@ func (m SnippetStudioModel) View() string {
 	return FocusCardStyle.Width(m.cardWidth()).Render(sb.String())
 }
 
-func (m SnippetStudioModel) renderList() string {
+func (m PayloadStudioModel) renderList() string {
 	var sb strings.Builder
 
 	if len(m.list) == 0 {
@@ -457,13 +457,13 @@ func (m SnippetStudioModel) renderList() string {
 			Padding(1, 3).
 			Background(ColorBgCard).
 			Render(
-				TitleStyle.Render("No snippets found") + "\n\n" +
-					lipgloss.NewStyle().Foreground(ColorFgLight).Bold(true).Render("Press [n] to create your first snippet.") + "\n" +
-					SubtitleStyle.Render("Snippets can be referenced in combos as $NAME or typed directly."))
+				TitleStyle.Render("No payloads found") + "\n\n" +
+					lipgloss.NewStyle().Foreground(ColorFgLight).Bold(true).Render("Press [n] to create your first payload.") + "\n" +
+					SubtitleStyle.Render("Payloads can be referenced in combo sequences as {NAME}."))
 		sb.WriteString(empty)
 		sb.WriteString("\n\n")
 	} else {
-		sb.WriteString(m.renderSnippetTable())
+		sb.WriteString(m.renderPayloadTable())
 		sb.WriteString("\n")
 	}
 
@@ -471,7 +471,7 @@ func (m SnippetStudioModel) renderList() string {
 	return sb.String()
 }
 
-func (m SnippetStudioModel) renderSnippetTable() string {
+func (m PayloadStudioModel) renderPayloadTable() string {
 	cardWidth := m.cardWidth()
 	innerWidth := cardWidth - 6
 
@@ -486,7 +486,7 @@ func (m SnippetStudioModel) renderSnippetTable() string {
 
 	headerPrefix := "  "
 	headerNum := padRight("  #", colNum)
-	headerVar := padRight("VARIABLE", colVar)
+	headerVar := padRight("PAYLOAD", colVar)
 	headerType := padRight("TYPE", colType)
 	headerVal := padRight("VALUE", valWidth)
 	headerSec := padRight("SECURITY", colSec)
@@ -496,9 +496,9 @@ func (m SnippetStudioModel) renderSnippetTable() string {
 	var rows []string
 	rows = append(rows, header)
 	for i, s := range m.list {
-		varName := "$" + strings.ToUpper(s.Name)
+		tokenName := "{" + s.Name + "}"
 		numCol := padRight(fmt.Sprintf("   %-2d", i+1), colNum)
-		varCol := padRight(truncate(varName, colVar), colVar)
+		varCol := padRight(truncate(tokenName, colVar), colVar)
 		typeCol := padRight(strings.ToUpper(s.EffectiveType()), colType)
 		valCol := padRight(truncate(s.MaskedValue(), valWidth), valWidth)
 
@@ -534,7 +534,7 @@ func (m SnippetStudioModel) renderSnippetTable() string {
 	return strings.Join(rows, "\n")
 }
 
-func (m SnippetStudioModel) renderButtons() string {
+func (m PayloadStudioModel) renderButtons() string {
 	labels := []string{"+ NEW", "✎ EDIT", "🗑 DELETE"}
 	buttons := make([]string, 0, len(labels))
 	for i, label := range labels {
@@ -556,16 +556,16 @@ func (m SnippetStudioModel) renderButtons() string {
 	return lipgloss.JoinHorizontal(lipgloss.Center, buttons[0], "  ", buttons[1], "  ", buttons[2])
 }
 
-func (m SnippetStudioModel) renderCreateForm() string {
+func (m PayloadStudioModel) renderCreateForm() string {
 	labelStyle := lipgloss.NewStyle().Foreground(ColorFgMuted).Width(10)
-	nameLabel := labelStyle.Render("Variable")
+	nameLabel := labelStyle.Render("Payload")
 	valLabel := labelStyle.Render("Value")
 
 	nameField := m.nameInput.View()
 	if m.editing != "" {
-		nameField = lipgloss.NewStyle().Foreground(ColorCyan).Bold(true).Render("$" + strings.ToUpper(m.editing) + " (Name locked)")
+		nameField = lipgloss.NewStyle().Foreground(ColorCyan).Bold(true).Render("{" + m.editing + "} (Name locked)")
 	} else if m.formFocus != 0 {
-		nameField = SubtitleStyle.Render("$" + strings.ToUpper(m.nameInput.Value()))
+		nameField = SubtitleStyle.Render("{" + m.nameInput.Value() + "}")
 	}
 
 	valField := m.valueInput.View()
@@ -578,7 +578,7 @@ func (m SnippetStudioModel) renderCreateForm() string {
 	}
 
 	typeLabel := "[Type: TEXT]"
-	if m.snipType == "raw" {
+	if m.payloadType == "raw" {
 		typeLabel = "[Type: RAW REPORT]"
 	}
 	typeStyle := lipgloss.NewStyle().Foreground(ColorCyan)
@@ -609,11 +609,11 @@ func (m SnippetStudioModel) renderCreateForm() string {
 			Background(ColorCyan).
 			BorderForeground(ColorCyan)
 	}
-	saveBtn := saveBtnStyle.Render("SAVE SNIPPET")
+	saveBtn := saveBtnStyle.Render("SAVE PAYLOAD")
 
-	title := "CREATE NEW SNIPPET"
+	title := "CREATE NEW PAYLOAD"
 	if m.editing != "" {
-		title = fmt.Sprintf("EDIT SNIPPET $%s", strings.ToUpper(m.editing))
+		title = fmt.Sprintf("EDIT PAYLOAD {%s}", m.editing)
 	}
 
 	form := fmt.Sprintf(
@@ -626,19 +626,19 @@ func (m SnippetStudioModel) renderCreateForm() string {
 		saveBtn,
 	)
 
-	help := SubtitleStyle.Render("Tab: switch field • Space: toggle Keychain encryption • Enter: save • Esc: cancel")
+	help := SubtitleStyle.Render("Tab: switch field • Space: toggle option • Enter: save • Esc: cancel")
 	return form + "\n\n" + help
 }
 
-func (m SnippetStudioModel) renderDeleteConfirm() string {
-	name := "this snippet"
+func (m PayloadStudioModel) renderDeleteConfirm() string {
+	name := "this payload"
 	if m.pendingDel != nil {
-		name = fmt.Sprintf("$%s", strings.ToUpper(m.pendingDel.Name))
+		name = fmt.Sprintf("{%s}", m.pendingDel.Name)
 	}
 
 	body := fmt.Sprintf(
 		"%s\n\n%s\n\n%s   %s",
-		ErrorStyle.Render("DELETE SNIPPET"),
+		ErrorStyle.Render("DELETE PAYLOAD"),
 		fmt.Sprintf("Are you sure you want to delete %s?", name),
 		lipgloss.NewStyle().Bold(true).Foreground(ColorRed).Render("[ Y ] Yes, delete"),
 		lipgloss.NewStyle().Bold(true).Foreground(ColorGreen).Render("[ N ] Cancel"),
@@ -652,11 +652,11 @@ func (m SnippetStudioModel) renderDeleteConfirm() string {
 		Render(body)
 }
 
-func (m SnippetStudioModel) renderStudioFooter() string {
-	if m.mode == snipCreate {
-		return HelpStyle.Render("[Tab]: Switch field • [Space]: Toggle Keychain • [Enter / Ctrl+S]: Save • [Esc]: Cancel")
+func (m PayloadStudioModel) renderStudioFooter() string {
+	if m.mode == payloadCreate {
+		return HelpStyle.Render("[Tab]: Switch field • [Space]: Toggle option • [Enter / Ctrl+S]: Save • [Esc]: Cancel")
 	}
-	if m.mode == snipConfirmDelete {
+	if m.mode == payloadConfirmDelete {
 		return HelpStyle.Render("[y]: Confirm delete • [n / Esc]: Cancel")
 	}
 	return HelpStyle.Render("↑/↓: Navigate • [Enter/e]: Edit • [n]: New • [d]: Delete • [s]: Toggle Keychain • [Tab]: Focus buttons • [Esc/q]: Back")

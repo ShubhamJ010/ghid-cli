@@ -113,6 +113,10 @@ fun QuickSendOverlay(
     val historyRepository = GhostHidApp.instance.quickSendHistoryRepository
     val comboRepository = GhostHidApp.instance.comboRepository
     val history by historyRepository.entries.collectAsState()
+    val payloadsSnapshot by GhostHidApp.instance.payloadRepository.payloads.collectAsState()
+    val knownPayloads = remember(payloadsSnapshot) {
+        GhostHidApp.instance.payloadRepository.knownNames()
+    }
 
     val serviceTargetDevice by service?.targetDeviceState?.collectAsState()
         ?: remember { mutableStateOf(null) }
@@ -233,7 +237,8 @@ fun QuickSendOverlay(
                                     focusManager.clearFocus()
                                     editorScheme = entry.scheme
                                 },
-                                targetOs = currentOs
+                                targetOs = currentOs,
+                                knownPayloads = knownPayloads
                             )
                         }
                     }
@@ -263,6 +268,7 @@ fun QuickSendOverlay(
                     QuickSendComposerDock(
                         scheme = scheme,
                         analysis = analysis,
+                        knownPayloads = knownPayloads,
                         compactPreview = imeVisible,
                         targetOs = currentOs,
                         onSchemeChange = { scheme = it },
@@ -453,6 +459,7 @@ private fun QuickSendSheetHeader(
 private fun QuickSendComposerDock(
     scheme: String,
     analysis: SequenceAnalysis,
+    knownPayloads: Set<String>,
     compactPreview: Boolean,
     targetOs: TargetOs = TargetOs.WINDOWS,
     onSchemeChange: (String) -> Unit,
@@ -476,6 +483,7 @@ private fun QuickSendComposerDock(
         ) {
             SequencePreview(
                 analysis = analysis,
+                knownPayloads = knownPayloads,
                 compact = compactPreview,
                 containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
             )
@@ -486,7 +494,7 @@ private fun QuickSendComposerDock(
                 modifier = Modifier.fillMaxWidth(),
                 placeholder = {
                     Text(
-                        text = if (targetOs == TargetOs.MACOS) "cmd+space ->{0.6} type:term" else "win+r ->{0.6} type:cmd",
+                        text = if (targetOs == TargetOs.MACOS) "{cmd+space}{600ms}term{Enter}" else "{win+r}{600ms}cmd{Enter}",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 14.sp,
                         maxLines = 1,
@@ -510,7 +518,7 @@ private fun QuickSendComposerDock(
                 trailingIcon = {
                     if (scheme.isNotEmpty()) {
                         IconButton(onClick = onClear) {
-                            Icon(Icons.Default.Clear, contentDescription = "Clear scheme", modifier = Modifier.size(18.dp))
+                            Icon(Icons.Default.Clear, contentDescription = "Clear sequence", modifier = Modifier.size(18.dp))
                         }
                     }
                 },

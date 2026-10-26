@@ -1,4 +1,4 @@
-// Package combos persists named Windows keyboard/mouse shortcuts for the
+// Package combos persists named keyboard/mouse shortcuts for the
 // interactive combo studio and the CLI.
 package combos
 
@@ -13,17 +13,18 @@ import (
 	"unicode"
 
 	"github.com/ghost-hid/ghid/internal/hid"
+	"github.com/ghost-hid/ghid/internal/payloads"
 )
 
-// Default combo keys shipped with the application.
+// Default combo sequences shipped with the application.
 const (
-	DefaultLoginKeys = "ctrl+alt+del ->{1.0} esc ->{0.8} $USERNAME ->{0.8} tab ->{0.8} $PASSWORD ->{0.8} enter"
-	DefaultLockKeys  = "win+l"
-	DefaultSleepKeys = "$SLEEP_WINDOWS ->{0.06} raw:00"
+	DefaultLoginSequence = "{ctrl+alt+del}{1s}{Escape}{800ms}{USERNAME}{800ms}{Tab}{800ms}{PASSWORD}{800ms}{Enter}"
+	DefaultLockSequence  = "{mod+l}"
+	DefaultSleepSequence = "{WIN_SLEEP}"
 
-	DefaultMacSleepKeys     = "cmd+ctrl+q ->{0.5} esc"
-	DefaultMacForceQuitKeys = "cmd+opt+esc ->{0.4} enter ->{0.3} enter"
-	DefaultMacPlayPauseKeys = "$PLAY_PAUSE ->{0.06} raw:0000"
+	DefaultMacSleepSequence     = "{mod+ctrl+q}{500ms}{Escape}"
+	DefaultMacForceQuitSequence = "{mod+alt+esc}{400ms}{Enter}{300ms}{Enter}"
+	DefaultMacPlayPauseSequence = "{PLAY_PAUSE}"
 )
 
 // Target operating systems a combo is written for. The tag drives the combo
@@ -114,18 +115,34 @@ func OSShortTag(osName string) string {
 }
 
 // Combo is a named, replayable sequence of keyboard chords, mouse gestures,
-// typed text and directives. Keys uses the ghid sequence grammar, e.g.
-// "win+r ->{0.6} type:rustdesk ->{0.3} enter". OS tags which host the combo was
-// authored for. Emoji is an optional custom icon that overrides the OS logo in
-// the Android app and the OS badge in the CLI and TUI.
+// typed text, delays, and named payloads in the {...} DSL format.
 type Combo struct {
-	Name        string    `json:"name"`
-	Keys        string    `json:"keys"`
-	OS          string    `json:"os"`
-	Emoji       string    `json:"emoji,omitempty"`
-	Description string    `json:"description,omitempty"`
-	Favorite    bool      `json:"favorite,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
+	Name        string                      `json:"name"`
+	Sequence    string                      `json:"sequence"`
+	Payloads    map[string]payloads.Payload `json:"payloads,omitempty"`
+	OS          string                      `json:"os"`
+	Emoji       string                      `json:"emoji,omitempty"`
+	Description string                      `json:"description,omitempty"`
+	Favorite    bool                        `json:"favorite,omitempty"`
+	CreatedAt   time.Time                   `json:"created_at"`
+}
+
+// UnmarshalJSON handles migration from legacy "keys" field to "sequence".
+func (c *Combo) UnmarshalJSON(data []byte) error {
+	type Alias Combo
+	aux := &struct {
+		LegacyKeys string `json:"keys"`
+		*Alias
+	}{
+		Alias: (*Alias)(c),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if c.Sequence == "" && aux.LegacyKeys != "" {
+		c.Sequence = aux.LegacyKeys
+	}
+	return nil
 }
 
 // Badge is the short icon used in terminal listings: the custom emoji when set,
@@ -137,11 +154,11 @@ func (c Combo) Badge() string {
 	return "[" + OSShortTag(c.OS) + "]"
 }
 
-// DefaultCombos defines the built-in system combos with their target OS and descriptions.
+// DefaultCombos defines the built-in system combos with their target OS, sequences, and bundled payloads.
 var DefaultCombos = []Combo{
 	{
 		Name:        "Login",
-		Keys:        DefaultLoginKeys,
+		Sequence:    DefaultLoginSequence,
 		OS:          OSWindows,
 		Emoji:       "🔑",
 		Description: "Windows unlock & credential injection",
@@ -149,15 +166,22 @@ var DefaultCombos = []Combo{
 	},
 	{
 		Name:        "Lock",
-		Keys:        DefaultLockKeys,
+		Sequence:    DefaultLockSequence,
 		OS:          OSWindows,
 		Emoji:       "🔒",
-		Description: "Instant Windows lock screen (Win + L)",
+		Description: "Instant lock screen ({mod+l})",
 		Favorite:    true,
 	},
 	{
-		Name:        "Sleep",
-		Keys:        DefaultSleepKeys,
+		Name:     "Sleep",
+		Sequence: DefaultSleepSequence,
+		Payloads: map[string]payloads.Payload{
+			"WIN_SLEEP": {
+				Name:  "WIN_SLEEP",
+				Type:  "raw",
+				Value: "02",
+			},
+		},
 		OS:          OSWindows,
 		Emoji:       "😴",
 		Description: "Hardware ACPI sleep sequence",
@@ -165,7 +189,7 @@ var DefaultCombos = []Combo{
 	},
 	{
 		Name:        "MacSleep",
-		Keys:        DefaultMacSleepKeys,
+		Sequence:    DefaultMacSleepSequence,
 		OS:          OSMacOS,
 		Emoji:       "🌙",
 		Description: "Instant macOS lock and display sleep",
@@ -173,15 +197,22 @@ var DefaultCombos = []Combo{
 	},
 	{
 		Name:        "ForceQuit",
-		Keys:        DefaultMacForceQuitKeys,
+		Sequence:    DefaultMacForceQuitSequence,
 		OS:          OSMacOS,
 		Emoji:       "⚡",
 		Description: "Force quit frontmost unresponsive app",
 		Favorite:    true,
 	},
 	{
-		Name:        "PlayPause",
-		Keys:        DefaultMacPlayPauseKeys,
+		Name:     "PlayPause",
+		Sequence: DefaultMacPlayPauseSequence,
+		Payloads: map[string]payloads.Payload{
+			"PLAY_PAUSE": {
+				Name:  "PLAY_PAUSE",
+				Type:  "raw",
+				Value: "cd00",
+			},
+		},
 		OS:          OSMacOS,
 		Emoji:       "⏯️",
 		Description: "Consumer media play/pause toggle",
@@ -191,16 +222,26 @@ var DefaultCombos = []Combo{
 
 // Store reads and writes the combo library on disk.
 type Store struct {
-	Path string
+	Path         string
+	PayloadStore *payloads.Store
 }
 
 // NewStore creates a store at path. An empty path uses the default location
 // (~/.config/ghid/combos.json).
-func NewStore(path string) *Store {
+func NewStore(path string, ps ...*payloads.Store) *Store {
 	if strings.TrimSpace(path) == "" {
 		path = GetDefaultPath()
 	}
-	return &Store{Path: path}
+	var pStore *payloads.Store
+	if len(ps) > 0 {
+		pStore = ps[0]
+	}
+	return &Store{Path: path, PayloadStore: pStore}
+}
+
+// SetPayloadStore connects a payloads store for auto-provisioning.
+func (s *Store) SetPayloadStore(ps *payloads.Store) {
+	s.PayloadStore = ps
 }
 
 // GetDefaultPath returns the per-user combo library location.
@@ -210,6 +251,25 @@ func GetDefaultPath() string {
 		return filepath.Join(".config", "ghid", "combos.json")
 	}
 	return filepath.Join(home, ".config", "ghid", "combos.json")
+}
+
+// AutoProvisionPayloads inspects the combo sequence and provisions any missing
+// referenced payloads that are bundled in combo.Payloads.
+func (s *Store) AutoProvisionPayloads(c Combo) {
+	if s.PayloadStore == nil {
+		return
+	}
+	needed := hid.ExtractPayloads(c.Sequence)
+	for _, name := range needed {
+		if _, ok, _ := s.PayloadStore.Get(name); !ok {
+			for pName, pVal := range c.Payloads {
+				if strings.EqualFold(pName, name) {
+					_, _ = s.PayloadStore.Set(name, pVal.Value, pVal.Secure, pVal.EffectiveType())
+					break
+				}
+			}
+		}
+	}
 }
 
 // Load returns the saved combos in display order. A missing file is an empty
@@ -230,7 +290,6 @@ func (s *Store) Load() ([]Combo, error) {
 	if err := json.Unmarshal(data, &list); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", s.Path, err)
 	}
-	// Legacy libraries predate OS tagging: treat them as Windows combos.
 	for i := range list {
 		list[i].OS = NormalizeOSDefault(list[i].OS)
 	}
@@ -256,8 +315,8 @@ func (s *Store) save(list []Combo) error {
 	return os.WriteFile(s.Path, data, 0600)
 }
 
-// EnsureDefaults seeds the default built-in combos (Login, Lock, Sleep) if empty,
-// and ensures existing built-ins have their OS tag and description populated.
+// EnsureDefaults seeds the default built-in combos if empty,
+// and ensures existing built-ins have their OS tag, sequence, and payloads populated.
 func (s *Store) EnsureDefaults() ([]Combo, error) {
 	list, err := s.Load()
 	if err != nil {
@@ -268,6 +327,7 @@ func (s *Store) EnsureDefaults() ([]Combo, error) {
 		var seeded []Combo
 		for _, def := range DefaultCombos {
 			def.CreatedAt = now
+			s.AutoProvisionPayloads(def)
 			seeded = append(seeded, def)
 		}
 		if err := s.save(seeded); err != nil {
@@ -288,13 +348,10 @@ func (s *Store) EnsureDefaults() ([]Combo, error) {
 		for i := range list {
 			if strings.EqualFold(list[i].Name, def.Name) {
 				found = true
-				if strings.EqualFold(def.Name, "Sleep") && (strings.Contains(list[i].Keys, "win+x") || list[i].Keys == "raw:02 ->{0.06} raw:00") {
-					list[i].Keys = DefaultSleepKeys
-					list[i].Description = def.Description
-					modified = true
-				}
-				if strings.EqualFold(def.Name, "PlayPause") && list[i].Keys == "raw:cd00 ->{0.06} raw:0000" {
-					list[i].Keys = DefaultMacPlayPauseKeys
+				s.AutoProvisionPayloads(def)
+				if strings.Contains(list[i].Sequence, "->") || strings.Contains(list[i].Sequence, "raw:") || strings.Contains(list[i].Sequence, "type:") || strings.Contains(list[i].Sequence, "$") {
+					list[i].Sequence = def.Sequence
+					list[i].Payloads = def.Payloads
 					list[i].Description = def.Description
 					modified = true
 				}
@@ -315,6 +372,7 @@ func (s *Store) EnsureDefaults() ([]Combo, error) {
 		}
 		if !found {
 			def.CreatedAt = time.Now().UTC()
+			s.AutoProvisionPayloads(def)
 			list = append(list, def)
 			modified = true
 		}
@@ -374,21 +432,15 @@ func ValidateName(name string) (string, error) {
 	return clean, nil
 }
 
-// Validate checks that every step is a real keyboard chord, variable, raw report,
-// or one of the supported mouse gestures. When validating without an explicit OS,
-// it validates against the default Windows keyboard layout (rejecting macOS-only aliases).
-func Validate(keys string) error {
-	return ValidateForOS(keys, OSWindows)
+// Validate checks that every step is valid in the bracket sequence DSL.
+func Validate(sequence string) error {
+	return ValidateForOS(sequence, OSWindows)
 }
 
 // ValidateForOS validates a combo sequence against a specific target operating system.
-// On macOS, aliases such as cmd, command, opt, and option are recognized as valid modifiers.
-func ValidateForOS(keys string, osName string) error {
-	steps, err := hid.ParseActionSequence(keys)
+func ValidateForOS(sequence string, osName string) error {
+	steps, err := hid.ParseSequence(sequence)
 	if err != nil {
-		if strings.Contains(err.Error(), "unknown key token") {
-			return fmt.Errorf("%w (tip: to type a word, use type:rustdesk)", err)
-		}
 		return err
 	}
 	if len(steps) == 0 {
@@ -398,7 +450,7 @@ func ValidateForOS(keys string, osName string) error {
 	isMac := NormalizeOSDefault(osName) == OSMacOS
 
 	for _, step := range steps {
-		if step.Variable != "" {
+		if step.Payload != "" || step.Raw != "" || step.Mouse != nil || step.Delay > 0 {
 			continue
 		}
 		if step.Text != "" {
@@ -409,19 +461,13 @@ func ValidateForOS(keys string, osName string) error {
 			}
 			continue
 		}
-		if step.Raw != "" {
-			continue
-		}
-		if step.Mouse != nil {
-			continue
-		}
 		for _, token := range strings.Split(step.Combo, "+") {
 			trimmed := strings.TrimSpace(token)
 			if !isMac && isMacAlias(trimmed) {
 				return fmt.Errorf("%q is a macOS key name; use a Windows key such as win, ctrl or alt", trimmed)
 			}
 			if !hid.IsWindowsKeyToken(trimmed) && !(isMac && isMacAlias(trimmed)) {
-				return fmt.Errorf("unknown Windows key %q", trimmed)
+				return fmt.Errorf("unknown key %q", trimmed)
 			}
 		}
 	}
@@ -436,9 +482,53 @@ func isMacAlias(token string) bool {
 	return false
 }
 
+// PayloadRefError exposes the actionable message for missing payload references
+// so the CLI can validate without saving.
+func PayloadRefError(report payloads.RefReport) error {
+	return payloadRefError(report)
+}
+
+// AddOptions controls validation behavior when persisting a combo.
+type AddOptions struct {
+	// AllowUnresolvedPayloads saves a combo whose {NAME} references have no
+	// local payload record or no value. Needed for secure payloads that only
+	// exist on the phone (secure values never sync to the CLI).
+	AllowUnresolvedPayloads bool
+}
+
+// PayloadRefReport classifies every {NAME} reference in a sequence against the
+// configured payload store.
+func (s *Store) PayloadRefReport(sequence string) payloads.RefReport {
+	return s.PayloadStore.ResolveRefs(hid.ExtractPayloads(sequence))
+}
+
+// payloadRefError builds a single actionable message for missing references.
+func payloadRefError(report payloads.RefReport) error {
+	var lines []string
+	if len(report.Unresolved) > 0 {
+		refs := make([]string, 0, len(report.Unresolved))
+		for _, name := range report.Unresolved {
+			refs = append(refs, "{"+name+"}")
+		}
+		lines = append(lines, fmt.Sprintf("payload references not found: %s (create them with 'ghid payload set <name> <value>'; secure payloads that live only on the phone need --allow-unresolved)", strings.Join(refs, ", ")))
+	}
+	if len(report.Empty) > 0 {
+		refs := make([]string, 0, len(report.Empty))
+		for _, name := range report.Empty {
+			refs = append(refs, "{"+name+"}")
+		}
+		lines = append(lines, fmt.Sprintf("payload references have no value: %s (set them with 'ghid payload set <name> <value>')", strings.Join(refs, ", ")))
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+	return errors.New(strings.Join(lines, "; "))
+}
+
 // Add inserts a new combo or replaces an existing one with the same name
-// (case-insensitive) in place. The returned slice is the saved library.
-func (s *Store) Add(c Combo) ([]Combo, error) {
+// (case-insensitive) in place. Also auto-provisions any bundled payloads.
+// Payload references are resolved before saving unless explicitly allowed.
+func (s *Store) Add(c Combo, opts ...AddOptions) ([]Combo, error) {
 	name, err := ValidateName(c.Name)
 	if err != nil {
 		return nil, err
@@ -451,23 +541,33 @@ func (s *Store) Add(c Combo) ([]Combo, error) {
 	if err != nil {
 		return nil, err
 	}
-	keys := strings.TrimSpace(c.Keys)
-	if err := ValidateForOS(keys, osName); err != nil {
+	seq := strings.TrimSpace(c.Sequence)
+	if err := ValidateForOS(seq, osName); err != nil {
 		return nil, err
 	}
 	osSpecified := strings.TrimSpace(c.OS) != ""
 
-	list, err := s.Load()
-	if err != nil {
-		return nil, err
-	}
+	allowUnresolved := len(opts) > 0 && opts[0].AllowUnresolvedPayloads
 
 	c.Name = name
-	c.Keys = keys
+	c.Sequence = seq
 	c.OS = osName
 	c.Emoji = em
 	if c.CreatedAt.IsZero() {
 		c.CreatedAt = time.Now().UTC()
+	}
+
+	s.AutoProvisionPayloads(c)
+
+	if !allowUnresolved {
+		if report := s.PayloadRefReport(seq); len(report.Unresolved) > 0 || len(report.Empty) > 0 {
+			return nil, payloadRefError(report)
+		}
+	}
+
+	list, err := s.Load()
+	if err != nil {
+		return nil, err
 	}
 
 	replaced := false

@@ -551,34 +551,31 @@ class HidService : Service() {
         }
     }
 
-    fun sendRawReport(bytes: ByteArray) {
-        val hid = hidDevice ?: return
-        val target = targetDevice ?: return
-        executor.execute {
-            log(">>> Executing Raw Report (${bytes.size} bytes)...")
-            // Map common payload lengths to their standard report IDs:
-            // 1 byte  -> System Control (0x03)
-            // 2 bytes -> Consumer Control (0x04)
-            // 4 bytes -> Mouse (0x02)
-            // 8 bytes -> Keyboard (0x01)
-            val reportId = when (bytes.size) {
-                1 -> SYSTEM_REPORT_ID
-                2 -> CONSUMER_REPORT_ID
-                4 -> MOUSE_REPORT_ID
-                8 -> KEYBOARD_REPORT_ID
-                else -> KEYBOARD_REPORT_ID
-            }
-            sendRawReport(reportId, bytes)
+    fun sendRawReport(bytes: ByteArray, holdMs: Long = 60L) {
+        val reportId = when (bytes.size) {
+            1 -> SYSTEM_REPORT_ID
+            2 -> CONSUMER_REPORT_ID
+            4 -> MOUSE_REPORT_ID
+            8 -> KEYBOARD_REPORT_ID
+            else -> KEYBOARD_REPORT_ID
         }
+        sendRawReport(reportId, bytes, holdMs)
     }
 
-    fun sendRawReport(reportId: Int, bytes: ByteArray) {
+    fun sendRawReport(reportId: Int, bytes: ByteArray, holdMs: Long = 60L) {
         val hid = hidDevice ?: return
         val target = targetDevice ?: return
         executor.execute {
-            log(">>> Executing Raw Report ID $reportId (${bytes.size} bytes)...")
+            log(">>> Executing Raw Report ID $reportId (${bytes.size} bytes, hold=${holdMs}ms)...")
             val ok = hid.sendReport(target, reportId, bytes)
             log("sendReport(id=$reportId) returned: $ok")
+            // Momentary button auto-release for Consumer Control (0x04), System Control (0x03), and Keyboard (0x01)
+            if ((reportId == CONSUMER_REPORT_ID || reportId == SYSTEM_REPORT_ID || reportId == KEYBOARD_REPORT_ID) && bytes.any { it != 0.toByte() }) {
+                try { Thread.sleep(if (holdMs > 0) holdMs else 60L) } catch (ignored: Exception) {}
+                val zero = ByteArray(bytes.size)
+                val okUp = hid.sendReport(target, reportId, zero)
+                log("sendReport(id=$reportId) auto-release returned: $okUp")
+            }
         }
     }
 
@@ -835,15 +832,15 @@ class HidService : Service() {
     }
 
     /**
-     * Executes a full action sequence with AST steps, variable expansion, and delay handling.
+     * Executes a full action sequence with AST steps, payload expansion, and delay handling.
      */
     fun executeCombo(rawOrName: String) {
         scope.launch {
             val app = GhostHidApp.instance
             val combo = app.comboRepository.find(rawOrName)
-                ?: app.comboRepository.combos.value.firstOrNull { it.keys == rawOrName }
-            val raw = combo?.keys ?: rawOrName
-            val steps = ActionSequenceParser.parse(raw)
+                ?: app.comboRepository.combos.value.firstOrNull { it.sequence == rawOrName || it.effectiveSequence == rawOrName }
+            val raw = combo?.effectiveSequence ?: rawOrName
+            val steps = ActionSequenceParser.parse(raw, _effectiveTargetOs.value)
             combo?.let { app.comboUsageRepository.recordUse(it.name) }
             log(">>> Executing sequence ($raw)")
 
@@ -853,47 +850,52 @@ class HidService : Service() {
                         delay(step.millis)
                     }
                     is HidStep.KeyboardChord -> {
-                        sendKey(step.modifier, step.keyCode)
-                        delay(50)
+                        sendKey(step.modifier, step.keyCode, step.durationMs)
+                        delay(step.durationMs + 20)
                     }
                     is HidStep.TypeText -> {
                         typeText(step.text)
                         delay(step.text.length * 50L + 50L)
                     }
-                    is HidStep.Variable -> {
-                        val snRepo = GhostHidApp.instance.snippetRepository
-                        val sn = snRepo.get(step.name)
-                        val value = snRepo.resolve(step.name)
+                    is HidStep.PayloadReference -> {
+                        val pRepo = GhostHidApp.instance.payloadRepository
+                        val p = pRepo.get(step.name)
+                        val value = pRepo.resolve(step.name)
+                        val hold = step.durationMs ?: 60L
                         if (!value.isNullOrEmpty()) {
                             val cleanVal = value.trim()
                             val cleanHex = (if (cleanVal.startsWith("raw:", ignoreCase = true)) cleanVal.substring(4) else cleanVal)
                                 .replace(" ", "")
                             val isHexMatch = cleanHex.length in listOf(2, 4, 8, 16) && cleanHex.all { it in "0123456789abcdefABCDEF" }
-                            if (sn?.isRaw == true || cleanVal.startsWith("raw:", ignoreCase = true) || isHexMatch) {
+                            if (p?.isRaw == true || cleanVal.startsWith("raw:", ignoreCase = true) || isHexMatch) {
                                 if (isHexMatch) {
                                     val bytes = ByteArray(cleanHex.length / 2) { i ->
                                         cleanHex.substring(i * 2, i * 2 + 2).toInt(16).toByte()
                                     }
-                                    sendRawReport(bytes)
-                                    delay(20)
+                                    sendRawReport(bytes, hold)
+                                    delay(hold + 20)
                                 } else {
-                                    log("Invalid raw report hex in variable \$${step.name}: $value")
+                                    log("Invalid raw report hex in payload {${step.name}}: $value")
                                 }
                             } else {
                                 typeText(value)
                                 delay(value.length * 50L + 50L)
                             }
                         } else {
-                            log("Variable \$${step.name} empty or unresolved")
+                            log("Payload {${step.name}} empty or unresolved")
                         }
                     }
                     is HidStep.MouseAction -> {
                         sendMouse(step.action)
                         delay(100)
                     }
+                    is HidStep.MediaKey -> {
+                        sendRawReport(step.bytes, step.durationMs)
+                        delay(step.durationMs + 20)
+                    }
                     is HidStep.RawReport -> {
-                        sendRawReport(step.bytes)
-                        delay(20)
+                        sendRawReport(step.bytes, step.durationMs)
+                        delay(step.durationMs + 20)
                     }
                 }
             }
@@ -1040,7 +1042,7 @@ class HidService : Service() {
             ACTION_LOCK == action || "lock".equals(cmd, ignoreCase = true) -> sendLock()
             "sleep".equals(cmd, ignoreCase = true) -> {
                 if (resolveEffectiveOs() == TargetOs.MACOS) {
-                    executeCombo("cmd+ctrl+q ->{0.5} esc")
+                    executeCombo("{cmd+ctrl+q}{500ms}{esc}")
                 } else {
                     sendSystemSleep()
                 }
@@ -1048,6 +1050,7 @@ class HidService : Service() {
             "raw".equals(cmd, ignoreCase = true) -> {
                 val hex = intent.getStringExtra("hex")
                 val hasExplicitId = intent.hasExtra("id")
+                val holdMs = intent.getLongExtra("hold_ms", 60L)
                 if (!hex.isNullOrEmpty()) {
                     val cleanHex = hex.replace(" ", "")
                     if (cleanHex.length % 2 == 0) {
@@ -1055,9 +1058,9 @@ class HidService : Service() {
                             cleanHex.substring(i * 2, i * 2 + 2).toInt(16).toByte()
                         }
                         if (hasExplicitId) {
-                            sendRawReport(intent.getIntExtra("id", KEYBOARD_REPORT_ID), bytes)
+                            sendRawReport(intent.getIntExtra("id", KEYBOARD_REPORT_ID), bytes, holdMs)
                         } else {
-                            sendRawReport(bytes)
+                            sendRawReport(bytes, holdMs)
                         }
                     }
                 }
@@ -1076,7 +1079,15 @@ class HidService : Service() {
             ACTION_TYPE == action || "type".equals(cmd, ignoreCase = true) -> typeText(intent.getStringExtra("text"))
             "combo".equals(cmd, ignoreCase = true) -> {
                 val keys = intent.getStringExtra("keys")
-                if (!keys.isNullOrEmpty()) executeCombo(keys)
+                val holdMs = intent.getLongExtra("hold_ms", -1L)
+                if (!keys.isNullOrEmpty()) {
+                    if (holdMs > 0 && !keys.contains("{")) {
+                        val (mod, code) = KeyTokens.parseChord(keys, resolveEffectiveOs())
+                        sendKey(mod, code, holdMs)
+                    } else {
+                        executeCombo(keys)
+                    }
+                }
             }
             "mouse".equals(cmd, ignoreCase = true) -> sendMouse(intent.getStringExtra("action"))
             "connect".equals(cmd, ignoreCase = true) -> connectTarget(intent.getStringExtra("address"))

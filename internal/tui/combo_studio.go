@@ -8,652 +8,478 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ghost-hid/ghid/internal/combos"
-	"github.com/mattn/go-runewidth"
 )
 
 // ComboSendFunc transmits one saved combo through the HID gateway.
 type ComboSendFunc func(combo combos.Combo) error
 
-type studioMode int
-
-const (
-	studioList studioMode = iota
-	studioCreate
-	studioConfirmDelete
-)
-
-type comboResultMsg struct {
-	name string
-	keys string
-	err  error
-}
-
-// ComboStudioModel is the interactive Windows keyboard/mouse combo manager
-// behind `ghid combo`.
+// ComboStudioModel manages the interactive TUI for viewing, editing, and creating
+// cross-platform combos with the unified bracket sequence DSL.
 type ComboStudioModel struct {
-	store *combos.Store
-	send  ComboSendFunc
+	store    *combos.Store
+	sendFn   ComboSendFunc
+	list     []combos.Combo
+	cursor   int
+	quitting bool
+	busy     bool
+	notice   string
+	isError  bool
 
-	list       []combos.Combo
-	index      int
-	focus      int // 0 = list, 1 = SEND, 2 = NEW, 3 = DELETE
-	mode       studioMode
-	formFocus  int // 0 = name, 1 = emoji, 2 = os, 3 = desc, 4 = keys, 5 = save, 6 = save & send
-	nameInput  textinput.Model
-	emojiInput textinput.Model
-	osInput    textinput.Model
-	descInput  textinput.Model
-	keysInput  textinput.Model
-	editing    string
-	notice     string
-	isError    bool
-	busy       bool
-	pendingDel *combos.Combo
-	width      int
-	height     int
-	quitting   bool
+	// Sub-states: 0 = list view, 1 = create/edit form, 2 = delete confirmation
+	mode int
+
+	// Form inputs: 0: name, 1: sequence, 2: os, 3: emoji, 4: desc
+	formActiveIndex int
+	inputName       textinput.Model
+	inputSeq        textinput.Model
+	inputOS         textinput.Model
+	inputEmoji      textinput.Model
+	inputDesc       textinput.Model
+	editOrigName    string
+
+	width  int
+	height int
 }
 
-// NewComboStudioModel loads the saved library and builds the studio model.
-func NewComboStudioModel(store *combos.Store, send ComboSendFunc) ComboStudioModel {
-	name := textinput.New()
-	name.Placeholder = "e.g. Open Run dialog"
-	name.CharLimit = 40
-	name.Width = 46
+// NewComboStudioModel creates a new Combo Studio model.
+func NewComboStudioModel(store *combos.Store, sendFn ComboSendFunc) ComboStudioModel {
+	inName := textinput.New()
+	inName.Placeholder = "Name (e.g. VS Code Format)"
+	inName.CharLimit = 40
+	inName.Width = 36
 
-	emojiInput := textinput.New()
-	emojiInput.Placeholder = "e.g. 🔑 (optional, overrides the OS icon)"
-	emojiInput.CharLimit = combos.MaxEmojiRunes
-	emojiInput.Width = 46
+	inSeq := textinput.New()
+	inSeq.Placeholder = "Sequence (e.g. {mod+shift+p}Format{Enter}{500ms}{mod+s})"
+	inSeq.CharLimit = 256
+	inSeq.Width = 48
 
-	osInput := textinput.New()
-	osInput.Placeholder = "windows, macos or linux (default windows)"
-	osInput.CharLimit = 16
-	osInput.Width = 46
+	inOS := textinput.New()
+	inOS.Placeholder = "OS: windows, macos, linux, or all"
+	inOS.CharLimit = 16
+	inOS.Width = 24
 
-	desc := textinput.New()
-	desc.Placeholder = "e.g. Windows unlock & credential injection (optional)"
-	desc.CharLimit = 80
-	desc.Width = 46
+	inEmoji := textinput.New()
+	inEmoji.Placeholder = "Icon: optional emoji (e.g. ⚡)"
+	inEmoji.CharLimit = 4
+	inEmoji.Width = 10
 
-	keys := textinput.New()
-	keys.Placeholder = "win+s ->{0.6} type:rustdesk ->{0.3} enter"
-	keys.CharLimit = 256
-	keys.Width = 46
-
-	var list []combos.Combo
-	var err error
-	if store != nil {
-		list, err = store.Load()
-	}
+	inDesc := textinput.New()
+	inDesc.Placeholder = "Description (optional)"
+	inDesc.CharLimit = 80
+	inDesc.Width = 48
 
 	m := ComboStudioModel{
-		store:      store,
-		send:       send,
-		list:       list,
-		nameInput:  name,
-		emojiInput: emojiInput,
-		osInput:    osInput,
-		descInput:  desc,
-		keysInput:  keys,
+		store:           store,
+		sendFn:          sendFn,
+		mode:            0,
+		formActiveIndex: 0,
+		inputName:       inName,
+		inputSeq:        inSeq,
+		inputOS:         inOS,
+		inputEmoji:      inEmoji,
+		inputDesc:       inDesc,
 	}
-	if err != nil {
-		m.notice = fmt.Sprintf("Could not read combos: %v", err)
-		m.isError = true
+
+	if store != nil {
+		m.list, _ = store.Load()
 	}
-	if len(list) == 0 {
-		m.notice = "No combos saved yet. Press n to create your first Windows keyboard or mouse combo."
-		m.isError = false
-	}
+
 	return m
 }
 
-// RunComboStudio opens the full-screen combo studio.
-func RunComboStudio(store *combos.Store, send ComboSendFunc) error {
-	model := NewComboStudioModel(store, send)
-	p := tea.NewProgram(model, tea.WithAltScreen())
-	_, err := p.Run()
-	return err
+func (m ComboStudioModel) Init() tea.Cmd {
+	return textinput.Blink
 }
 
-func (m ComboStudioModel) Init() tea.Cmd {
-	return nil
+type comboResultMsg struct {
+	name     string
+	sequence string
+	err      error
 }
 
 func (m ComboStudioModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+
 	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		return m, nil
-
-	case comboResultMsg:
-		m.busy = false
-		if msg.err != nil {
-			m.notice = fmt.Sprintf("✖ Send failed: %v", msg.err)
-			m.isError = true
-		} else {
-			m.notice = fmt.Sprintf("✔ Sent %q  →  %s", msg.name, msg.keys)
-			m.isError = false
-		}
-		return m, nil
-
 	case tea.KeyMsg:
-		if msg.String() == "ctrl+c" {
-			m.quitting = true
-			return m, tea.Quit
-		}
-
 		switch m.mode {
-		case studioCreate:
-			return m.updateCreate(msg)
-		case studioConfirmDelete:
-			return m.updateConfirmDelete(msg)
-		default:
-			return m.updateList(msg)
-		}
-	}
+		case 0: // List mode
+			switch msg.String() {
+			case "q", "esc":
+				m.quitting = true
+				return m, nil
 
-	return m, nil
-}
-
-func (m ComboStudioModel) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	key := msg.String()
-
-	switch key {
-	case "q", "esc":
-		m.quitting = true
-		return m, tea.Quit
-
-	case "up", "k":
-		if m.focus == 0 {
-			if m.index > 0 {
-				m.index--
-			} else if len(m.list) > 0 {
-				m.index = len(m.list) - 1
-			}
-		} else {
-			m.focus--
-			if m.focus < 1 {
-				m.focus = 3
-			}
-		}
-		return m, nil
-
-	case "down", "j":
-		if m.focus == 0 {
-			if m.index < len(m.list)-1 {
-				m.index++
-			} else {
-				m.index = 0
-			}
-		} else {
-			m.focus++
-			if m.focus > 3 {
-				m.focus = 1
-			}
-		}
-		return m, nil
-
-	case "tab":
-		m.focus = (m.focus + 1) % 4
-		return m, nil
-
-	case "shift+tab":
-		m.focus = (m.focus + 3) % 4
-		return m, nil
-
-	case "n", "a":
-		return m.openCreate(combos.Combo{})
-
-	case "e":
-		if len(m.list) > 0 && m.index < len(m.list) {
-			return m.openCreate(m.list[m.index])
-		}
-		return m, nil
-
-	case "f":
-		if len(m.list) > 0 && m.index < len(m.list) && m.store != nil {
-			combo := m.list[m.index]
-			list, ok, err := m.store.ToggleFavorite(combo.Name)
-			if err != nil {
-				m.notice = fmt.Sprintf("✖ Could not toggle favorite: %v", err)
-				m.isError = true
-			} else if ok {
-				m.list = list
-				status := "pinned to favorites"
-				if !m.list[m.index].Favorite {
-					status = "removed from favorites"
+			case "up", "k":
+				if m.cursor > 0 {
+					m.cursor--
+				} else if len(m.list) > 0 {
+					m.cursor = len(m.list) - 1
 				}
-				m.notice = fmt.Sprintf("✔ Combo %q %s", combo.Name, status)
-				m.isError = false
-			}
-		}
-		return m, nil
-
-	case "s":
-		return m.sendSelected()
-
-	case "d", "x", "delete":
-		if len(m.list) > 0 && m.index < len(m.list) {
-			combo := m.list[m.index]
-			m.pendingDel = &combo
-			m.mode = studioConfirmDelete
-			m.notice = ""
-		}
-		return m, nil
-
-	case "enter":
-		switch m.focus {
-		case 0:
-			return m.sendSelected()
-		case 1:
-			return m.sendSelected()
-		case 2:
-			return m.openCreate(combos.Combo{})
-		case 3:
-			if len(m.list) > 0 && m.index < len(m.list) {
-				combo := m.list[m.index]
-				m.pendingDel = &combo
-				m.mode = studioConfirmDelete
 				m.notice = ""
-			}
-			return m, nil
-		}
-	}
 
-	return m, nil
-}
-
-func (m ComboStudioModel) sendSelected() (tea.Model, tea.Cmd) {
-	if len(m.list) == 0 {
-		m.notice = "Nothing to send yet. Press n to create a combo."
-		m.isError = false
-		return m, nil
-	}
-	if m.index >= len(m.list) {
-		m.index = len(m.list) - 1
-	}
-	combo := m.list[m.index]
-	if m.busy {
-		return m, nil
-	}
-	m.busy = true
-	m.notice = fmt.Sprintf("Sending %q…", combo.Name)
-	m.isError = false
-	return m, m.sendCmd(combo)
-}
-
-func (m ComboStudioModel) sendCmd(combo combos.Combo) tea.Cmd {
-	return func() tea.Msg {
-		if m.send == nil {
-			return comboResultMsg{name: combo.Name, keys: combo.Keys, err: fmt.Errorf("gateway unavailable")}
-		}
-		err := m.send(combo)
-		return comboResultMsg{name: combo.Name, keys: combo.Keys, err: err}
-	}
-}
-
-func (m ComboStudioModel) openCreate(existing combos.Combo) (tea.Model, tea.Cmd) {
-	m.mode = studioCreate
-	m.editing = existing.Name
-	m.formFocus = 0
-	m.nameInput.SetValue(existing.Name)
-	m.emojiInput.SetValue(existing.Emoji)
-	m.osInput.SetValue(combos.NormalizeOSDefault(existing.OS))
-	m.descInput.SetValue(existing.Description)
-	m.keysInput.SetValue(existing.Keys)
-	m.nameInput.CursorEnd()
-	m.emojiInput.CursorEnd()
-	m.osInput.CursorEnd()
-	m.descInput.CursorEnd()
-	m.keysInput.CursorEnd()
-	m.nameInput.Focus()
-	m.emojiInput.Blur()
-	m.osInput.Blur()
-	m.descInput.Blur()
-	m.keysInput.Blur()
-	m.notice = ""
-	m.isError = false
-	return m, textinput.Blink
-}
-
-func (m ComboStudioModel) updateCreate(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc":
-		m.mode = studioList
-		m.editing = ""
-		m.nameInput.Blur()
-		m.emojiInput.Blur()
-		m.osInput.Blur()
-		m.descInput.Blur()
-		m.keysInput.Blur()
-		return m, nil
-
-	case "ctrl+s":
-		return m.saveCombo(false)
-
-	case "tab":
-		m.focusFormField(1)
-		return m, textinput.Blink
-
-	case "shift+tab":
-		m.focusFormField(-1)
-		return m, textinput.Blink
-
-	case "enter":
-		switch m.formFocus {
-		case 0, 1, 2, 3:
-			m.focusFormField(1)
-			return m, textinput.Blink
-		case 4:
-			return m.saveCombo(false)
-		case 5:
-			return m.saveCombo(false)
-		case 6:
-			return m.saveCombo(true)
-		}
-	}
-
-	var cmd tea.Cmd
-	switch m.formFocus {
-	case 0:
-		m.nameInput, cmd = m.nameInput.Update(msg)
-	case 1:
-		m.emojiInput, cmd = m.emojiInput.Update(msg)
-	case 2:
-		m.osInput, cmd = m.osInput.Update(msg)
-	case 3:
-		m.descInput, cmd = m.descInput.Update(msg)
-	case 4:
-		m.keysInput, cmd = m.keysInput.Update(msg)
-	}
-	return m, cmd
-}
-
-func (m *ComboStudioModel) focusFormField(delta int) {
-	order := []int{0, 1, 2, 3, 4, 5, 6}
-	current := 0
-	for i, v := range order {
-		if v == m.formFocus {
-			current = i
-			break
-		}
-	}
-	next := (current + delta + len(order)) % len(order)
-	m.formFocus = order[next]
-
-	m.nameInput.Blur()
-	m.emojiInput.Blur()
-	m.osInput.Blur()
-	m.descInput.Blur()
-	m.keysInput.Blur()
-	switch m.formFocus {
-	case 0:
-		m.nameInput.Focus()
-	case 1:
-		m.emojiInput.Focus()
-	case 2:
-		m.osInput.Focus()
-	case 3:
-		m.descInput.Focus()
-	case 4:
-		m.keysInput.Focus()
-	}
-}
-
-func (m ComboStudioModel) saveCombo(andSend bool) (tea.Model, tea.Cmd) {
-	name, err := combos.ValidateName(m.nameInput.Value())
-	if err != nil {
-		m.notice = "✖ " + err.Error()
-		m.isError = true
-		m.formFocus = 0
-		m.nameInput.Focus()
-		m.emojiInput.Blur()
-		m.osInput.Blur()
-		m.descInput.Blur()
-		m.keysInput.Blur()
-		return m, textinput.Blink
-	}
-	emoji, err := combos.ValidateEmoji(m.emojiInput.Value())
-	if err != nil {
-		m.notice = "✖ " + err.Error()
-		m.isError = true
-		m.formFocus = 1
-		m.emojiInput.Focus()
-		m.nameInput.Blur()
-		m.osInput.Blur()
-		m.descInput.Blur()
-		m.keysInput.Blur()
-		return m, textinput.Blink
-	}
-	keys := strings.TrimSpace(m.keysInput.Value())
-	if err := combos.Validate(keys); err != nil {
-		m.notice = fmt.Sprintf("✖ %v", err)
-		m.isError = true
-		m.formFocus = 4
-		m.keysInput.Focus()
-		m.nameInput.Blur()
-		m.emojiInput.Blur()
-		m.osInput.Blur()
-		m.descInput.Blur()
-		return m, textinput.Blink
-	}
-
-	osName, err := combos.NormalizeOS(m.osInput.Value())
-	if err != nil {
-		m.notice = fmt.Sprintf("✖ %v", err)
-		m.isError = true
-		m.formFocus = 2
-		m.osInput.Focus()
-		m.nameInput.Blur()
-		m.emojiInput.Blur()
-		m.descInput.Blur()
-		m.keysInput.Blur()
-		return m, textinput.Blink
-	}
-	desc := strings.TrimSpace(m.descInput.Value())
-
-	isFav := false
-	if m.editing != "" && m.store != nil {
-		if old, ok := m.store.Find(m.editing); ok {
-			isFav = old.Favorite
-		}
-	}
-
-	saved := combos.Combo{
-		Name:        name,
-		Keys:        keys,
-		OS:          osName,
-		Emoji:       emoji,
-		Description: desc,
-		Favorite:    isFav,
-	}
-	list, err := m.store.Add(saved)
-	if err != nil {
-		m.notice = fmt.Sprintf("✖ Could not save combo: %v", err)
-		m.isError = true
-		return m, nil
-	}
-
-	// Renaming an edited combo should move it, not leave the old name behind.
-	if m.editing != "" && !strings.EqualFold(m.editing, name) {
-		if remaining, deleted, derr := m.store.Delete(m.editing); derr == nil && deleted {
-			list = remaining
-		}
-	}
-
-	m.list = list
-	m.mode = studioList
-	m.editing = ""
-	m.nameInput.Blur()
-	m.emojiInput.Blur()
-	m.osInput.Blur()
-	m.descInput.Blur()
-	m.keysInput.Blur()
-	m.notice = fmt.Sprintf("✔ Saved combo %q", name)
-	m.isError = false
-
-	for i, c := range m.list {
-		if strings.EqualFold(c.Name, name) {
-			m.index = i
-			break
-		}
-	}
-
-	if andSend {
-		return m.sendSelected()
-	}
-	return m, nil
-}
-
-func (m ComboStudioModel) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "y", "Y", "enter":
-		if m.pendingDel != nil {
-			name := m.pendingDel.Name
-			list, deleted, err := m.store.Delete(name)
-			m.pendingDel = nil
-			m.mode = studioList
-			if err != nil {
-				m.notice = fmt.Sprintf("✖ Could not delete %q: %v", name, err)
-				m.isError = true
-			} else if deleted {
-				m.list = list
-				if m.index >= len(m.list) && len(m.list) > 0 {
-					m.index = len(m.list) - 1
+			case "down", "j":
+				if m.cursor < len(m.list)-1 {
+					m.cursor++
+				} else {
+					m.cursor = 0
 				}
-				m.notice = fmt.Sprintf("✔ Deleted combo %q", name)
+				m.notice = ""
+
+			case "f", "fav":
+				if len(m.list) > 0 && m.cursor < len(m.list) {
+					c := m.list[m.cursor]
+					newList, _, err := m.store.ToggleFavorite(c.Name)
+					if err == nil {
+						m.list = newList
+						m.notice = fmt.Sprintf("Toggled favorite for %q", c.Name)
+						m.isError = false
+					}
+				}
+
+			case "n", "a": // New / Add combo
+				m.mode = 1
+				m.editOrigName = ""
+				m.inputName.SetValue("")
+				m.inputSeq.SetValue("")
+				m.inputOS.SetValue("windows")
+				m.inputEmoji.SetValue("")
+				m.inputDesc.SetValue("")
+				m.formActiveIndex = 0
+				m.inputName.Focus()
+				m.inputSeq.Blur()
+				m.inputOS.Blur()
+				m.inputEmoji.Blur()
+				m.inputDesc.Blur()
+				m.notice = ""
+				return m, textinput.Blink
+
+			case "e": // Edit combo
+				if len(m.list) > 0 && m.cursor < len(m.list) {
+					c := m.list[m.cursor]
+					m.mode = 1
+					m.editOrigName = c.Name
+					m.inputName.SetValue(c.Name)
+					m.inputSeq.SetValue(c.Sequence)
+					m.inputOS.SetValue(c.OS)
+					m.inputEmoji.SetValue(c.Emoji)
+					m.inputDesc.SetValue(c.Description)
+					m.formActiveIndex = 0
+					m.inputName.Focus()
+					m.inputSeq.Blur()
+					m.inputOS.Blur()
+					m.inputEmoji.Blur()
+					m.inputDesc.Blur()
+					m.notice = ""
+					return m, textinput.Blink
+				}
+
+			case "d", "x": // Delete confirmation
+				if len(m.list) > 0 && m.cursor < len(m.list) {
+					m.mode = 2
+					m.notice = ""
+					return m, nil
+				}
+
+			case "enter", "s": // Send combo
+				if len(m.list) > 0 && m.cursor < len(m.list) && !m.busy {
+					c := m.list[m.cursor]
+					m.busy = true
+					m.notice = fmt.Sprintf("Sending %q...", c.Name)
+					m.isError = false
+					return m, func() tea.Msg {
+						var err error
+						if m.sendFn != nil {
+							err = m.sendFn(c)
+						}
+						return comboResultMsg{name: c.Name, sequence: c.Sequence, err: err}
+					}
+				}
+			}
+
+		case 1: // Form edit/create mode
+			switch msg.String() {
+			case "esc":
+				m.mode = 0
+				m.notice = ""
+				return m, nil
+
+			case "tab", "down":
+				m.formActiveIndex = (m.formActiveIndex + 1) % 5
+				m.updateFormFocus()
+				return m, textinput.Blink
+
+			case "shift+tab", "up":
+				m.formActiveIndex = (m.formActiveIndex - 1 + 5) % 5
+				m.updateFormFocus()
+				return m, textinput.Blink
+
+			case "enter":
+				name := strings.TrimSpace(m.inputName.Value())
+				seq := strings.TrimSpace(m.inputSeq.Value())
+				osVal := strings.TrimSpace(m.inputOS.Value())
+				emojiVal := strings.TrimSpace(m.inputEmoji.Value())
+				descVal := strings.TrimSpace(m.inputDesc.Value())
+
+				if name == "" {
+					m.notice = "Name cannot be empty"
+					m.isError = true
+					return m, nil
+				}
+				if seq == "" {
+					m.notice = "Sequence cannot be empty"
+					m.isError = true
+					return m, nil
+				}
+
+				if err := combos.Validate(seq); err != nil {
+					m.notice = fmt.Sprintf("Invalid sequence: %v", err)
+					m.isError = true
+					return m, nil
+				}
+
+				normOS, err := combos.NormalizeOS(osVal)
+				if err != nil {
+					m.notice = fmt.Sprintf("Invalid OS: %v", err)
+					m.isError = true
+					return m, nil
+				}
+
+				cleanEmoji, err := combos.ValidateEmoji(emojiVal)
+				if err != nil {
+					m.notice = fmt.Sprintf("Invalid emoji: %v", err)
+					m.isError = true
+					return m, nil
+				}
+
+				// If renaming existing combo, delete old one first
+				if m.editOrigName != "" && !strings.EqualFold(m.editOrigName, name) {
+					_, _, _ = m.store.Delete(m.editOrigName)
+				}
+
+				// Preserve favorite flag if editing
+				fav := false
+				if m.editOrigName != "" {
+					if old, ok := m.store.Find(m.editOrigName); ok {
+						fav = old.Favorite
+					}
+				}
+
+				combo := combos.Combo{
+					Name:        name,
+					Sequence:    seq,
+					OS:          normOS,
+					Emoji:       cleanEmoji,
+					Description: descVal,
+					Favorite:    fav,
+				}
+
+				newList, err := m.store.Add(combo)
+				if err != nil {
+					m.notice = fmt.Sprintf("Save failed: %v", err)
+					m.isError = true
+					return m, nil
+				}
+
+				m.list = newList
+				m.mode = 0
+				m.notice = fmt.Sprintf("✔ Saved combo %q", name)
 				m.isError = false
+				return m, nil
+			}
+
+			// Forward key to currently focused input
+			var cmd tea.Cmd
+			switch m.formActiveIndex {
+			case 0:
+				m.inputName, cmd = m.inputName.Update(msg)
+			case 1:
+				m.inputSeq, cmd = m.inputSeq.Update(msg)
+			case 2:
+				m.inputOS, cmd = m.inputOS.Update(msg)
+			case 3:
+				m.inputEmoji, cmd = m.inputEmoji.Update(msg)
+			case 4:
+				m.inputDesc, cmd = m.inputDesc.Update(msg)
+			}
+			return m, cmd
+
+		case 2: // Delete confirmation
+			switch msg.String() {
+			case "y", "enter":
+				if len(m.list) > 0 && m.cursor < len(m.list) {
+					c := m.list[m.cursor]
+					newList, _, err := m.store.Delete(c.Name)
+					if err != nil {
+						m.notice = fmt.Sprintf("Delete failed: %v", err)
+						m.isError = true
+					} else {
+						m.list = newList
+						if m.cursor >= len(m.list) && m.cursor > 0 {
+							m.cursor = len(m.list) - 1
+						}
+						m.notice = fmt.Sprintf("✔ Deleted combo %q", c.Name)
+						m.isError = false
+					}
+				}
+				m.mode = 0
+				return m, nil
+
+			case "n", "esc":
+				m.mode = 0
+				m.notice = ""
+				return m, nil
 			}
 		}
-		return m, nil
-
-	case "n", "N", "esc", "q":
-		m.pendingDel = nil
-		m.mode = studioList
-		m.notice = "Deletion cancelled."
-		m.isError = false
-		return m, nil
 	}
-	return m, nil
+
+	return m, tea.Batch(cmds...)
 }
 
-func padRight(s string, width int) string {
-	w := lipgloss.Width(s)
-	if w >= width {
-		return s
-	}
-	return s + strings.Repeat(" ", width-w)
-}
+func (m *ComboStudioModel) updateFormFocus() {
+	m.inputName.Blur()
+	m.inputSeq.Blur()
+	m.inputOS.Blur()
+	m.inputEmoji.Blur()
+	m.inputDesc.Blur()
 
-func truncate(s string, maxVisualWidth int) string {
-	if lipgloss.Width(s) <= maxVisualWidth {
-		return s
+	switch m.formActiveIndex {
+	case 0:
+		m.inputName.Focus()
+	case 1:
+		m.inputSeq.Focus()
+	case 2:
+		m.inputOS.Focus()
+	case 3:
+		m.inputEmoji.Focus()
+	case 4:
+		m.inputDesc.Focus()
 	}
-	ellipsis := "…"
-	ellipsisWidth := lipgloss.Width(ellipsis)
-	target := maxVisualWidth - ellipsisWidth
-	if target <= 0 {
-		return ellipsis
-	}
-	var res strings.Builder
-	curWidth := 0
-	for _, r := range s {
-		rw := runewidth.RuneWidth(r)
-		if curWidth+rw > target {
-			break
-		}
-		res.WriteRune(r)
-		curWidth += rw
-	}
-	res.WriteString(ellipsis)
-	return res.String()
-}
-
-func (m ComboStudioModel) cardWidth() int {
-	return calculateCardWidth(m.width)
 }
 
 func (m ComboStudioModel) View() string {
-	cardWidth := m.cardWidth()
-	innerWidth := cardWidth - 6
+	cardWidth := calculateCardWidth(m.width)
 
 	var sb strings.Builder
-
-	sb.WriteString(TitleStyle.Render("🎹 COMBO STUDIO · Keyboard, mouse & text macros"))
-	sb.WriteString("\n")
-	sb.WriteString(SubtitleStyle.Render("Create sequences using Windows key names (win+r, esc), mouse clicks, text typing and $VARIABLES; tag each macro for windows, macos or linux"))
+	title := "🎹 COMBO STUDIO · Universal Cross-Platform Sequences"
+	sb.WriteString(TitleStyle.Render(title))
 	sb.WriteString("\n\n")
 
+	switch m.mode {
+	case 1:
+		sb.WriteString(m.renderForm())
+	case 2:
+		sb.WriteString(m.renderDeleteConfirm())
+	default:
+		sb.WriteString(m.renderList())
+	}
+
+	sb.WriteString("\n")
 	if m.notice != "" {
-		style := lipgloss.NewStyle().Foreground(ColorGreen).Bold(true)
+		style := SuccessStyle
 		if m.isError {
-			style = lipgloss.NewStyle().Foreground(ColorRed).Bold(true)
+			style = ErrorStyle
 		}
 		sb.WriteString(style.Render(m.notice))
 		sb.WriteString("\n\n")
 	}
 
-	switch m.mode {
-	case studioCreate:
-		sb.WriteString(m.renderCreateForm())
-	case studioConfirmDelete:
-		sb.WriteString(m.renderDeleteConfirm())
-	default:
-		sb.WriteString(m.renderList(innerWidth))
-	}
-
-	sb.WriteString("\n\n")
-	sb.WriteString(m.renderStudioFooter())
+	sb.WriteString(m.renderFooter())
 
 	return FocusCardStyle.Width(cardWidth).Render(sb.String())
 }
 
-func (m ComboStudioModel) renderList(innerWidth int) string {
-	var sb strings.Builder
-
-	if len(m.list) == 0 {
-		empty := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(ColorPurple).
-			Padding(1, 3).
-			Background(ColorBgCard).
-			Render(
-				TitleStyle.Render("No combos yet") + "\n\n" +
-					comboTextStyle().Render("Press [n] to create your first combo.") + "\n" +
-					SubtitleStyle.Render("Create one, name it, then hit the SEND button."))
-		sb.WriteString(empty)
-		sb.WriteString("\n\n")
-	} else {
-		sb.WriteString(m.renderComboTable(innerWidth))
-		sb.WriteString("\n")
+func (m ComboStudioModel) renderForm() string {
+	title := "Add New Combo"
+	if m.editOrigName != "" {
+		title = fmt.Sprintf("Edit Combo: %s", m.editOrigName)
 	}
 
-	sb.WriteString(m.renderButtons())
+	var sb strings.Builder
+	sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(ColorCyan).Render(title))
+	sb.WriteString("\n\n")
+
+	labels := []string{
+		"Combo Name:",
+		"Sequence ({delay}, {chord}, {key}, {PAYLOAD}):",
+		"Target OS (windows, macos, linux, all):",
+		"Badge Emoji (e.g. ⚡, 🍎, 🪟, 🔒):",
+		"Description (optional):",
+	}
+
+	inputs := []*textinput.Model{
+		&m.inputName,
+		&m.inputSeq,
+		&m.inputOS,
+		&m.inputEmoji,
+		&m.inputDesc,
+	}
+
+	for i := 0; i < 5; i++ {
+		prefix := "  "
+		lblStyle := lipgloss.NewStyle().Foreground(ColorFgMuted)
+		if i == m.formActiveIndex {
+			prefix = "▶ "
+			lblStyle = lipgloss.NewStyle().Bold(true).Foreground(ColorCyan)
+		}
+		sb.WriteString(lblStyle.Render(prefix + labels[i]))
+		sb.WriteString("\n")
+		sb.WriteString("  " + inputs[i].View())
+		sb.WriteString("\n\n")
+	}
+
 	return sb.String()
 }
 
-func (m ComboStudioModel) renderComboTable(innerWidth int) string {
-	colFavNum := 6
-	prefixWidth := 2
-	spaces := 3 // spaces between prefix+colFavNum, name, keys, desc
-	avail := innerWidth - prefixWidth - colFavNum - spaces
-	if avail < 40 {
-		avail = 40
+func (m ComboStudioModel) renderDeleteConfirm() string {
+	cName := ""
+	if len(m.list) > 0 && m.cursor < len(m.list) {
+		cName = m.list[m.cursor].Name
 	}
 
-	nameWidth := 26
-	keysWidth := 28
-	if avail < 70 {
-		nameWidth = 22
-		keysWidth = 20
+	content := fmt.Sprintf(
+		"Are you sure you want to delete combo %q?\n\n[ Y ] Yes, delete   [ N / Esc ] Cancel",
+		cName,
+	)
+	return ErrorStyle.Render(content) + "\n"
+}
+
+func (m ComboStudioModel) renderList() string {
+	if len(m.list) == 0 {
+		return lipgloss.NewStyle().Foreground(ColorFgMuted).Render("  No combos saved yet. Press [n] to create one.\n")
 	}
-	descWidth := avail - nameWidth - keysWidth
-	if descWidth < 12 {
-		nameWidth = 16
-		keysWidth = 18
-		descWidth = avail - nameWidth - keysWidth
+
+	colFavNum := 6
+	nameWidth := 20
+	seqWidth := 34
+	descWidth := 16
+
+	for _, c := range m.list {
+		nw := len(c.Name) + 5
+		if nw > nameWidth {
+			nameWidth = nw
+		}
+		sw := len(c.Sequence)
+		if sw > seqWidth {
+			seqWidth = sw
+		}
+		dw := len(c.Description)
+		if dw > descWidth {
+			descWidth = dw
+		}
+	}
+
+	maxTableWidth := m.width - 12
+	if maxTableWidth < 60 {
+		maxTableWidth = 60
+	}
+	totalNeeded := colFavNum + nameWidth + seqWidth + descWidth + 8
+	if totalNeeded > maxTableWidth {
+		excess := totalNeeded - maxTableWidth
+		seqWidth -= excess / 2
+		if seqWidth < 18 {
+			seqWidth = 18
+		}
+		descWidth -= excess / 2
 		if descWidth < 10 {
 			descWidth = 10
 		}
@@ -662,9 +488,9 @@ func (m ComboStudioModel) renderComboTable(innerWidth int) string {
 	headerPrefix := "  "
 	headerFavNum := padRight("  #", colFavNum)
 	headerName := padRight("NAME", nameWidth)
-	headerKeys := padRight("KEYS", keysWidth)
+	headerSeq := padRight("SEQUENCE", seqWidth)
 	headerDesc := padRight("DESCRIPTION", descWidth)
-	headerLine := fmt.Sprintf("%s%s %s %s %s", headerPrefix, headerFavNum, headerName, headerKeys, headerDesc)
+	headerLine := fmt.Sprintf("%s%s %s %s %s", headerPrefix, headerFavNum, headerName, headerSeq, headerDesc)
 	header := lipgloss.NewStyle().Foreground(ColorFgMuted).Render(headerLine)
 
 	var rows []string
@@ -678,180 +504,43 @@ func (m ComboStudioModel) renderComboTable(innerWidth int) string {
 			favNumCol = padRight(fmt.Sprintf("   %-2d", i+1), colFavNum)
 		}
 
-		osStr := c.Badge() + " "
-		fullName := osStr + c.Name
-		nameCol := padRight(truncate(fullName, nameWidth), nameWidth)
-		keysCol := padRight(truncate(c.Keys, keysWidth), keysWidth)
+		osBadge := c.Badge()
+		displayName := osBadge + " " + c.Name
+		nameCol := padRight(truncate(displayName, nameWidth), nameWidth)
+		seqCol := padRight(truncate(c.Sequence, seqWidth), seqWidth)
 		descCol := padRight(truncate(c.Description, descWidth), descWidth)
 
-		if i == m.index {
-			prefix := "▸ "
-			line := fmt.Sprintf("%s%s %s %s %s", prefix, favNumCol, nameCol, keysCol, descCol)
-			if m.focus == 0 {
-				rows = append(rows, lipgloss.NewStyle().
-					Bold(true).
-					Foreground(ColorCyan).
-					Background(lipgloss.Color("#313244")).
-					Render(line))
-			} else {
-				rows = append(rows, lipgloss.NewStyle().
-					Foreground(ColorCyan).
-					Render(line))
-			}
-		} else {
-			prefix := "  "
-			line := fmt.Sprintf("%s%s %s %s %s", prefix, favNumCol, nameCol, keysCol, descCol)
-			rows = append(rows, lipgloss.NewStyle().
-				Foreground(ColorFgLight).
-				Render(line))
-		}
-	}
-	return strings.Join(rows, "\n")
-}
+		prefix := "  "
+		line := fmt.Sprintf("%s%s %s %s %s", prefix, favNumCol, nameCol, seqCol, descCol)
 
-func (m ComboStudioModel) renderButtons() string {
-	labels := []string{"✈ SEND", "+ NEW", "🗑 DELETE"}
-	buttons := make([]string, 0, len(labels))
-	for i, label := range labels {
-		style := lipgloss.NewStyle().
-			Foreground(ColorFgLight).
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(ColorFgMuted).
-			Padding(0, 2).
-			Background(ColorBgCard)
-		if m.focus == i+1 {
-			style = style.
+		if i == m.cursor {
+			selectedStyle := lipgloss.NewStyle().
 				Bold(true).
-				Foreground(ColorBgDark).
-				Background(ColorCyan).
-				BorderForeground(ColorCyan)
+				Foreground(ColorCyan).
+				Background(lipgloss.Color("#26233a"))
+			line = selectedStyle.Render("▸ " + line[2:])
 		}
-		buttons = append(buttons, style.Render(label))
+		rows = append(rows, line)
 	}
-	return lipgloss.JoinHorizontal(lipgloss.Center, buttons[0], "  ", buttons[1], "  ", buttons[2])
+
+	return strings.Join(rows, "\n") + "\n"
 }
 
-func (m ComboStudioModel) renderCreateForm() string {
-	labelStyle := lipgloss.NewStyle().Foreground(ColorFgMuted).Width(13)
-	nameLabel := labelStyle.Render("Name")
-	emojiLabel := labelStyle.Render("Emoji")
-	osLabel := labelStyle.Render("OS")
-	descLabel := labelStyle.Render("Description")
-	keysLabel := labelStyle.Render("Keys")
-
-	nameField := m.nameInput.View()
-	if m.formFocus != 0 {
-		nameVal := m.nameInput.Value()
-		if nameVal == "" {
-			nameVal = "(empty)"
-		}
-		nameField = SubtitleStyle.Render(nameVal)
+func (m ComboStudioModel) renderFooter() string {
+	switch m.mode {
+	case 1:
+		return HelpStyle.Render("[Tab / ↓]: Next field • [Enter]: Save combo • [Esc]: Cancel")
+	case 2:
+		return HelpStyle.Render("[Y / Enter]: Delete • [N / Esc]: Cancel")
+	default:
+		return HelpStyle.Render("↑/↓: Navigate • [Enter / s]: Send • [n]: New • [e]: Edit • [f]: Fav • [d]: Delete • [Esc/q]: Back")
 	}
-	emojiField := m.emojiInput.View()
-	if m.formFocus != 1 {
-		emojiVal := m.emojiInput.Value()
-		if emojiVal == "" {
-			emojiVal = "(none — target OS icon)"
-		}
-		emojiField = SubtitleStyle.Render(emojiVal)
-	}
-	osField := m.osInput.View()
-	if m.formFocus != 2 {
-		osVal := m.osInput.Value()
-		if osVal == "" {
-			osVal = combos.OSWindows
-		}
-		osField = SubtitleStyle.Render(osVal)
-	}
-	descField := m.descInput.View()
-	if m.formFocus != 3 {
-		descVal := m.descInput.Value()
-		if descVal == "" {
-			descVal = "(none)"
-		}
-		descField = SubtitleStyle.Render(descVal)
-	}
-	keysField := m.keysInput.View()
-	if m.formFocus != 4 {
-		keysVal := m.keysInput.Value()
-		if keysVal == "" {
-			keysVal = "(empty)"
-		}
-		keysField = SubtitleStyle.Render(keysVal)
-	}
-
-	save := m.formButton("SAVE", 5)
-	sendSave := m.formButton("SAVE & SEND", 6)
-
-	form := fmt.Sprintf(
-		"%s\n\n%s  %s\n%s  %s\n%s  %s\n%s  %s\n%s  %s\n\n%s",
-		TitleStyle.Render("CREATE / EDIT COMBO"),
-		nameLabel, nameField,
-		emojiLabel, emojiField,
-		osLabel, osField,
-		descLabel, descField,
-		keysLabel, keysField,
-		lipgloss.JoinHorizontal(lipgloss.Center, save, "  ", sendSave),
-	)
-
-	help := SubtitleStyle.Render(
-		"Supported: win, ctrl, alt, shift, letters/numbers, esc, tab, enter, space, arrows.\n" +
-			"Delays: ->{0.8} or ->. Mouse: click-left, scroll-up. Text: type:rustdesk. Variables: $USERNAME, $PASSWORD")
-	return form + "\n\n" + help
 }
 
-func (m ComboStudioModel) formButton(label string, focusIdx int) string {
-	style := lipgloss.NewStyle().
-		Foreground(ColorFgLight).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(ColorFgMuted).
-		Padding(0, 2).
-		Background(ColorBgCard)
-	if m.formFocus == focusIdx {
-		style = style.
-			Bold(true).
-			Foreground(ColorBgDark).
-			Background(ColorCyan).
-			BorderForeground(ColorCyan)
-	}
-	return style.Render(label)
-}
-
-func (m ComboStudioModel) renderDeleteConfirm() string {
-	name := "this combo"
-	keys := ""
-	if m.pendingDel != nil {
-		name = fmt.Sprintf("%q", m.pendingDel.Name)
-		keys = m.pendingDel.Keys
-	}
-
-	body := fmt.Sprintf(
-		"%s\n\n%s\n%s\n\n%s   %s",
-		ErrorStyle.Render("DELETE COMBO"),
-		fmt.Sprintf("Delete %s?", name),
-		SubtitleStyle.Render(keys),
-		lipgloss.NewStyle().Bold(true).Foreground(ColorRed).Render("[ Y ] Yes, delete"),
-		lipgloss.NewStyle().Bold(true).Foreground(ColorGreen).Render("[ N ] Keep it"),
-	)
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(ColorRed).
-		Padding(1, 3).
-		Background(ColorBgCard).
-		Width(64).
-		Render(body)
-}
-
-func (m ComboStudioModel) renderStudioFooter() string {
-	if m.mode == studioCreate {
-		return HelpStyle.Render("[Tab / Shift+Tab]: Switch field • [Enter / Ctrl+S]: Save • [Esc]: Cancel")
-	}
-	if m.mode == studioConfirmDelete {
-		return HelpStyle.Render("[y]: Confirm delete • [n / Esc]: Cancel")
-	}
-	return HelpStyle.Render("↑/↓: Navigate • [Enter]: Send • [n]: New • [e]: Edit • [d]: Delete • [f]: Favorite • [Tab]: Focus buttons • [Esc/q]: Back")
-}
-
-func comboTextStyle() lipgloss.Style {
-	return lipgloss.NewStyle().Foreground(ColorFgLight).Bold(true)
+// RunComboStudio runs the Combo Studio standalone in a Bubble Tea program.
+func RunComboStudio(store *combos.Store, sendFn ComboSendFunc) error {
+	m := NewComboStudioModel(store, sendFn)
+	p := tea.NewProgram(m, tea.WithAltScreen())
+	_, err := p.Run()
+	return err
 }

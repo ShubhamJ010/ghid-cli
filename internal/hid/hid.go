@@ -4,8 +4,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"regexp"
-	"strconv"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -26,6 +25,7 @@ const (
 const (
 	KeyNone      byte = 0x00
 	KeyA         byte = 0x04
+	KeyS         byte = 0x16
 	KeyZ         byte = 0x1D
 	Key1         byte = 0x1E
 	Key0         byte = 0x27
@@ -58,6 +58,18 @@ const (
 	KeyF10       byte = 0x43
 	KeyF11       byte = 0x44
 	KeyF12       byte = 0x45
+	KeyF13       byte = 0x68
+	KeyF14       byte = 0x69
+	KeyF15       byte = 0x6A
+	KeyF16       byte = 0x6B
+	KeyF17       byte = 0x6C
+	KeyF18       byte = 0x6D
+	KeyF19       byte = 0x6E
+	KeyF20       byte = 0x6F
+	KeyF21       byte = 0x70
+	KeyF22       byte = 0x71
+	KeyF23       byte = 0x72
+	KeyF24       byte = 0x73
 	KeyPrintScr  byte = 0x46
 	KeyScrollLk  byte = 0x47
 	KeyPause     byte = 0x48
@@ -142,7 +154,13 @@ func ParseCombo(combo string) (modifier byte, keyCode byte, err error) {
 	for _, rawPart := range parts {
 		p := strings.TrimSpace(rawPart)
 		switch p {
-		case "win", "gui", "cmd", "meta", "super":
+		case "mod":
+			if runtime.GOOS == "darwin" {
+				modifier |= ModLeftGUI
+			} else {
+				modifier |= ModLeftCtrl
+			}
+		case "win", "gui", "cmd", "command", "meta", "super":
 			modifier |= ModLeftGUI
 		case "ctrl", "control":
 			modifier |= ModLeftCtrl
@@ -238,6 +256,30 @@ func ParseCombo(combo string) (modifier byte, keyCode byte, err error) {
 			keyCode = KeyF11
 		case "f12":
 			keyCode = KeyF12
+		case "f13":
+			keyCode = KeyF13
+		case "f14":
+			keyCode = KeyF14
+		case "f15":
+			keyCode = KeyF15
+		case "f16":
+			keyCode = KeyF16
+		case "f17":
+			keyCode = KeyF17
+		case "f18":
+			keyCode = KeyF18
+		case "f19":
+			keyCode = KeyF19
+		case "f20":
+			keyCode = KeyF20
+		case "f21":
+			keyCode = KeyF21
+		case "f22":
+			keyCode = KeyF22
+		case "f23":
+			keyCode = KeyF23
+		case "f24":
+			keyCode = KeyF24
 		default:
 			if len(p) == 1 {
 				c := p[0]
@@ -267,7 +309,9 @@ func NormalizeComboForAndroid(combo string) string {
 	for _, p := range parts {
 		token := strings.TrimSpace(p)
 		switch token {
-		case "super", "cmd", "meta", "gui":
+		case "mod":
+			normalized = append(normalized, "mod")
+		case "super", "cmd", "command", "meta", "gui":
 			normalized = append(normalized, "win")
 		case "control":
 			normalized = append(normalized, "ctrl")
@@ -290,113 +334,35 @@ func NormalizeComboForAndroid(combo string) string {
 	return strings.Join(normalized, "+")
 }
 
+// IsModifierToken reports whether a token is a modifier name rather than a
+// keycode. A modifier on its own is a valid HID step (a bare modifier press).
+func IsModifierToken(token string) bool {
+	switch strings.ToLower(strings.TrimSpace(token)) {
+	case "mod", "win", "gui", "cmd", "command", "meta", "super", "ctrl", "control", "alt", "opt", "option", "shift":
+		return true
+	}
+	return false
+}
+
+// ConsumerToken reports whether a token names a consumer-control key and
+// returns its canonical name.
+func ConsumerToken(token string) (string, bool) {
+	lower := strings.ToLower(strings.TrimSpace(token))
+	if _, ok := ConsumerKeyReports[lower]; !ok {
+		return "", false
+	}
+	return CanonicalConsumerName(lower), true
+}
+
 // ComboStep represents a single action in a chained combo sequence.
 type ComboStep struct {
-	Combo     string        // Human-readable combo for this step, e.g. "super+l"
-	Modifier  byte          // Resolved modifier bitmask
-	KeyCode   byte          // Resolved primary keycode
-	Mouse     *MouseAction  // Non-nil when this step is a mouse gesture
-	Text      string        // Non-empty when this step types a literal string
-	Variable  string        // Non-empty when this step references a snippet variable, e.g. "USERNAME"
-	Raw       string        // Non-empty hex string when this step is a raw HID report
-	Delay     time.Duration // Pause duration after transmitting this step
-}
-
-// Delimiter regex matching "->{0.9}", ">{0.9}.", "-> 1.0", "->{0.9)", "->", etc.
-var stepDelimRegex = regexp.MustCompile(`(?i)\s*(?:->|>)\s*(?:[\{\(\[]?\s*([0-9]+(?:\.[0-9]+)?)\s*s?[\}\)\]]?\.?|([0-9]+(?:\.[0-9]+)?)\s*s?\.?)?\s*`)
-
-// ParseComboSequence parses a combo sequence string which may contain multiple
-// combo steps separated by "->" or "->{seconds}".
-// Examples:
-//   - "super+l"
-//   - "esc ->{0.9} super+l"
-//   - "esc >{0.9}. super+l"
-//   - "esc -> super+l"
-//   - "super+l ->{0.9}"
-//   - "esc -> esc -> win+x -> u -> s"
-func ParseComboSequence(input string) ([]ComboStep, error) {
-	return parseSequence(input, func(segment string) (ComboStep, error) {
-		mod, code, err := ParseCombo(segment)
-		if err != nil {
-			return ComboStep{}, err
-		}
-		return ComboStep{Combo: segment, Modifier: mod, KeyCode: code}, nil
-	})
-}
-
-// parseSequence walks a "->" delimited sequence and delegates per-step parsing
-// so keyboard-only and keyboard+mouse sequences share one grammar.
-func parseSequence(input string, parseStep func(string) (ComboStep, error)) ([]ComboStep, error) {
-	trimmed := strings.TrimSpace(input)
-	if trimmed == "" {
-		return nil, errors.New("empty combo sequence")
-	}
-
-	indices := stepDelimRegex.FindAllStringSubmatchIndex(trimmed, -1)
-	if len(indices) == 0 {
-		step, err := parseStep(trimmed)
-		if err != nil {
-			return nil, err
-		}
-		step.Delay = 0
-		return []ComboStep{step}, nil
-	}
-
-	var steps []ComboStep
-	lastIdx := 0
-
-	for _, loc := range indices {
-		matchStart := loc[0]
-		matchEnd := loc[1]
-
-		segment := strings.TrimSpace(trimmed[lastIdx:matchStart])
-		delay := 1000 * time.Millisecond // default delay when '->' is specified without duration
-
-		// Check submatch groups for parsed numeric seconds
-		var secStr string
-		if loc[2] >= 0 && loc[3] >= 0 {
-			secStr = trimmed[loc[2]:loc[3]]
-		} else if len(loc) >= 6 && loc[4] >= 0 && loc[5] >= 0 {
-			secStr = trimmed[loc[4]:loc[5]]
-		}
-
-		if secStr != "" {
-			if secVal, err := strconv.ParseFloat(secStr, 64); err == nil && secVal >= 0 {
-				delay = time.Duration(secVal * float64(time.Second))
-			}
-		}
-
-		if segment != "" {
-			step, err := parseStep(segment)
-			if err != nil {
-				return nil, fmt.Errorf("invalid combo %q: %w", segment, err)
-			}
-			step.Delay = delay
-			steps = append(steps, step)
-		} else if len(steps) > 0 {
-			// Delimiter directly follows previous step without an intervening combo
-			steps[len(steps)-1].Delay = delay
-		}
-
-		lastIdx = matchEnd
-	}
-
-	// Any trailing combo after the last delimiter
-	if lastIdx < len(trimmed) {
-		tail := strings.TrimSpace(trimmed[lastIdx:])
-		if tail != "" {
-			step, err := parseStep(tail)
-			if err != nil {
-				return nil, fmt.Errorf("invalid combo %q: %w", tail, err)
-			}
-			step.Delay = 0
-			steps = append(steps, step)
-		}
-	}
-
-	if len(steps) == 0 {
-		return nil, errors.New("no valid combo steps found in sequence")
-	}
-
-	return steps, nil
+	Combo    string        // Human-readable combo or token for this step, e.g. "mod+s", "Tab", "500ms"
+	Modifier byte          // Resolved modifier bitmask
+	KeyCode  byte          // Resolved primary keycode
+	Mouse    *MouseAction  // Non-nil when this step is a mouse gesture
+	Text     string        // Non-empty when this step types a literal string
+	Payload  string        // Non-empty when this step references a payload name, e.g. "PASSWORD"
+	Raw      string        // Non-empty hex string when this step is a raw HID report
+	Delay    time.Duration // Pause duration after transmitting this step
+	Hold     time.Duration // Hold duration for chords, raw reports, and payloads (default 0 -> momentary 60ms)
 }

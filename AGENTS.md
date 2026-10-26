@@ -101,26 +101,32 @@ ghid status
 
 `--json` = non-interactive. No prompts, no ANSI, JSON on stdout, diagnostics on stderr.
 
-- Exit `0` success, `1` error.
-- Combo errors: `{"status":"error","error":"..."}` on stdout + exit 1.
-- `combo schema --json` = grammar + every valid token. Agents discover, no hard-code.
-- `combo validate <keys> --json` = parse without send/save.
-- `combo save` = upsert, returns `updated: true|false`.
+- Exit `0` success, `1` error. `status` exits `1` while the HID link is disconnected (JSON body is still emitted).
+- Combo errors: `{"status":"error","error":"..."}` on stdout + exit 1. Payload errors use the same shape.
+- `combo schema --json` / `combo keys --json` = grammar + every valid token. Agents discover, no hard-code.
+- `combo validate <keys> [--os ...] --json` = parse + resolve payload refs without send/save.
+- `combo save` = upsert, returns `updated: true|false` and `synced: true|false`; refuses unresolved payload refs unless `--allow-unresolved`.
+- `combo show <name> --json` = read one saved combo + payload resolution.
+- `combo send <name> --dry-run --json` = resolved HID steps, nothing dispatched.
 - `combo delete --json` = no confirmation.
+- `payload get --json` = `source`/`present`/`has_value`; a missing Keychain item exits 1.
+- Secure payload values are device-only and never cross the link: push sends their entries with `Value` scrubbed (ADR-009) and counts them as `payloads_skipped_secure`; `status` carries `secure_payloads: "device_only"`.
+- `status --json` splits `gateway` (ADB) from `hid_link`; gate sends on `can_send`.
 
 ```bash
 ghid combo schema --json
-ghid combo validate 'win+s ->{0.7} type:rustdesk ->{0.4} enter' --json
-ghid combo save "Open RustDesk" 'win+s ->{0.7} type:rustdesk ->{0.4} enter' --json
+ghid combo validate '{win+s}{700ms}rustdesk{400ms}{enter}' --json
+ghid combo save "Open RustDesk" '{win+s}{700ms}rustdesk{400ms}{enter}' --json
 ghid combo list --json
 ghid combo send "Open RustDesk" --json
 ghid combo delete "Open RustDesk" --json
 ```
 
-Combo grammar: `step ->{seconds} step`.
-Steps: keyboard chord, mouse gesture, `type:<text>` / `text:<text>`.
-Windows only. Reject `cmd`, `super`, `option`.
-Typed text = printable US-ASCII. Go validator + Android `keyForChar` must stay in sync.
+Combo grammar: unified bracket sequence DSL `{chord}`, `{delay}`, `literal text`, `{PAYLOAD}`.
+Delays: `{100ms}`, `{1s}`, `{0.5s}`.
+Parameterized duration: `{TOKEN:duration}` (e.g. `{WIN_SLEEP:3s}`, `{VolumeUp:1.5s}`, `{Backspace:800ms}`, `{mod+s:500ms}`). Omitted duration defaults to safe momentary 40-60ms tap.
+Cross-platform modifiers: `mod` (resolves to `cmd` on macOS, `win` on Windows/Linux), `ctrl`, `alt`/`opt`, `shift`.
+Payload references: `{NAME}` (e.g. `{PASSWORD}`, `{WIN_SLEEP}`, `{PLAY_PAUSE}`).
 
 ## Engineering rules
 
@@ -132,6 +138,8 @@ Typed text = printable US-ASCII. Go validator + Android `keyForChar` must stay i
 - Preserve one-shot `ghid combo "win+d"`.
 - Commit style: `feat:`, `fix:`, `refactor:`, `docs:`.
 - Alpha means large refactors OK. Do not leave half-migrated layers, dead code, or duplicate parsers.
+- **Android APK deployment & testing rule**: Android Package Manager (`adb install -r`) preserves existing processes in memory. Whenever deploying an APK, ALWAYS run `adb shell am force-stop com.sj010.ghid` before starting the app or testing via ADB/CLI so that newly compiled bytecode is executed rather than stale code in memory.
+- **Momentary HID report auto-release & hold semantics**: HID raw reports are stateful switch reports. Momentary actions like Consumer Control Report 4 (e.g. `cd00` Play/Pause) or System Control Report 3 (e.g. `02` System Sleep) MUST be released with a zero report (`0000` / `00`) after ~60ms. `HidService.sendRawReport` automatically sends this zero release for non-zero Report 3 and Report 4 payloads. To hold buttons (e.g. Mac/Windows power/sleep hold for 3-5 seconds, Volume ramp, key repeat), use the parameterized duration suffix `{TOKEN:duration}` in sequence strings or `--hold <duration>` in CLI `ghid raw <hex> --hold 3s` / `--el hold_ms <ms>` in ADB.
 
 ## Android app design & iteration rules
 
