@@ -1,4 +1,4 @@
-module github.com/ghost-hid/ghid
+module github.com/ShubhamJ010/ghid-cli
 
 go 1.27.2
 

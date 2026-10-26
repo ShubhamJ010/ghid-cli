@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/ghost-hid/ghid/internal/cli"
+	"github.com/ShubhamJ010/ghid-cli/internal/cli"
 )
 
 const Version = "0.1.0"

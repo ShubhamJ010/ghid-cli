@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/ghost-hid/ghid/internal/combos"
+	"github.com/ShubhamJ010/ghid-cli/internal/combos"
 )
 
 func (m Model) View() string {

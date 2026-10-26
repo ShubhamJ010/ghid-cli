@@ -12,8 +12,8 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/ghost-hid/ghid/internal/hid"
-	"github.com/ghost-hid/ghid/internal/payloads"
+	"github.com/ShubhamJ010/ghid-cli/internal/hid"
+	"github.com/ShubhamJ010/ghid-cli/internal/payloads"
 )
 
 // Default combo sequences shipped with the application.

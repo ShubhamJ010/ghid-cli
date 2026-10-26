@@ -13,12 +13,12 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/ghost-hid/ghid/internal/adb"
-	"github.com/ghost-hid/ghid/internal/combos"
-	"github.com/ghost-hid/ghid/internal/config"
-	"github.com/ghost-hid/ghid/internal/hid"
-	"github.com/ghost-hid/ghid/internal/keychain"
-	"github.com/ghost-hid/ghid/internal/payloads"
+	"github.com/ShubhamJ010/ghid-cli/internal/adb"
+	"github.com/ShubhamJ010/ghid-cli/internal/combos"
+	"github.com/ShubhamJ010/ghid-cli/internal/config"
+	"github.com/ShubhamJ010/ghid-cli/internal/hid"
+	"github.com/ShubhamJ010/ghid-cli/internal/keychain"
+	"github.com/ShubhamJ010/ghid-cli/internal/payloads"
 )
 
 type AppState int
