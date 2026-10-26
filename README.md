@@ -52,6 +52,7 @@ GhostHID is built for headless operation and AI agents:
   - [ADR-012: Single Non-Headless Android App and Release-Only Deployment](docs/decisions/ADR-012-single-android-app-and-release-only-deployment.md)
   - [ADR-013: Combo Emoji Icon Override](docs/decisions/ADR-013-combo-emoji-icon-override.md)
   - [ADR-014: Raw Snippets, Strict Security Boundary, and Material 3 Expressive Controls](docs/decisions/ADR-014-raw-snippets-security-boundary-and-m3-expressive-controls.md)
+  - [ADR-015: Unified Bracket Sequence DSL and Payload Subsystem](docs/decisions/ADR-015-unified-bracket-sequence-dsl-and-payloads.md)
 - [Prompt: Build Your Own Headless Android App](docs/prompts/headless-android-app.md): the complete ADB broadcast, status and file contract for coding a UI-less gateway app from scratch.
 
 ## Quick Start
@@ -143,7 +144,7 @@ Actions:
 
 - `login`: Wakes screen (`Ctrl+Alt+Del` then `Esc`), types username and password from the Keychain vault, and presses `Enter`.
 - `lock`: Dispatches `Win + L` immediately.
-- `sleep`: Dispatches native hardware ACPI sleep sequence (`raw:02 ->{0.06} raw:00`), putting host to sleep at kernel level.
+- `sleep`: Dispatches native hardware ACPI sleep sequence (`{WIN_SLEEP}`), putting host to sleep at kernel level.
 - `type`: Sends raw text strings as a sequence of keystrokes.
 - `combo`: Opens the interactive Combo Studio.
 - `raw`: Sends explicit 8-byte raw hex reports directly to the HID driver.
@@ -187,10 +188,10 @@ Example output:
     "platform": "windows",
     "selected": true
   },
-  "snippets_count": 3,
+  "payloads_count": 3,
   "target_address": "38:FC:98:E8:E3:87",
   "target_laptop": "LP-TZD-0X114650",
-  "version": "1.0.0"
+  "version": "0.1.0"
 }
 ```
 
@@ -201,7 +202,12 @@ Inspects active connection state:
 ghid status --json
 ```
 
-Returns exit code 0 if connected, 1 if disconnected.
+The JSON separates `gateway` (ADB reachability and serial) from `hid_link`
+(Bluetooth registration and target). `os` falls back to the selected target
+device when the phone has no fingerprint (`os_source`), `can_send` is the single
+boolean to gate on, and `secure_payloads` is always `device_only`.
+
+Returns exit code 0 if the HID link is connected, 1 if disconnected.
 
 ### Automated Login (`login`)
 Unlock using stored Keychain credentials:
@@ -224,14 +230,15 @@ ghid sleep --countdown 5
 ```
 
 ### Bi-directional Sync (`sync`) & Android Single Source of Truth (SSOT)
-Android flash storage (`/sdcard/Android/data/com.sj010.ghid/files/`) is the authoritative Single Source of Truth (SSOT) for all combos and snippets.
-The CLI automatically pulls changes from the phone on startup (<15ms check), and any CLI modifications (`combo save/delete`, `snippets set/delete`) push directly to the phone, restart the app to reload in-memory state, and restore Bluetooth connectivity:
+Android flash storage (`/sdcard/Android/data/com.sj010.ghid/files/`) is the authoritative Single Source of Truth (SSOT) for all combos and payloads.
+The CLI automatically pulls changes from the phone on startup (<15ms check), and any CLI modifications (`combo save/delete`, `payload set/delete`) push directly to the phone, restart the app to reload in-memory state, and restore Bluetooth connectivity:
 
 ```bash
 # Full bi-directional sync (pull from phone, merge additions, push back, restart & reconnect)
 ghid sync
+# Secure payload values never cross the link; entries push with Value scrubbed and are counted as payloads_skipped_secure
 
-# Pull only (replaces local combo/snippet cache with phone state)
+# Pull only (phone wins name conflicts; local-only entries are kept for the next push)
 ghid sync --pull
 
 # Push only (pushes local cache to phone, scrubs secrets, restarts app, reconnects)
@@ -250,9 +257,10 @@ Target HID collection (Report ID) is automatically inferred from the payload len
 ghid quick "git status"
 ghid quick "Administrator" --json
 
-# Send composite sequences containing raw steps
-ghid quick "raw:cd00 ->{0.06} raw:0000" --json  # Consumer Play/Pause toggle
-ghid quick "raw:02 ->{0.06} raw:00" --json      # System Control Sleep
+# quick types text; use combo for sequences and media keys
+ghid combo "{playpause}" --json                      # Consumer Play/Pause toggle
+ghid combo "{PLAY_PAUSE}" --json                     # PLAY_PAUSE payload (raw cd00)
+ghid combo "{WIN_SLEEP}" --json                      # System Control Sleep
 
 # Transmit length-inferred raw HID reports directly
 ghid quick --raw "02"               # 1 byte  -> Report ID 3 (System Control: Sleep)
@@ -280,16 +288,26 @@ ghid combo mouse scroll-down
 Combos can be validated, saved, listed, and sent via CLI or JSON without loading the TUI:
 
 ```bash
-# Inspect accepted grammar tokens and mouse actions
+# Inspect accepted grammar tokens
 ghid combo schema --json
 
-# Validate a chained sequence before saving
-ghid combo validate "win+s ->{0.7} type:rustdesk ->{0.4} enter" --json
+# Dump the complete token table (keys, modifiers, consumer, aliases, F-keys)
+ghid combo keys --json
+
+# Validate a chained sequence before saving (resolves payload references too)
+ghid combo validate "{mod+s}{700ms}rustdesk{400ms}{Enter}" --json
+ghid combo validate "{cmd+s}" --os macos --json
+
+# Read a saved combo back
+ghid combo show "Open RustDesk" --json
+
+# Prove a combo resolves without sending anything
+ghid combo send "Open RustDesk" --dry-run --json
 
 # Save a named combo for a host OS (updates if already exists)
-ghid combo save "Open RustDesk" "win+s ->{0.7} type:rustdesk ->{0.4} enter" --os windows --emoji "🚀" --json
+ghid combo save "Open RustDesk" "{mod+s}{700ms}rustdesk{400ms}{Enter}" --os windows --emoji "🚀" --json
 ghid combo save "Spotlight" "cmd+space" --os macos --emoji "🔎" --json
-ghid combo save "PlayPause" "raw:cd00 ->{0.06} raw:0000" --os macos --json
+ghid combo save "PlayPause" "{PLAY_PAUSE}" --os macos --json
 
 # --emoji is optional metadata: it overrides the OS logo on the Android combo card
 # and replaces the [win] / [mac] / [linux] badge in 'ghid combo list'
@@ -299,9 +317,9 @@ ghid combo list --json
 ghid combo list --os macos --json
 
 # Built-in macOS shortcuts
-ghid combo send "MacSleep" --json      # cmd+ctrl+q ->{0.5} esc (Locks screen & sleeps display)
-ghid combo send "ForceQuit" --json     # cmd+opt+esc ->{0.4} enter ->{0.3} enter (Force quits frontmost app)
-ghid combo send "PlayPause" --json     # raw:cd00 ->{0.06} raw:0000 (Consumer Control toggle)
+ghid combo send "MacSleep" --json      # {mod+ctrl+q}{500ms}{Escape} (Locks screen & sleeps display)
+ghid combo send "ForceQuit" --json     # {mod+alt+esc}{400ms}{Enter}{300ms}{Enter} (Force quits frontmost app)
+ghid combo send "PlayPause" --json     # {PLAY_PAUSE} payload -> raw cd00
 
 # Send any saved combo by name
 ghid combo send "Open RustDesk" --json
@@ -309,6 +327,10 @@ ghid combo send "Open RustDesk" --json
 # Delete a saved combo
 ghid combo delete "Open RustDesk" --json
 ```
+
+`combo save` refuses missing payload references. Add `--allow-unresolved` for a
+secure payload that only exists on the phone. The output only says `synced to
+Android` when an attached phone was actually pushed.
 
 Saved combos are stored in `~/.config/ghid/combos.json`.
 
@@ -366,33 +388,51 @@ ghid tail
 ghid filelog
 ```
 
-## Combo Sequence Grammar
+## Unified Bracket Sequence DSL
 
-Chained sequences separate steps with `->` and optional delay values in curly braces (`->{seconds}`):
+GhostHID uses a single, unified `{...}` bracket sequence grammar across Go, Android/Kotlin, the CLI, and TUI.
 
 ```text
-<step> [->{delay}] <step> [->{delay}] ...
+samxn81@gmail.com{Tab}{PASSWORD}{Enter}{500ms}{mod+s}{100ms}{WIN_SLEEP}
 ```
 
-Examples:
-- `win+r ->{0.5} type:notepad ->{0.3} enter`
-- `ctrl+alt+del ->{1.0} esc`
-- `click-right ->{0.2} down ->{0.1} enter`
+### Syntax Rules
+1. **Plain Text**: Everything outside `{}` is typed literally as keystrokes.
+2. **Escaped Bracket**: `{{` evaluates to a literal `{` within typed text.
+3. **Execution Delay**: Numbers followed by `ms` or `s` (e.g. `{500ms}`, `{1s}`, `{100ms}`) trigger execution delays.
+4. **Keyboard Chords**: Tokens containing `+` trigger simultaneous modifier + key chords (e.g. `{mod+s}`, `{ctrl+alt+del}`). The `mod` modifier dynamically resolves to **Command (GUI)** on macOS and **Ctrl** on Windows/Linux.
+5. **Standard & Consumer Keys**: `{Tab}`, `{Enter}`, `{Escape}`, `{Space}`, `{Del}`, `{Up}`, `{F1}`-`{F24}`, or consumer media keys `{VolumeUp}`, `{VolumeDown}`, `{Mute}`, `{playpause}`. A bare modifier such as `{shift}` is a valid modifier-only step. Consumer keys cannot carry modifiers.
+   - `playpause` is the media key. `play_pause` is the **payload** name (`PLAY_PAUSE`, default raw report `cd00`), so `{PLAY_PAUSE}` resolves through the payload vault.
+6. **Mouse Gestures**: `{click-left}`, `{click-right}`, `{click-middle}`, `{double-click}`, `{scroll-up}`, `{scroll-down}`.
+7. **Named Payloads**: Any braced identifier that is not a key, modifier, mouse gesture, delay or raw report (e.g. `{PASSWORD}`, `{EMAIL}`, `{WIN_SLEEP}`) resolves against the payload vault. Names are case-insensitive; uppercase is convention only.
 
-### Token Reference
+### Payloads Subsystem (`ghid payload`)
+Payloads store reusable text strings, secure credentials, and raw HID reports:
 
-| Type | Allowed Tokens |
-|:-----|:---------------|
-| Modifiers | `win`, `gui`, `ctrl`, `control`, `alt`, `shift` |
-| Alphabet / Numbers | `a` through `z`, `0` through `9` |
-| Function Keys | `f1` through `f12` |
-| Navigation | `up`, `down`, `left`, `right`, `home`, `end`, `pgup`, `pgdn` |
-| Editing & System | `enter`, `esc`, `tab`, `space`, `backspace`, `del`, `insert`, `capslock`, `numlock`, `scrolllock`, `printscreen`, `pause`, `menu` |
-| Symbols | `minus`, `equal`, `leftbracket`, `rightbracket`, `backslash`, `semicolon`, `quote`, `grave`, `comma`, `period`, `slash` |
-| Mouse Actions | `click-left`, `click-right`, `click-middle`, `double-click`, `scroll-up`, `scroll-down` |
-| Literal Text | `type:word` or `type:"string with spaces"` |
+```bash
+# List all saved payloads
+ghid payload list --json
 
-macOS-specific key aliases (`cmd`, `option`, `opt`, `super`) are rejected by the validator to prevent ambiguous keycode mappings.
+# Set a plaintext or raw payload
+ghid payload set username "samxn81@gmail.com"
+ghid payload set WIN_SLEEP "02" --raw
+
+# Store a sensitive credential in the hardware Keychain / Android Keystore enclave
+ghid payload set password "Secret123!" --secure
+
+# Read or delete a payload
+ghid payload get username
+ghid payload delete username
+```
+
+Flags work in any position: `ghid payload set MAC_POWER 3000 --type raw` stores
+`3000` with type `raw` (it does not fold `--type raw` into the value). Payload JSON
+reads use one shape — `name`, `type`, `secure`, `source`, `present`, `has_value`,
+and `value` only for non-secure entries — so an absent Keychain item is visible as
+`present: false` instead of an empty string. Secure items live under service
+`ghost-hid` and account `ghid_payload_<lowercase-name>`.
+
+When combos with bundled payloads are saved or synchronized, referenced raw reports (e.g. `{WIN_SLEEP}`, `{PLAY_PAUSE}`) are automatically provisioned in the recipient's local payload store. Secure payload entries sync with `Value` scrubbed so phone-side references resolve (ADR-009) while the secret values stay device-only in the Keychain; `sync` counts them as `payloads_skipped_secure`.
 
 ## Bluetooth Pairing Setup
 

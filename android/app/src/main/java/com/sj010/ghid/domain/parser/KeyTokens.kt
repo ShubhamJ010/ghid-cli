@@ -1,5 +1,6 @@
 package com.sj010.ghid.domain.parser
 
+import com.sj010.ghid.domain.model.TargetOs
 import java.util.Locale
 
 object KeyTokens {
@@ -19,7 +20,7 @@ object KeyTokens {
 
     fun isModifier(token: String): Boolean {
         return when (token.trim().lowercase(Locale.ROOT)) {
-            "win", "gui", "super", "cmd", "command", "ctrl", "control", "alt", "opt", "option", "shift" -> true
+            "mod", "win", "gui", "super", "cmd", "command", "ctrl", "control", "alt", "opt", "option", "shift" -> true
             else -> false
         }
     }
@@ -28,6 +29,24 @@ object KeyTokens {
         return when (token.trim().lowercase(Locale.ROOT)) {
             "cmd", "command", "option", "opt" -> true
             else -> false
+        }
+    }
+
+    /** Canonical display name paired with the consumer-control report hex. */
+    data class ConsumerKey(val name: String, val hex: String)
+
+    /**
+     * Media-key tokens. `play_pause` is deliberately NOT an alias: it is the
+     * default raw payload name, so `{PLAY_PAUSE}` must resolve to a payload
+     * reference while `{playpause}` remains the consumer-control key.
+     */
+    fun consumerKey(token: String): ConsumerKey? {
+        return when (token.trim().lowercase(Locale.ROOT)) {
+            "volumeup", "volume_up", "volup" -> ConsumerKey("VOLUME_UP", "e900")
+            "volumedown", "volume_down", "voldown" -> ConsumerKey("VOLUME_DOWN", "ea00")
+            "mute" -> ConsumerKey("MUTE", "e200")
+            "playpause" -> ConsumerKey("PLAY_PAUSE", "cd00")
+            else -> null
         }
     }
 
@@ -87,9 +106,9 @@ object KeyTokens {
     }
 
     /**
-     * Parses a keyboard chord like "win+r", "ctrl+alt+del", "enter", "f5".
+     * Parses a keyboard chord like "win+r", "ctrl+alt+del", "mod+s", "enter", "f5".
      */
-    fun parseChord(chord: String): Pair<Byte, Byte> {
+    fun parseChord(chord: String, targetOs: TargetOs = TargetOs.WINDOWS): Pair<Byte, Byte> {
         val parts = chord.lowercase(Locale.ROOT).split("+")
         var mod: Byte = 0
         var key: Byte = 0
@@ -97,6 +116,13 @@ object KeyTokens {
         for (rawPart in parts) {
             val p = rawPart.trim()
             when (p) {
+                "mod" -> {
+                    if (targetOs == TargetOs.MACOS) {
+                        mod = (mod.toInt() or 0x08).toByte() // GUI/Command
+                    } else {
+                        mod = (mod.toInt() or 0x01).toByte() // Ctrl
+                    }
+                }
                 "win", "gui", "super", "meta", "cmd", "command" -> mod = (mod.toInt() or 0x08).toByte()
                 "ctrl", "control" -> mod = (mod.toInt() or 0x01).toByte()
                 "alt", "opt", "option" -> mod = (mod.toInt() or 0x04).toByte()
@@ -136,8 +162,13 @@ object KeyTokens {
                 else -> {
                     if (p.startsWith("f") && p.length in 2..3) {
                         val fNum = p.substring(1).toIntOrNull()
-                        if (fNum != null && fNum in 1..12) {
-                            key = (0x3A + (fNum - 1)).toByte()
+                        if (fNum != null && fNum in 1..24) {
+                            // F1-F12 live at 0x3A-0x45; F13-F24 at 0x68-0x73.
+                            key = if (fNum <= 12) {
+                                (0x3A + (fNum - 1)).toByte()
+                            } else {
+                                (0x68 + (fNum - 13)).toByte()
+                            }
                         }
                     } else if (p.length == 1) {
                         val c = p[0]
@@ -149,5 +180,11 @@ object KeyTokens {
             }
         }
         return Pair(mod, key)
+    }
+
+    fun isStandardKey(token: String): Boolean {
+        val trimmed = token.trim()
+        val (_, key) = parseChord(trimmed)
+        return key != 0.toByte()
     }
 }

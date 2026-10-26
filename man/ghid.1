@@ -1,4 +1,4 @@
-.TH GHID 1 "2026-10-22" "GhostHID 1.0.0" "User Commands"
+.TH GHID 1 "2026-10-22" "GhostHID 0.1.0" "User Commands"
 .SH NAME
 ghid \- Android Bluetooth HID Keyboard & Mouse Controller and Automation Gateway
 .SH SYNOPSIS
@@ -70,7 +70,7 @@ Provides numbered actions:
 .IP \(bu 2
 \fBlock\fR: Sends instant Win+L keystroke sequence.
 .IP \(bu 2
-\fBsleep\fR: Dispatches hardware ACPI sleep sequence (\fIraw:02 ->{0.06} raw:00\fR).
+\fBsleep\fR: Dispatches hardware ACPI sleep sequence (Report 3 \fI02\fR with automatic 60ms auto-release).
 .IP \(bu 2
 \fBtype\fR: Prompts for arbitrary text and injects it character-by-character.
 .IP \(bu 2
@@ -109,7 +109,11 @@ Unregister a device from configuration and unpair Bluetooth bonding on phone.
 Launch interactive terminal user interface (default in a TTY).
 .TP
 .B status \fR[\fB\-\-json\fR]
-Display current Android gateway and Bluetooth connection status.
+Display current Android gateway and Bluetooth connection status. The JSON form
+separates \fIgateway\fR (ADB reachability and serial) from \fIhid_link\fR
+(Bluetooth registration and target), derives \fIos\fR from the selected device
+when the phone has no fingerprint (\fIos_source\fR), and exposes \fIcan_send\fR
+plus \fIsecure_payloads: "device_only"\fR.
 Exits with 0 if connected to target, 1 otherwise.
 .TP
 .B start
@@ -156,7 +160,7 @@ it will prompt for missing values and offer to cache them.
 Instantly send Windows lock shortcut (\fIWin + L\fR).
 .TP
 .B sleep \fR[\fB\-\-countdown\fR \fIsecs\fR] [\fB\-\-no-exit\fR]
-Dispatches native hardware ACPI sleep sequence (\fIraw:02 ->{0.06} raw:00\fR)
+Dispatches native hardware ACPI sleep sequence (Report 3 \fI02\fR with automatic 60ms auto-release)
 triggering S3/Modern Standby at the kernel level.
 .TP
 .B type \fItext...\fR
@@ -174,21 +178,35 @@ optionally scoped to one target OS.
 .br
 \fBghid combo schema\fR [\fB\-\-json\fR] \- grammar and every accepted token.
 .br
-\fBghid combo validate\fR \fIkeys...\fR [\fB\-\-json\fR] \- parse without
-saving or sending; exits 1 when invalid.
+\fBghid combo keys\fR [\fB\-\-json\fR] \- dump every key, modifier, consumer key,
+macOS alias, mouse gesture and canonical alias. With a sequence argument it keeps
+the historical dispatch behavior and sends that sequence.
+.br
+\fBghid combo show\fR \fIname\fR [\fB\-\-json\fR] \- print a saved combo and
+classify its payload references as resolved, unresolved or empty.
+.br
+\fBghid combo validate\fR \fIkeys...\fR [\fB\-\-os\fR \fIwindows|macos|linux\fR]
+[\fB\-\-allow-unresolved\fR] [\fB\-\-json\fR] \- parse against the target grammar
+and resolve payload references without saving or sending; exits 1 when invalid.
+Without \fB\-\-os\fR it uses the saved combo's OS (when the argument is a combo
+name), then the selected target device platform, then Windows.
 .br
 \fBghid combo save\fR \fIname\fR \fIkeys...\fR
 [\fB\-\-os\fR \fIwindows|macos|linux\fR] [\fB\-\-emoji\fR \fIe\fR]
-[\fB\-\-desc\fR \fId\fR] [\fB\-\-fav\fR] \- save a named combo tagged with its
-target OS (default \fIwindows\fR). An optional emoji becomes the combo icon: it
-overrides the OS logo in the Android app and replaces the OS badge in
-\fBcombo list\fR.
+[\fB\-\-desc\fR \fId\fR] [\fB\-\-fav\fR] [\fB\-\-allow-unresolved\fR]
+\- save a named combo tagged with its target OS (default \fIwindows\fR). Payload
+references must resolve locally; use \fB\-\-allow-unresolved\fR for secure
+payloads that exist only on the phone. An optional emoji becomes the combo icon:
+it overrides the OS logo in the Android app and replaces the OS badge in
+\fBcombo list\fR. The output states whether an attached phone was actually synced.
 .br
-\fBghid combo send\fR \fIname\fR \- send a saved combo.
+\fBghid combo send\fR \fIname\fR [\fB\-\-dry-run\fR] \- send a saved combo, or
+resolve it into modifier bytes, HID usages, raw reports and delays without
+dispatching anything.
 .br
 \fBghid combo delete\fR \fIname\fR [\fB\-f\fR] \- delete with confirmation.
 .br
-\fBghid combo\fR \fIkeys\fR \- one-shot send (e.g. \fIwin+d\fR).
+\fBghid combo\fR \fIsequence\fR [\fB\-\-dry-run\fR] \- one-shot send (e.g. \fIwin+d\fR).
 .br
 \fBghid combo mouse\fR \fIgesture\fR \- \fIclick-left\fR, \fIclick-right\fR,
 \fIclick-middle\fR, \fIdouble-click\fR, \fIscroll-up\fR, \fIscroll-down\fR.
@@ -196,16 +214,21 @@ overrides the OS logo in the Android app and replaces the OS badge in
 .PP
 Keyboard tokens cover standard keys across operating systems: \fIwin\fR, \fIcmd\fR,
 \fIcommand\fR, \fIctrl\fR, \fIalt\fR, \fIopt\fR, \fIoption\fR, \fIshift\fR,
-\fIa\fR\(en\fIz\fR, \fI0\fR\(en\fI9\fR, \fIf1\fR\(en\fIf12\fR,
+\fIa\fR\(en\fIz\fR, \fI0\fR\(en\fI9\fR, \fIf1\fR\(en\fIf24\fR,
 \fIenter\fR, \fIesc\fR, \fItab\fR, \fIspace\fR, \fIbackspace\fR, \fIdel\fR,
 \fIinsert\fR, navigation keys, \fIprintscreen\fR, \fIcapslock\fR,
 \fInumlock\fR, \fIscrolllock\fR, \fIpause\fR, \fImenu\fR and punctuation names
-such as \fIsemicolon\fR or \fIslash\fR. Type literal text with a
-\fBtype:\fR step: \fIwin+s ->{0.7} type:rustdesk ->{0.3} enter\fR (quote text
-with spaces as \fItype:"rust desk"\fR; printable ASCII only). Chain raw HID reports
-with \fIraw:<hex>\fR, such as \fIraw:cd00 ->{0.06} raw:0000\fR (Play/Pause).
-Chain steps with \fI->{seconds}\fR. macOS modifier aliases (\fIcmd\fR, \fIopt\fR)
-are accepted for macOS targets and mapped to native GUI and Alt masks.
+such as \fIsemicolon\fR or \fIslash\fR. Sequences use unified bracket syntax
+where text outside braces is typed literally, chords use braces (e.g. \fI{mod+s}\fR),
+delays use milliseconds or seconds (e.g. \fI{500ms}\fR, \fI{1s}\fR), and dynamic payloads
+use identifiers (e.g. \fI{PASSWORD}\fR, \fI{WIN_SLEEP}\fR). Consumer media keys
+use \fI{VolumeUp}\fR, \fI{VolumeDown}\fR, \fI{Mute}\fR and \fI{playpause}\fR;
+\fIplay_pause\fR is a payload name, not a media alias. A bare modifier such as
+\fI{shift}\fR is a valid modifier-only step, and consumer keys cannot be combined
+with modifiers. Payload names are case-insensitive; uppercase is convention only.
+For example:
+\fIsamxn81@gmail.com{Tab}{PASSWORD}{Enter}{500ms}{mod+s}{100ms}{WIN_SLEEP}\fR.
+Momentary raw reports (Consumer Control Report 4 like \fIcd00\fR for Play/Pause, System Control Report 3 like \fI02\fR for Sleep) are automatically released with a zero report after 60ms. macOS modifier aliases (\fIcmd\fR, \fIopt\fR) are accepted for macOS targets and mapped to native GUI and Alt masks.
 .PP
 Each combo carries an OS tag: \fIwindows\fR, \fImacos\fR or \fIlinux\fR. The tag
 drives the OS logo and the \fI[win]\fR / \fI[mac]\fR / \fI[linux]\fR badge
@@ -223,16 +246,40 @@ errors are emitted as JSON on stdout with exit code 1, and \fBcombo delete\fR
 skips the confirmation prompt. Use \fBcombo schema \-\-json\fR to enumerate
 supported keys and gestures, then \fBcombo validate\fR before \fBcombo save\fR.
 .TP
+.B payload \fR{\fBlist\fR|\fBget\fR|\fBset\fR|\fBdelete\fR} [\fIname\fR] [\fIvalue\fR] [\fB\-\-secure\fR] [\fB\-\-type\fR \fItype|raw\fR] [\fB\-\-json\fR]
+Manage reusable payloads (credentials, strings, and raw HID reports).
+JSON reads share one shape: \fIname\fR, \fItype\fR, \fIsecure\fR, \fIsource\fR
+(\fIjson\fR or \fIkeychain\fR), \fIpresent\fR, \fIhas_value\fR and, for
+non-secure payloads only, \fIvalue\fR.
+.RS
+.IP \(bu 2
+\fBlist\fR: Enumerate all configured payloads with source and security.
+.IP \(bu 2
+\fBget\fR \fIname\fR: Retrieve payload value. A secure payload whose Keychain
+item is missing returns \fIpresent: false\fR and exits 1 instead of pretending
+the value is empty. Secure items live under service \fIghost-hid\fR and account
+\fIghid_payload_<lowercase-name>\fR.
+.IP \(bu 2
+\fBset\fR \fIname\fR \fIvalue\fR [\fB\-\-secure\fR] [\fB\-\-type\fR \fItype|raw\fR]: Store
+a payload. Flags may appear in any position; \fB\-\-type raw\fR and
+\fB\-\-type=raw\fR are equivalent, and unknown flags are errors. Secure payloads
+are saved exclusively in the local Keychain and never pushed over the wire. On a
+platform without a vault, secure writes are rejected rather than stored in
+plaintext.
+.IP \(bu 2
+\fBdelete\fR \fIname\fR: Remove a payload from local store and vault.
+.RE
+.TP
 .B sync \fR[\fB\-\-pull\fR | \fB\-\-push\fR] [\fB\-\-json\fR]
-Synchronize combos and snippets between host and Android device over ADB.
+Synchronize combos and payloads between host and Android device over ADB.
 Android is treated as the Single Source of Truth (SSOT).
 .RS
 .IP \(bu 2
 \fB(default)\fR: Pulls latest items from Android into local cache, pushes back merged additions (scrubbing secrets to protect Android Keystore), restarts the Android app, and restores Bluetooth connection.
 .IP \(bu 2
-\fB\-\-pull\fR: Only pulls remote items from Android, replacing local entries.
+\fB\-\-pull\fR: Only pulls remote items from Android. The phone wins name conflicts; local-only combos and non-secure payloads are preserved for the next push.
 .IP \(bu 2
-\fB\-\-push\fR: Pushes local entries to Android, restarts the app, and reconnects Bluetooth.
+\fB\-\-push\fR: Pushes local entries to Android, restarts the app, and reconnects Bluetooth. Secure payload entries push with their value scrubbed (ADR\-009) and are counted as \fIpayloads_skipped_secure\fR; secret values never leave the Mac. A combination of `combo save`/`delete` also reports whether an attached phone was actually synced.
 .RE
 .TP
 .B quick \fB\-\-raw\fR \fIhex\fR

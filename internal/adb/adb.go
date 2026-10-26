@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,7 +24,7 @@ const (
 	LogFileRemote         = "/sdcard/Android/data/com.sj010.ghid/files/gateway.log"
 	AppMainActivity       = "com.sj010.ghid/.MainActivity"
 	AppCombosFileRemote   = "/sdcard/Android/data/com.sj010.ghid/files/combos.json"
-	AppSnippetsFileRemote = "/sdcard/Android/data/com.sj010.ghid/files/snippets.json"
+	AppPayloadsFileRemote = "/sdcard/Android/data/com.sj010.ghid/files/payloads.json"
 )
 
 type Device struct {
@@ -167,6 +168,14 @@ func (m *Manager) SelectDevice() (*Device, error) {
 	return &first, fmt.Errorf("device in state '%s'", first.State)
 }
 
+// RediscoverDevice re-runs ADB discovery and adopts the first attached device.
+// It clears any serial left over from a previous link, so the interactive UI can
+// recover when the phone reconnects on a new port or transport.
+func (m *Manager) RediscoverDevice() (*Device, error) {
+	m.Serial = ""
+	return m.SelectDevice()
+}
+
 func (m *Manager) ConnectWireless(addr string) error {
 	out, err := m.runner.Run("", "connect", addr)
 	s := strings.ToLower(out)
@@ -219,7 +228,12 @@ func (m *Manager) InstallApk(customPath string) error {
 	}
 
 	_, err := m.Run("install", "-r", apkPath)
-	return err
+	if err != nil {
+		return err
+	}
+	// Force-stop to prevent Android Package Manager from retaining stale process memory
+	_, _ = m.Run("shell", "am", "force-stop", PackageName)
+	return nil
 }
 
 func (m *Manager) BuildApk() error {
@@ -261,7 +275,6 @@ func (m *Manager) GetDeviceModel() string {
 }
 
 // GetDeviceName retrieves the dynamic, user-facing Bluetooth or device name of the connected phone.
-// It queries Bluetooth/device name settings, marketing name, and model properties in order of preference.
 func (m *Manager) GetDeviceName() string {
 	cmd := `for k in "secure bluetooth_name" "global bluetooth_name" "global device_name" "system bluetooth_name"; do v=$(settings get $k 2>/dev/null); if [ -n "$v" ] && [ "$v" != "null" ]; then echo "$v"; exit 0; fi; done; m=$(getprop ro.product.marketname); if [ -n "$m" ]; then echo "$m"; exit 0; fi; getprop ro.product.model`
 	out, err := m.Run("shell", cmd)
@@ -416,51 +429,38 @@ func (m *Manager) SendLock() error {
 	return err
 }
 
-var varInTextRegex = regexp.MustCompile(`\$([a-zA-Z0-9_-]+)|\$\{([a-zA-Z0-9_-]+)\}`)
-
-func expandTextVariables(text string, resolver func(string) (string, error)) string {
-	return varInTextRegex.ReplaceAllStringFunc(text, func(match string) string {
-		name := strings.TrimPrefix(match, "$")
-		if strings.HasPrefix(name, "{") && strings.HasSuffix(name, "}") {
-			name = name[1 : len(name)-1]
-		}
-		if val, err := resolver(name); err == nil && val != "" {
-			return val
-		}
-		return match
-	})
-}
-
 // SendCombo executes a sequence of key chords, mouse actions, and typed strings.
-func (m *Manager) SendCombo(keys string) error {
-	return m.SendComboWithResolver(keys, nil)
+func (m *Manager) SendCombo(sequence string) error {
+	return m.SendComboWithResolver(sequence, nil)
 }
 
-// SendComboWithResolver executes a combo sequence, resolving any $VARIABLE
+// SendComboWithResolver executes a combo sequence, resolving any {PAYLOAD}
 // references using the supplied resolver function.
-func (m *Manager) SendComboWithResolver(keys string, resolver func(string) (string, error)) error {
-	steps, err := hid.ParseActionSequence(keys)
+func (m *Manager) SendComboWithResolver(sequence string, resolver func(string) (string, error)) error {
+	steps, err := hid.ParseSequence(sequence)
 	if err != nil {
 		return err
 	}
 	for _, step := range steps {
-		if step.Variable != "" {
+		if step.Payload != "" {
 			if resolver == nil {
-				return fmt.Errorf("snippet variable $%s requires a resolver", step.Variable)
+				return fmt.Errorf("payload {%s} requires a resolver", step.Payload)
 			}
-			val, err := resolver(step.Variable)
+			val, err := resolver(step.Payload)
 			if err != nil {
 				return err
 			}
 			if strings.TrimSpace(val) == "" {
-				return fmt.Errorf("snippet variable $%s is empty", step.Variable)
+				return fmt.Errorf("payload {%s} is empty", step.Payload)
 			}
 			cleanVal := strings.TrimSpace(val)
-			cleanHex := strings.TrimPrefix(strings.ToLower(cleanVal), "raw:")
-			cleanHex = strings.ReplaceAll(cleanHex, " ", "")
+			cleanHex := strings.ReplaceAll(cleanVal, " ", "")
 			if _, rawErr := hid.ValidateRaw(cleanHex); rawErr == nil {
-				if err := m.SendRaw(cleanHex); err != nil {
+				if err := m.SendRawWithHold(cleanHex, step.Hold); err != nil {
 					return err
+				}
+				if step.Hold > 0 {
+					time.Sleep(step.Hold)
 				}
 			} else {
 				if err := m.TypeText(val); err != nil {
@@ -468,25 +468,35 @@ func (m *Manager) SendComboWithResolver(keys string, resolver func(string) (stri
 				}
 			}
 		} else if step.Raw != "" {
-			if err := m.SendRaw(step.Raw); err != nil {
+			if err := m.SendRawWithHold(step.Raw, step.Hold); err != nil {
 				return err
 			}
-		} else if step.Text != "" {
-			text := step.Text
-			if resolver != nil {
-				text = expandTextVariables(text, resolver)
+			if step.Hold > 0 {
+				time.Sleep(step.Hold)
 			}
-			if err := m.TypeText(text); err != nil {
+		} else if step.Text != "" {
+			if err := m.TypeText(step.Text); err != nil {
 				return err
 			}
 		} else if step.Mouse != nil {
 			if err := m.sendMouseAction(*step.Mouse); err != nil {
 				return err
 			}
-		} else {
-			clean := hid.NormalizeComboForAndroid(step.Combo)
-			if _, err := m.Run("shell", "am", "broadcast", "-n", ReceiverName, "-a", ActionCmd, "--es", "cmd", "combo", "--es", "keys", clean); err != nil {
-				return err
+		} else if step.Modifier != 0 || step.KeyCode != 0 || step.Combo != "" {
+			if step.Delay > 0 && step.Modifier == 0 && step.KeyCode == 0 {
+				// Pure delay step
+			} else {
+				clean := hid.NormalizeComboForAndroid(step.Combo)
+				args := []string{"shell", "am", "broadcast", "-n", ReceiverName, "-a", ActionCmd, "--es", "cmd", "combo", "--es", "keys", clean}
+				if step.Hold > 0 {
+					args = append(args, "--el", "hold_ms", strconv.FormatInt(step.Hold.Milliseconds(), 10))
+				}
+				if _, err := m.Run(args...); err != nil {
+					return err
+				}
+				if step.Hold > 0 {
+					time.Sleep(step.Hold)
+				}
 			}
 		}
 		if step.Delay > 0 {
@@ -496,7 +506,7 @@ func (m *Manager) SendComboWithResolver(keys string, resolver func(string) (stri
 	return nil
 }
 
-// SendMouse dispatches a single Windows mouse gesture through the phone.
+// SendMouse dispatches a single mouse gesture through the phone.
 func (m *Manager) SendMouse(action string) error {
 	parsed, ok, err := hid.ParseMouseAction(action)
 	if err != nil {
@@ -519,11 +529,19 @@ func (m *Manager) TypeText(text string) error {
 }
 
 func (m *Manager) SendRaw(hexReport string) error {
+	return m.SendRawWithHold(hexReport, 0)
+}
+
+func (m *Manager) SendRawWithHold(hexReport string, hold time.Duration) error {
 	cleanHex := strings.ReplaceAll(hexReport, " ", "")
 	if _, err := hid.ValidateRaw(cleanHex); err != nil {
 		return err
 	}
-	_, err := m.Run("shell", "am", "broadcast", "-n", ReceiverName, "-a", ActionCmd, "--es", "cmd", "raw", "--es", "hex", cleanHex)
+	args := []string{"shell", "am", "broadcast", "-n", ReceiverName, "-a", ActionCmd, "--es", "cmd", "raw", "--es", "hex", cleanHex}
+	if hold > 0 {
+		args = append(args, "--el", "hold_ms", strconv.FormatInt(hold.Milliseconds(), 10))
+	}
+	_, err := m.Run(args...)
 	return err
 }
 
@@ -578,13 +596,13 @@ func (m *Manager) ExecuteLogin(user, pass string, delays map[string]float64, ste
 	if stepCb != nil {
 		stepCb(1, "Waking lock screen (Ctrl + Alt + Delete)...")
 	}
-	_ = m.SendCombo("ctrl+alt+del")
+	_ = m.SendCombo("{ctrl+alt+del}")
 	time.Sleep(getDelay("wake", 1.0))
 
 	if stepCb != nil {
 		stepCb(2, "Dismissing lock overlay (Escape)...")
 	}
-	_ = m.SendCombo("esc")
+	_ = m.SendCombo("{esc}")
 	time.Sleep(getDelay("overlay", 1.0))
 
 	if stepCb != nil {
@@ -596,7 +614,7 @@ func (m *Manager) ExecuteLogin(user, pass string, delays map[string]float64, ste
 	if stepCb != nil {
 		stepCb(4, "Navigating to password field (Tab)...")
 	}
-	_ = m.SendCombo("tab")
+	_ = m.SendCombo("{tab}")
 	time.Sleep(getDelay("tab", 0.8))
 
 	if stepCb != nil {
@@ -608,7 +626,7 @@ func (m *Manager) ExecuteLogin(user, pass string, delays map[string]float64, ste
 	if stepCb != nil {
 		stepCb(6, "Submitting authentication credentials (Enter)...")
 	}
-	_ = m.SendCombo("enter")
+	_ = m.SendCombo("{enter}")
 	time.Sleep(getDelay("submit", 1.0))
 
 	return nil

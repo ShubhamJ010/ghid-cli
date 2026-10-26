@@ -116,6 +116,7 @@ import com.sj010.ghid.service.HidService
 import com.sj010.ghid.ui.theme.MaterialShapes
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 private enum class ComboFilterCategory(val label: String, val os: TargetOs? = null) {
     ALL("All"),
@@ -173,7 +174,7 @@ fun ComboStudioScreen(
                 combo.name.contains(searchQuery, ignoreCase = true) ||
                 (combo.description?.contains(searchQuery, ignoreCase = true) == true) ||
                 combo.targetOs.label.contains(searchQuery, ignoreCase = true) ||
-                combo.keys.contains(searchQuery, ignoreCase = true)
+                combo.effectiveSequence.contains(searchQuery, ignoreCase = true)
 
             if (!matchesQuery) return@filter false
 
@@ -385,7 +386,7 @@ fun ComboStudioScreen(
                             onRun = {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 executingComboName = combo.name
-                                service?.executeCombo(combo.keys)
+                                service?.executeCombo(combo.effectiveSequence)
 
                                 scope.launch {
                                     delay(1200)
@@ -561,7 +562,13 @@ fun ComboCard(
         label = "favScale"
     )
 
-    val analysis = remember(combo.keys, combo.os) { SequenceAnalyzer.analyze(combo.keys, combo.targetOs) }
+    val analysis = remember(combo.effectiveSequence, combo.os) { SequenceAnalyzer.analyze(combo.effectiveSequence, combo.targetOs) }
+    val payloadsSnapshot by GhostHidApp.instance.payloadRepository.payloads.collectAsState()
+    val bundledPayloads = combo.payloads.orEmpty().keys
+    val knownPayloads = remember(payloadsSnapshot, bundledPayloads) {
+        GhostHidApp.instance.payloadRepository.knownNames() +
+            bundledPayloads.map { it.uppercase(Locale.ROOT) }
+    }
 
     // Expressive symmetric shape mapping per combo name to give visual variety while preserving visual center
     val expressiveShape = remember(combo.name) {
@@ -697,6 +704,7 @@ fun ComboCard(
             Box(modifier = Modifier.fillMaxWidth()) {
                 SequencePreview(
                     analysis = analysis,
+                    knownPayloads = knownPayloads,
                     compact = true,
                     containerColor = MaterialTheme.colorScheme.surfaceContainer,
                     showHeader = false,
@@ -810,6 +818,7 @@ fun ComboCard(
         SequencePreviewDialog(
             analysis = analysis,
             onDismiss = { showPreviewDialog = false },
+            knownPayloads = knownPayloads,
             onEdit = onEdit
         )
     }
@@ -953,14 +962,14 @@ fun ExpressiveSnippetsHeaderCard(
 
                     Column {
                         Text(
-                            text = "Snippets Vault",
+                            text = "Payloads Vault",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = if (snippets.size == 1) "1 variable ready" else "${snippets.size} variables ready for injection",
+                            text = if (snippets.size == 1) "1 payload ready" else "${snippets.size} payloads ready for injection",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -1018,7 +1027,7 @@ fun ExpressiveSnippetsHeaderCard(
                                     Spacer(modifier = Modifier.width(4.dp))
                                 }
                                 Text(
-                                    text = "$${snip.name}",
+                                    text = "{${snip.name}}",
                                     fontFamily = FontFamily.Monospace,
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.SemiBold,
