@@ -108,6 +108,90 @@ func mouseActionFor(canonical string) MouseAction {
 	}
 }
 
+// Canonical click buttons supported by the HID gateway.
+const (
+	ClickButtonLeft   = "left"
+	ClickButtonRight  = "right"
+	ClickButtonMiddle = "middle"
+)
+
+// NoCoordinatesExplanation explains the HID hardware constraint for AI agents and scripts.
+const NoCoordinatesExplanation = "No pointer coordinates or cursor movement (move x, y / relative dx, dy) are supported. GhostHID operates at the USB HID hardware peripheral layer without screen geometry or cursor coordinate awareness. 'ghid click' only clicks wherever the cursor currently happens to be resting on screen."
+
+// NormalizeClickButton maps button aliases to canonical button name ("left", "right", "middle").
+// If the token indicates double-click (e.g. "double", "double-click"), it returns ("left", true, nil).
+func NormalizeClickButton(token string) (button string, double bool, err error) {
+	norm := strings.ToLower(strings.TrimSpace(token))
+	if norm == "" {
+		return ClickButtonLeft, false, nil
+	}
+	switch norm {
+	case "left", "l", "click-left", "left-click", "leftclick", "lclick", "primary", "button1", "btn1":
+		return ClickButtonLeft, false, nil
+	case "right", "r", "click-right", "right-click", "rightclick", "rclick", "secondary", "button2", "btn2", "context":
+		return ClickButtonRight, false, nil
+	case "middle", "m", "click-middle", "middle-click", "middleclick", "mclick", "button3", "btn3", "wheel":
+		return ClickButtonMiddle, false, nil
+	case "double", "double-click", "doubleclick", "dblclick", "2x":
+		return ClickButtonLeft, true, nil
+	default:
+		return "", false, fmt.Errorf("unsupported click button %q (accepted: left, right, middle, double)", token)
+	}
+}
+
+// MouseReportHex returns the 8-hex-character (4-byte) raw HID mouse report for a button press.
+func MouseReportHex(button string) string {
+	switch strings.ToLower(strings.TrimSpace(button)) {
+	case ClickButtonRight:
+		return "02000000"
+	case ClickButtonMiddle:
+		return "04000000"
+	default:
+		return "01000000"
+	}
+}
+
+var coordPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`^(?i)[xy]=\d+$`),
+	regexp.MustCompile(`^(?i)--?[xy]$`),
+	regexp.MustCompile(`^(?i)--?(?:x|y|dx|dy|coord|coordinates|pos|position)$`),
+	regexp.MustCompile(`^(?i)--?(?:x|y|dx|dy|coord|coordinates|pos|position)=\d+$`),
+	regexp.MustCompile(`^\d+,\d+$`),
+	regexp.MustCompile(`^\d+x\d+$`),
+}
+
+// IsCoordinateOrMoveAttempt inspects arguments to detect if an AI or user tried to supply
+// coordinates or cursor movement commands (e.g. "move", "100", "200", "-x 50", etc.).
+func IsCoordinateOrMoveAttempt(args []string) (bool, string) {
+	for i, arg := range args {
+		trimmed := strings.TrimSpace(arg)
+		lower := strings.ToLower(trimmed)
+
+		// Check for words like "move", "moveto", "drag", "to", "at"
+		if lower == "move" || lower == "moveto" || lower == "drag" || lower == "to" || lower == "at" {
+			return true, fmt.Sprintf("cursor movement command %q is not supported", arg)
+		}
+
+		// Check regex patterns
+		for _, re := range coordPatterns {
+			if re.MatchString(trimmed) {
+				return true, fmt.Sprintf("coordinate parameter %q is not supported", arg)
+			}
+		}
+
+		// Check numeric coordinates: bare integer
+		if _, err := strconv.Atoi(trimmed); err == nil {
+			return true, fmt.Sprintf("coordinate value %q is not supported", arg)
+		}
+
+		// Check -x 100, -y 200, etc.
+		if (lower == "-x" || lower == "-y" || lower == "--x" || lower == "--y" || lower == "-dx" || lower == "-dy") && i+1 < len(args) {
+			return true, fmt.Sprintf("coordinate flag %s %s is not supported", arg, args[i+1])
+		}
+	}
+	return false, ""
+}
+
 // ConsumerKeyReports maps standard consumer/media keys to raw 2-byte reports.
 // Aliases intentionally match the Android KeyTokens table so a sequence that
 // validates on the CLI resolves to the same report on the phone.

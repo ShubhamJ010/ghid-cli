@@ -112,6 +112,7 @@ ghid status
 - `payload get --json` = `source`/`present`/`has_value`; a missing Keychain item exits 1.
 - Secure payload values are device-only and never cross the link: push sends their entries with `Value` scrubbed (ADR-009) and counts them as `payloads_skipped_secure`; `status` carries `secure_payloads: "device_only"`.
 - `status --json` splits `gateway` (ADB) from `hid_link`; gate sends on `can_send`.
+- `click [button] [--double] [--count <n>] --json` = in-place click at resting cursor position (`button`: `left|right|middle|double`). Coordinates or cursor movement (`move x, y` / `dx, dy`) are strictly NOT supported; coordinate attempts return `COORDINATES_NOT_SUPPORTED` JSON error with exit 1.
 
 ```bash
 ghid combo schema --json

@@ -84,6 +84,7 @@ func Catalog() TokenCatalog {
 			"Consumer keys carry their own HID report and cannot be combined with modifiers.",
 			"playpause is the media-key token; play_pause is a payload name (the default PLAY_PAUSE raw report).",
 			"Typed text outside braces must be printable ASCII.",
+			"GhostHID mouse operations do not support coordinates or cursor movement (move x, y / relative dx, dy); clicks occur wherever the cursor currently rests on the host screen.",
 		},
 	}
 }
