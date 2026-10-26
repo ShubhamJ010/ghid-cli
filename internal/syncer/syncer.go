@@ -6,9 +6,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/ghost-hid/ghid/internal/adb"
-	"github.com/ghost-hid/ghid/internal/combos"
-	"github.com/ghost-hid/ghid/internal/payloads"
+	"github.com/ShubhamJ010/ghid-cli/internal/adb"
+	"github.com/ShubhamJ010/ghid-cli/internal/combos"
+	"github.com/ShubhamJ010/ghid-cli/internal/payloads"
 )
 
 // SyncReport summarizes the results of a sync operation.

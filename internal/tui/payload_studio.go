@@ -7,7 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/ghost-hid/ghid/internal/payloads"
+	"github.com/ShubhamJ010/ghid-cli/internal/payloads"
 )
 
 type payloadStudioMode int

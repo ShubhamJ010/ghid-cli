@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ghost-hid/ghid/internal/hid"
+	"github.com/ShubhamJ010/ghid-cli/internal/hid"
 )
 
 const (

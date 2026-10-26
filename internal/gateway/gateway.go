@@ -6,10 +6,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ghost-hid/ghid/internal/adb"
-	"github.com/ghost-hid/ghid/internal/config"
-	"github.com/ghost-hid/ghid/internal/hid"
-	"github.com/ghost-hid/ghid/internal/vault"
+	"github.com/ShubhamJ010/ghid-cli/internal/adb"
+	"github.com/ShubhamJ010/ghid-cli/internal/config"
+	"github.com/ShubhamJ010/ghid-cli/internal/hid"
+	"github.com/ShubhamJ010/ghid-cli/internal/vault"
 )
 
 // LoginRequest holds parameters for the multi-step automated unlock sequence.

@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ghost-hid/ghid/internal/hid"
-	"github.com/ghost-hid/ghid/internal/vault"
+	"github.com/ShubhamJ010/ghid-cli/internal/hid"
+	"github.com/ShubhamJ010/ghid-cli/internal/vault"
 )
 
 // Store manages payloads stored on disk (JSON) and secure payloads backed by Vault (Keychain).

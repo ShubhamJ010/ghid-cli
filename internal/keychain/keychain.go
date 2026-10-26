@@ -1,7 +1,7 @@
 package keychain
 
 import (
-	"github.com/ghost-hid/ghid/internal/vault"
+	"github.com/ShubhamJ010/ghid-cli/internal/vault"
 )
 
 const ServiceName = vault.DefaultServiceName

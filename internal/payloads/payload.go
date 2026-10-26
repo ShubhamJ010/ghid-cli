@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ghost-hid/ghid/internal/vault"
+	"github.com/ShubhamJ010/ghid-cli/internal/vault"
 )
 
 // Payload represents a named payload or secret that can be injected into
