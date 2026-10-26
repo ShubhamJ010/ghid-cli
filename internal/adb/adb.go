@@ -495,6 +495,9 @@ func (m *Manager) SendComboWithResolver(sequence string, resolver hid.PayloadRes
 				// Pure delay step
 			} else {
 				clean := hid.NormalizeComboForAndroid(step.Combo)
+				if !strings.HasPrefix(clean, "{") {
+					clean = "{" + clean + "}"
+				}
 				args := []string{"shell", "am", "broadcast", "-n", ReceiverName, "-a", ActionCmd, "--es", "cmd", "combo", "--es", "keys", clean}
 				if step.Hold > 0 {
 					args = append(args, "--el", "hold_ms", strconv.FormatInt(step.Hold.Milliseconds(), 10))
@@ -509,6 +512,42 @@ func (m *Manager) SendComboWithResolver(sequence string, resolver hid.PayloadRes
 		}
 		if step.Delay > 0 {
 			time.Sleep(step.Delay)
+		}
+	}
+	return nil
+}
+
+// SendClick dispatches a mouse click at the resting cursor position.
+// button is "left", "right", or "middle". count is the number of clicks (1 for single, 2 for double).
+func (m *Manager) SendClick(button string, count int) error {
+	normButton, isDouble, err := hid.NormalizeClickButton(button)
+	if err != nil {
+		return err
+	}
+	if isDouble && count == 1 {
+		count = 2
+	}
+	if count < 1 {
+		count = 1
+	}
+
+	// For maximum compatibility across all existing and new APK builds:
+	// If count == 1, map directly to canonical mouse action (click-left, click-right, click-middle).
+	// If count == 2 and button is left, map to double-click.
+	if count == 1 {
+		return m.SendMouse("click-" + normButton)
+	}
+	if count == 2 && normButton == "left" {
+		return m.SendMouse(hid.MouseDoubleClick)
+	}
+
+	// For count > 2 or right/middle double-clicks, dispatch sequence of clicks with proper gap.
+	for i := 0; i < count; i++ {
+		if i > 0 {
+			time.Sleep(90 * time.Millisecond)
+		}
+		if err := m.SendMouse("click-" + normButton); err != nil {
+			return err
 		}
 	}
 	return nil

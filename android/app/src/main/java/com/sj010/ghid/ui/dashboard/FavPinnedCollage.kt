@@ -67,7 +67,7 @@ import com.sj010.ghid.domain.model.PinnedFavoritesPolicy
 import com.sj010.ghid.domain.model.TargetOs
 import com.sj010.ghid.ui.common.os.ComboGlyph
 import com.sj010.ghid.ui.common.os.OsGlyph
-import com.sj010.ghid.ui.theme.MaterialShapes
+import com.sj010.ghid.ui.theme.ExpressiveShapes
 
 /**
  * Dashboard "fav pinned collage": five expressive shapes, each an empty add
@@ -154,10 +154,24 @@ fun FavPinnedCollage(
         Spacer(modifier = Modifier.height(4.dp))
     }
 
+    val availableCombos = remember(combos, connectedOs) {
+        val filtered = ComboOsPolicy.filter(combos, connectedOs)
+        val (favs, others) = filtered.partition { it.favorite }
+        val sortedFavs = favs.distinctBy { PinnedFavoritesPolicy.normalize(it.name) }
+            .sortedBy { it.name.lowercase() }
+        val sortedOthers = others.distinctBy { PinnedFavoritesPolicy.normalize(it.name) }
+            .sortedBy { it.name.lowercase() }
+        sortedFavs + sortedOthers
+    }
+
     pickerSlot?.let { config ->
         FavoritePickerSheet(
-            config = config,
-            favorites = favorites,
+            slotId = config.slotId,
+            slotLabel = config.emptyLabel,
+            slotShape = config.shape,
+            slotContainerColor = config.containerColor,
+            slotContentColor = config.contentColor,
+            favorites = availableCombos,
             pinnedBySlot = pinnedBySlot,
             shapeNames = shapeNames,
             onSelect = { combo ->
@@ -294,7 +308,7 @@ private fun collageConfigs(): List<CollageConfig> {
             height = 112.dp,
             align = Alignment.TopEnd,
             rot = -4f,
-            shape = MaterialShapes.ShapeFan,
+            shape = ExpressiveShapes.Fan,
             offsetX = (-14).dp,
             offsetY = 10.dp,
             containerColor = p3.container,
@@ -310,7 +324,7 @@ private fun collageConfigs(): List<CollageConfig> {
             height = 114.dp,
             align = Alignment.BottomStart,
             rot = 6f,
-            shape = MaterialShapes.ShapeGhostish,
+            shape = ExpressiveShapes.Ghostish,
             offsetX = 18.dp,
             offsetY = 4.dp,
             containerColor = p4.container,
@@ -454,13 +468,17 @@ private fun BoxScope.CollageEmptyShapeSlot(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun FavoritePickerSheet(
-    config: CollageConfig,
+fun FavoritePickerSheet(
+    slotId: Int,
+    slotLabel: String,
+    slotShape: Shape,
+    slotContainerColor: Color,
+    slotContentColor: Color,
     favorites: List<Combo>,
     pinnedBySlot: Map<Int, Combo>,
     shapeNames: Map<Int, String>,
     onSelect: (Combo) -> Unit,
-    onBrowseCombos: () -> Unit,
+    onBrowseCombos: (() -> Unit)?,
     onDismiss: () -> Unit
 ) {
     ModalBottomSheet(
@@ -482,27 +500,27 @@ private fun FavoritePickerSheet(
                 Box(
                     modifier = Modifier
                         .size(52.dp)
-                        .clip(config.shape)
-                        .background(config.containerColor.copy(alpha = 0.35f)),
+                        .clip(slotShape)
+                        .background(slotContainerColor.copy(alpha = 0.35f)),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = Icons.Default.Add,
                         contentDescription = null,
-                        tint = config.contentColor,
+                        tint = slotContentColor,
                         modifier = Modifier.size(24.dp)
                     )
                 }
                 Spacer(modifier = Modifier.width(14.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Pin a favorite",
+                        text = "Pin a combo",
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Black,
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = "Choose a combo for the ${config.emptyLabel} shape",
+                        text = "Choose a combo for the $slotLabel shape",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -517,17 +535,19 @@ private fun FavoritePickerSheet(
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Text(
-                        text = "No favorite combos yet",
+                        text = "No combos yet",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = "Star a combo in Combos, then come back and pin it to this shape.",
+                        text = "Create combos in the Combos tab, then come back and pin one to this shape.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    TextButton(onClick = onBrowseCombos) {
-                        Text("Browse combos")
+                    if (onBrowseCombos != null) {
+                        TextButton(onClick = onBrowseCombos) {
+                            Text("Browse combos")
+                        }
                     }
                 }
             } else {
@@ -549,9 +569,9 @@ private fun FavoritePickerSheet(
                         FavoritePickerRow(
                             combo = combo,
                             pinnedShape = pinnedSlot
-                                ?.takeIf { it != config.slotId }
+                                ?.takeIf { it != slotId }
                                 ?.let { shapeNames[it] },
-                            isCurrentShape = pinnedSlot == config.slotId,
+                            isCurrentShape = pinnedSlot == slotId,
                             onClick = { onSelect(combo) }
                         )
                     }

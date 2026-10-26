@@ -53,7 +53,7 @@ flowchart TB
 
 ## Android Gateway Subsystem
 
-The Android package `com.sj010.ghid` is the single shipping app. It has a launcher activity (`MainActivity`, Material 3 Expressive dashboard, Combo Studio, trackpad), but the gateway itself never depends on the UI: `HidService` is an always-on foreground service that can be started, stopped, and commanded entirely over ADB with the screen off. A separate headless build is no longer maintained — see `docs/prompts/headless-android-app.md` if you want to code your own.
+The Android package `com.sj010.ghid` is the single shipping app. It has a launcher activity (`MainActivity`, Material 3 Expressive dashboard, Combo Studio, trackpad, and a landscape stream-deck surface), but the gateway itself never depends on the UI: `HidService` is an always-on foreground service that can be started, stopped, and commanded entirely over ADB with the screen off. A separate headless build is no longer maintained — see `docs/prompts/headless-android-app.md` if you want to code your own.
 
 ### Service Lifecycle and Notification Channel
 The gateway implements `android.app.Service` as an ongoing foreground service:
@@ -265,9 +265,14 @@ Generic system/laptop icons are superseded by branded vector silhouettes:
 - `ic_os_linux.xml`: Canonical silhouette for Linux targets.
 - Uniformly rendered via `OsGlyph(os = targetOs, modifier, tint)`.
 - Combo identity uses `ComboGlyph(combo, size, tint)`: the combo's optional `emoji` metadata wins, otherwise it delegates to the target OS logo. The same emoji replaces the `[win]` / `[mac]` / `[linux]` badge in `ghid combo list` and the TUI.
-- Quick Send header merges the previous toggle pill and lightning bolt into a single 44dp clover container (`MaterialShapes.ShapeClover4`) holding the active `OsGlyph` or `ic_notification_ghost`.
+- Quick Send header merges the previous toggle pill and lightning bolt into a single 44dp clover container (`ExpressiveShapes.Clover4Leaf`) holding the active `OsGlyph` or `ic_notification_ghost`.
 
 ### Inset-Aware PullDownShade Architecture
 The pull-down morphing shade (`PullDownShade.kt`) computes travel distance and available surface bounds accounting for both status bar and navigation bar system insets:
 `availableHeight = maxHeight - navBarBottom - 16.dp`
 This ensures the bottom dock controls never overlap the Android system navigation bar or gesture pill on modern edge-to-edge displays.
+
+### Landscape Ghost Stream Deck
+Rotating the phone to landscape replaces the bottom-nav scaffold with `StreamDeckScreen`: an immersive, full-bleed surface that is its own view, not the dashboard collage. It paints eleven expressive tiles edge to edge (`StreamDeckCollage`, `streamDeckSlots()`): the upper band is slots `0..4`, so the dashboard pins (`PinnedFavoritesPolicy`) light up here automatically, and the lower band is slots `5..10` — extra deck-only slots that share the same pin store. Tapping a pinned shape runs its combo; any empty shape opens the shared favorite picker and pins into that slot. A "stream deck" label sits in the top-left corner and a slim three-dot handle lives on the middle of the left edge (`StreamDeckDrawer`). Tapping or dragging that handle slides the payload panel sideways out of the left edge over a dimmed deck; dragging it back or tapping the scrim closes it. Pills flow right-to-left so the most-used pill sits at the panel's right edge, each gets a stable silhouette from the wide-friendly subset of the catalogue, and pills are sorted by `PayloadUsageRepository` dispatch counts (most-used first), then alphabetically. Tapping one types its text or sends its raw HID report.
+
+Every expressive silhouette in the app comes from the official `androidx.compose.material3.MaterialShapes` catalogue (Material 3 `1.5.0-beta02`); `ui/theme/ExpressiveShapes.kt` only converts those normalised `RoundedPolygon`s into Compose `Shape`s.
