@@ -65,6 +65,7 @@ type Controller interface {
 	Type(text string) error
 	Combo(keys string) error
 	ComboWithResolver(keys string, resolver hid.PayloadResolver) error
+	Click(button string, count int) error
 	Mouse(action string) error
 	Raw(hexReport string) error
 	RawWithHold(hexReport string, hold time.Duration) error
@@ -183,6 +184,13 @@ func (g *Gateway) ComboWithResolver(keys string, resolver hid.PayloadResolver) e
 		return fmt.Errorf("invalid combo sequence: %w", err)
 	}
 	return g.mgr.SendComboWithResolver(keys, resolver)
+}
+
+func (g *Gateway) Click(button string, count int) error {
+	if g.mgr == nil {
+		return errors.New("adb manager not initialized")
+	}
+	return g.mgr.SendClick(button, count)
 }
 
 func (g *Gateway) Mouse(action string) error {

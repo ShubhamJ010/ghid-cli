@@ -341,6 +341,61 @@ Toggles the pinned favorite status (`❤️`) of a combo.
 
 ---
 
+### `ghid click [left|right|middle|double] [--double] [--count <n>] --json`
+Dispatches an in-place mouse button click at the target system cursor's current resting position.
+
+#### Architectural Notice for Autonomous AI Agents
+> [!IMPORTANT]
+> **No Pointer Coordinates or Cursor Movement:** GhostHID operates strictly at the USB HID hardware peripheral layer without knowledge of host screen geometry, window layout, or cursor coordinates. `ghid click` does not accept coordinates or relative offsets (`move x, y` / `dx, dy`). It only clicks wherever the cursor currently happens to be resting on screen.
+>
+> If an agent attempts to pass coordinates (e.g. `ghid click 500 300` or `ghid click --x 100`), GhostHID immediately rejects the invocation with exit code 1 and returns structured JSON with error code `COORDINATES_NOT_SUPPORTED`.
+
+#### Success Response
+```json
+{
+  "status": "success",
+  "command": "click",
+  "button": "left",
+  "clicks": 1,
+  "action": "click-left",
+  "report_id": 2,
+  "report_hex": "01000000",
+  "coordinates_supported": false,
+  "cursor_context": "resting_position",
+  "note": "Clicked at resting cursor position. No pointer coordinates or cursor movement (move x, y / relative dx, dy) are supported by GhostHID."
+}
+```
+
+#### Double-Click Response (`ghid click --double --json` or `ghid click double --json`)
+```json
+{
+  "status": "success",
+  "command": "click",
+  "button": "left",
+  "clicks": 2,
+  "action": "double-click",
+  "report_id": 2,
+  "report_hex": "01000000",
+  "coordinates_supported": false,
+  "cursor_context": "resting_position",
+  "note": "Clicked at resting cursor position. No pointer coordinates or cursor movement (move x, y / relative dx, dy) are supported by GhostHID."
+}
+```
+
+#### Coordinate Attempt Error Response (`ghid click 100 200 --json`)
+```json
+{
+  "status": "error",
+  "error": "No pointer coordinates or cursor movement (move x, y / relative dx, dy) are supported. GhostHID operates at the USB HID hardware peripheral layer without screen geometry or cursor coordinate awareness. 'ghid click' only clicks wherever the cursor currently happens to be resting on screen. (coordinate value \"100\" is not supported)",
+  "code": "COORDINATES_NOT_SUPPORTED",
+  "coordinates_supported": false,
+  "cursor_movement_supported": false,
+  "usage": "ghid click [left|right|middle|double] [--double] [--count <n>] [--json]"
+}
+```
+
+---
+
 ### `ghid quick <text...> [--raw] --json`
 Unified ad-hoc transmission. Types text strings through the virtual keyboard by default, or transmits raw 8-byte HID reports when `--raw` is specified.
 
