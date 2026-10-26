@@ -436,7 +436,7 @@ func (m *Manager) SendCombo(sequence string) error {
 
 // SendComboWithResolver executes a combo sequence, resolving any {PAYLOAD}
 // references using the supplied resolver function.
-func (m *Manager) SendComboWithResolver(sequence string, resolver func(string) (string, error)) error {
+func (m *Manager) SendComboWithResolver(sequence string, resolver hid.PayloadResolver) error {
 	steps, err := hid.ParseSequence(sequence)
 	if err != nil {
 		return err
@@ -446,7 +446,7 @@ func (m *Manager) SendComboWithResolver(sequence string, resolver func(string) (
 			if resolver == nil {
 				return fmt.Errorf("payload {%s} requires a resolver", step.Payload)
 			}
-			val, err := resolver(step.Payload)
+			val, isRaw, err := resolver(step.Payload)
 			if err != nil {
 				return err
 			}
@@ -454,9 +454,17 @@ func (m *Manager) SendComboWithResolver(sequence string, resolver func(string) (
 				return fmt.Errorf("payload {%s} is empty", step.Payload)
 			}
 			cleanVal := strings.TrimSpace(val)
-			cleanHex := strings.ReplaceAll(cleanVal, " ", "")
-			if _, rawErr := hid.ValidateRaw(cleanHex); rawErr == nil {
-				if err := m.SendRawWithHold(cleanHex, step.Hold); err != nil {
+			isExplicitRaw := strings.HasPrefix(strings.ToLower(cleanVal), "raw:")
+			if isRaw || isExplicitRaw {
+				rawHex := cleanVal
+				if isExplicitRaw {
+					rawHex = strings.TrimSpace(cleanVal[4:])
+				}
+				rawHex = strings.ReplaceAll(rawHex, " ", "")
+				if _, rawErr := hid.ValidateRaw(rawHex); rawErr != nil {
+					return fmt.Errorf("invalid raw hex in payload {%s}: %w", step.Payload, rawErr)
+				}
+				if err := m.SendRawWithHold(rawHex, step.Hold); err != nil {
 					return err
 				}
 				if step.Hold > 0 {

@@ -748,14 +748,19 @@ func (m *Model) executeCurrentStepCmd() tea.Cmd {
 		switch {
 		case step.Payload != "":
 			if m.payloadsStore != nil {
-				val, vErr := m.payloadsStore.Resolver()(step.Payload)
+				val, isRaw, vErr := m.payloadsStore.Resolver()(step.Payload)
 				if vErr != nil {
 					err = vErr
 				} else {
 					cleanVal := strings.TrimSpace(val)
-					cleanHex := strings.ReplaceAll(cleanVal, " ", "")
-					if _, rawErr := hid.ValidateRaw(cleanHex); rawErr == nil {
-						err = m.manager.SendRawWithHold(cleanHex, step.Hold)
+					isExplicitRaw := strings.HasPrefix(strings.ToLower(cleanVal), "raw:")
+					if isRaw || isExplicitRaw {
+						rawHex := cleanVal
+						if isExplicitRaw {
+							rawHex = strings.TrimSpace(cleanVal[4:])
+						}
+						rawHex = strings.ReplaceAll(rawHex, " ", "")
+						err = m.manager.SendRawWithHold(rawHex, step.Hold)
 					} else {
 						err = m.manager.TypeText(val)
 					}

@@ -113,32 +113,28 @@ func (s *Store) Load() ([]Payload, error) {
 
 // Resolver returns a hid.PayloadResolver backed by this store.
 func (s *Store) Resolver() hid.PayloadResolver {
-	return func(name string) (string, error) {
+	return func(name string) (string, bool, error) {
 		if s == nil {
-			return "", fmt.Errorf("payload store is unavailable")
+			return "", false, fmt.Errorf("payload store is unavailable")
 		}
 		p, ok, err := s.Get(name)
 		if err != nil {
-			return "", err
+			return "", false, err
 		}
 		if !ok {
 			// Handle common legacy aliases
-			if strings.EqualFold(name, "sleep") {
+			if strings.EqualFold(name, "sleep") || strings.EqualFold(name, "sleep_windows") {
 				if p2, ok2, _ := s.Get("win_sleep"); ok2 {
-					return p2.Value, nil
-				}
-			} else if strings.EqualFold(name, "sleep_windows") {
-				if p2, ok2, _ := s.Get("win_sleep"); ok2 {
-					return p2.Value, nil
+					return p2.Value, p2.IsRaw(), nil
 				}
 			} else if strings.EqualFold(name, "playpause") {
 				if p2, ok2, _ := s.Get("play_pause"); ok2 {
-					return p2.Value, nil
+					return p2.Value, p2.IsRaw(), nil
 				}
 			}
-			return "", fmt.Errorf("payload %q not found", name)
+			return "", false, fmt.Errorf("payload %q not found", name)
 		}
-		return p.Value, nil
+		return p.Value, p.IsRaw(), nil
 	}
 }
 
@@ -181,7 +177,7 @@ func (s *Store) ResolveRefs(names []string) RefReport {
 		seen[key] = true
 		report.Referenced = append(report.Referenced, clean)
 
-		value, err := resolve(clean)
+		value, _, err := resolve(clean)
 		if err != nil {
 			report.Unresolved = append(report.Unresolved, clean)
 			continue

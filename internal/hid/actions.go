@@ -360,9 +360,25 @@ func ParseSequence(input string) ([]ComboStep, error) {
 			}
 		}
 
+		// Explicit raw report prefix: {raw:02}, {raw:cd00}, {raw:08000f0000000000}
+		if strings.HasPrefix(lowerBody, "raw:") {
+			rawHex := strings.ReplaceAll(strings.TrimSpace(tokenBody[4:]), " ", "")
+			if _, rawErr := ValidateRaw(rawHex); rawErr == nil {
+				flushText()
+				steps = append(steps, ComboStep{Combo: tokenBody, Raw: strings.ToLower(rawHex), Hold: holdDuration})
+				lastIdx = matchEnd
+				continue
+			} else {
+				return nil, fmt.Errorf("invalid raw hex in %q: %w", inner, rawErr)
+			}
+		}
+
 		// Check for direct raw report hex (e.g. 02, cd00, 08000f0000000000)
+		// Note: All-digit tokens of length >= 4 (e.g. 1234) are payload references, not raw reports.
 		cleanHex := strings.ReplaceAll(tokenBody, " ", "")
-		if len(cleanHex) == 2 || len(cleanHex) == 4 || len(cleanHex) == 8 || len(cleanHex) == 16 {
+		isAllDigits := isPureDigits(cleanHex)
+		isRawCandidate := (len(cleanHex) == 2 && isAllDigits) || (!isAllDigits && (len(cleanHex) == 2 || len(cleanHex) == 4 || len(cleanHex) == 8 || len(cleanHex) == 16))
+		if isRawCandidate {
 			if _, hexErr := hex.DecodeString(cleanHex); hexErr == nil {
 				flushText()
 				steps = append(steps, ComboStep{Combo: tokenBody, Raw: strings.ToLower(cleanHex), Hold: holdDuration})
@@ -543,5 +559,17 @@ func ExtractPayloads(input string) []string {
 	return result
 }
 
-// PayloadResolver resolves a payload name to its string or hex value.
-type PayloadResolver func(name string) (string, error)
+func isPureDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// PayloadResolver resolves a payload name to its string value, whether it is a raw HID report, and error.
+type PayloadResolver func(name string) (value string, isRaw bool, err error)
