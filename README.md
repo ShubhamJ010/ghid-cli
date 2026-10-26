@@ -24,30 +24,9 @@ macOS cannot act as a Bluetooth HID device to control another computer. Android 
 - Exit codes distinguish transport drops from invalid arguments and device errors.
 - Low-latency keystroke injection, bracket macro sequences, and raw HID reports allow full target control without accessibility APIs.
 
-## Documentation index
+## Documentation
 
-- [System architecture specification](docs/architecture.md): Subsystem topology, foreground service lifecycle, dual-report HID descriptor bytecode, and security model.
-- [Execution and lifecycle flows](docs/flows.md): Sequence diagrams for login sequences, combo execution, Bluetooth SDP handshakes, and ACPI sleep teardown.
-- [Wire and report protocol specification](docs/protocol-spec.md): Binary report payloads, L2CAP channels, USB HID scancode translation table, and ADB intent extras.
-- [Troubleshooting and operational runbook](docs/troubleshooting.md): Diagnosis for ADB transport drops, Windows driver binding issues, Bluetooth desync, and Keychain access over SSH.
-- [Automation and agent integration guide](docs/agent-integration.md): Machine-readable `--json` schemas, exit codes, and integration recipes.
-- [Android companion repository](https://github.com/ShubhamJ010/ghost-hid): Standalone Android app, Material 3 UI, and Gradle release pipeline.
-- [Architecture decision records](docs/decisions/):
-  - [ADR-001: Headless Android Service with BroadcastReceiver IPC over ADB](docs/decisions/ADR-001-headless-android-service-adb-ipc.md)
-  - [ADR-002: Dual-Report HID Descriptor for Keyboard and Mouse](docs/decisions/ADR-002-dual-report-descriptor-for-keyboard-and-mouse.md)
-  - [ADR-003: Charm TUI with Structured JSON API and Native Credential Vault](docs/decisions/ADR-003-charm-tui-with-json-agent-api-and-keychain-vault.md)
-  - [ADR-004: Snippets Subsystem, Dynamic Combo Variables, and Unified Quick Send](docs/decisions/ADR-004-snippets-subsystem-and-quick-send.md)
-  - [ADR-005: Combo Metadata and Unified Stepper Engine](docs/decisions/ADR-005-combo-metadata-and-unified-stepper.md)
-  - [ADR-006: Standalone Android Material 3 Expressive UI with Bi-directional Shared State](docs/decisions/ADR-006-material3-expressive-android-ui-and-shared-state.md)
-  - [ADR-007: Passive Target Host OS Fingerprinting](docs/decisions/ADR-007-host-os-fingerprinting.md)
-  - [ADR-008: Composite HID Report Descriptor and Auto-Inferred Raw Dispatch](docs/decisions/ADR-008-composite-descriptor-and-auto-inferred-raw-dispatch.md)
-  - [ADR-009: Bi-directional Synchronization and Android as Single Source of Truth](docs/decisions/ADR-009-bidirectional-sync-and-android-ssot.md)
-  - [ADR-010: macOS and Cross-Platform Gestures Adaptation](docs/decisions/ADR-010-macos-and-cross-platform-gesture-adaptation.md)
-  - [ADR-011: Quick Send Unified Iconography and Device-Driven Host Coupling](docs/decisions/ADR-011-quick-send-unified-iconography-and-host-coupling.md)
-  - [ADR-012: Single Non-Headless Android App and Release-Only Deployment](docs/decisions/ADR-012-single-android-app-and-release-only-deployment.md)
-  - [ADR-013: Combo Emoji Icon Override](docs/decisions/ADR-013-combo-emoji-icon-override.md)
-  - [ADR-014: Raw Snippets, Security Boundary, and Material 3 Expressive Controls](docs/decisions/ADR-014-raw-snippets-security-boundary-and-m3-expressive-controls.md)
-  - [ADR-015: Unified Bracket Sequence DSL and Payload Subsystem](docs/decisions/ADR-015-unified-bracket-sequence-dsl-and-payloads.md)
+Complete architecture specifications, execution flows, wire protocol definitions, troubleshooting runbooks, and Architecture Decision Records (ADRs) are indexed in the **[Documentation Index](docs/README.md)**.
 
 ## Quick start
 

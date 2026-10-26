@@ -7,7 +7,7 @@ Accepted
 2026-10-24
 
 ## Context
-GhostHID originally registered a dual-report HID SDP descriptor ([ADR-002](file:///Users/sj/Desktop/ws/ghost-hid/docs/decisions/ADR-002-dual-report-descriptor-for-keyboard-and-mouse.md)) multiplexing Keyboard (Report ID 1, 8 bytes) and Mouse (Report ID 2, 4 bytes). While this supported basic typing, chords, and pointer actions, it suffered from several architectural constraints:
+GhostHID originally registered a dual-report HID SDP descriptor ([ADR-002](ADR-002-dual-report-descriptor-for-keyboard-and-mouse.md)) multiplexing Keyboard (Report ID 1, 8 bytes) and Mouse (Report ID 2, 4 bytes). While this supported basic typing, chords, and pointer actions, it suffered from several architectural constraints:
 1. **Sleep and Wake Fragility:** Putting Windows hosts to sleep required brittle OS keystroke sequences (`Win+X -> u -> s`), which fail when lock screens or modal dialogs are active. macOS and Linux have no equivalent universal key sequence.
 2. **Media and Consumer Controls:** Controlling media playback (play/pause, volume, tracks) required either platform-specific shortcut chords or was unsupported over the standard keyboard descriptor.
 3. **Report Routing Complexity:** Raw HID dispatch was previously locked to 16 hex characters (8-byte keyboard reports) or required callers to remember and specify internal numeric Report IDs (e.g., `<report_id>:<hex>`).
