@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ShubhamJ010/ghid-cli/internal/payloads"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/ShubhamJ010/ghid-cli/internal/payloads"
 )
 
 type payloadStudioMode int

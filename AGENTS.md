@@ -23,8 +23,8 @@ Status: alpha. Big refactors welcome. **No tests (unit or integration) — this 
 | `internal/combos` | combo library at `~/.config/ghid/combos.json` |
 | `internal/tui` | bubbletea dashboard + Combo Studio |
 | `internal/config`, `vault`, `keychain` | config, credential storage |
-| `android/app/src/main/java/com/sj010/ghid` | Android app: Compose UI + `service/HidService` + `service/HidCommandReceiver` |
-| `build.sh`, `android/` | Gradle release build (`:app:assembleRelease` → `build/ghost-hid.apk`) |
+| `../ghost-hid` | Companion Android app: Compose UI + `service/HidService` + `service/HidCommandReceiver` |
+| `../ghost-hid/build.sh` | Gradle release build (`:app:assembleRelease` → `build/ghost-hid.apk`) |
 | `docs/` | architecture, flows, protocol, agent integration, ADRs, prompts (`docs/prompts/`) |
 
 Layer rule: `cli → gateway → adb → broadcast → Kotlin`. No direct `adb` calls from CLI/TUI. No business logic in `cmd/ghid`.
@@ -37,7 +37,7 @@ cd /Users/sj/Desktop/ws/ghost-hid
 gofmt -w cmd internal
 go vet ./...
 go build ./...
-./build.sh          # release APK -> build/ghost-hid.apk (Gradle; first run needs network)
+(cd ../ghost-hid && ./build.sh)  # release APK -> ghost-hid/build/ghost-hid.apk
 ```
 
 ## Update CLI on this Mac
@@ -153,7 +153,7 @@ Payload references: `{NAME}` (e.g. `{PASSWORD}`, `{WIN_SLEEP}`, `{PLAY_PAUSE}`).
 
 - Flags stripped globally (`--json`, `-s`). Text containing those tokens can break.
 - Combo timestamps stored UTC. Local clock may show behind.
-- `build.sh` only shells out to `android/gradlew :app:assembleRelease` and copies the release APK to `build/ghost-hid.apk`. `ghid install-apk` deploys release builds only (never debug).
+- `ghost-hid/build.sh` runs Gradle `:app:assembleRelease` and copies the release APK to `ghost-hid/build/ghost-hid.apk`. `ghid install-apk` resolves it and deploys release builds only (never debug).
 - TUI is one bubbletea app. `esc` returns to dashboard, `ctrl+c` exits.
 - Mouse needs report ID `2`; keyboard report ID `1`. Wrong descriptor = no mouse.
 - `ghid combo` bare is interactive only on a TTY. Non-TTY falls back to list.

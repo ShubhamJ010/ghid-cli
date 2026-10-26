@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ShubhamJ010/ghid-cli/internal/adb"
 	"github.com/ShubhamJ010/ghid-cli/internal/combos"
 	"github.com/ShubhamJ010/ghid-cli/internal/config"
@@ -24,6 +23,7 @@ import (
 	"github.com/ShubhamJ010/ghid-cli/internal/syncer"
 	"github.com/ShubhamJ010/ghid-cli/internal/tui"
 	"github.com/ShubhamJ010/ghid-cli/internal/vault"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mattn/go-runewidth"
 )
 
@@ -2553,8 +2553,13 @@ func (a *App) handleBuild() int {
 		cmd = exec.Command("./gradlew", ":app:assembleRelease")
 		cmd.Dir = "android"
 		artifact = "android/app/build/outputs/apk/release/app-release.apk"
+	} else if _, err := os.Stat(filepath.Join("..", "ghost-hid", "build.sh")); err == nil {
+		fmt.Fprintln(a.Stdout, "Building GhostHID release APK (../ghost-hid/build.sh -> :app:assembleRelease)...")
+		cmd = exec.Command("bash", "build.sh")
+		cmd.Dir = filepath.Join("..", "ghost-hid")
+		artifact = filepath.Join("..", "ghost-hid", "build", "ghost-hid.apk")
 	} else {
-		fmt.Fprintln(a.Stderr, "Build failed: build.sh not found (run ghid build from the GhostHID repo root)")
+		fmt.Fprintln(a.Stderr, "Build failed: build.sh not found (run ghid build from ghost-hid repository)")
 		return 1
 	}
 	cmd.Stdout = a.Stdout
@@ -2574,6 +2579,8 @@ func (a *App) handleInstallApk(serial string, args []string) int {
 	} else {
 		candidates := []string{
 			"build/ghost-hid.apk",
+			filepath.Join("..", "ghost-hid", "build", "ghost-hid.apk"),
+			filepath.Join("..", "ghost-hid", "app", "build", "outputs", "apk", "release", "app-release.apk"),
 			"android/app/build/outputs/apk/release/app-release.apk",
 			"ghost-hid.apk",
 		}

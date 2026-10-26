@@ -239,7 +239,12 @@ func (m *Manager) InstallApk(customPath string) error {
 func (m *Manager) BuildApk() error {
 	buildScript := filepath.Join(m.Root, "build.sh")
 	if _, err := os.Stat(buildScript); err != nil {
-		buildScript = "build.sh"
+		ghostBuild := filepath.Join(m.Root, "..", "ghost-hid", "build.sh")
+		if _, errGhost := os.Stat(ghostBuild); errGhost == nil {
+			buildScript = ghostBuild
+		} else {
+			buildScript = "build.sh"
+		}
 	}
 
 	if m.runner == nil {

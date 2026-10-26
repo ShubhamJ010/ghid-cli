@@ -8,17 +8,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/progress"
-	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/ShubhamJ010/ghid-cli/internal/adb"
 	"github.com/ShubhamJ010/ghid-cli/internal/combos"
 	"github.com/ShubhamJ010/ghid-cli/internal/config"
 	"github.com/ShubhamJ010/ghid-cli/internal/hid"
 	"github.com/ShubhamJ010/ghid-cli/internal/keychain"
 	"github.com/ShubhamJ010/ghid-cli/internal/payloads"
+	"github.com/charmbracelet/bubbles/progress"
+	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 type AppState int

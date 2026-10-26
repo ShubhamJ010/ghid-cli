@@ -31,7 +31,7 @@ macOS cannot act as a Bluetooth HID device to control another computer. Android 
 - [Wire and report protocol specification](docs/protocol-spec.md): Binary report payloads, L2CAP channels, USB HID scancode translation table, and ADB intent extras.
 - [Troubleshooting and operational runbook](docs/troubleshooting.md): Diagnosis for ADB transport drops, Windows driver binding issues, Bluetooth desync, and Keychain access over SSH.
 - [Automation and agent integration guide](docs/agent-integration.md): Machine-readable `--json` schemas, exit codes, and integration recipes.
-- [Android build toolchain](docs/build-and-toolchain.md): Build pipeline for the companion Android app.
+- [Android companion repository](https://github.com/ShubhamJ010/ghost-hid): Standalone Android app, Material 3 UI, and Gradle release pipeline.
 - [Architecture decision records](docs/decisions/):
   - [ADR-001: Headless Android Service with BroadcastReceiver IPC over ADB](docs/decisions/ADR-001-headless-android-service-adb-ipc.md)
   - [ADR-002: Dual-Report HID Descriptor for Keyboard and Mouse](docs/decisions/ADR-002-dual-report-descriptor-for-keyboard-and-mouse.md)

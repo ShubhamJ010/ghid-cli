@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/ShubhamJ010/ghid-cli/internal/combos"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func (m Model) View() string {
