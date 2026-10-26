@@ -53,7 +53,7 @@ flowchart TB
 
 ## Android Gateway Subsystem
 
-The Android package `com.sj010.ghid` is the single shipping app. It has a launcher activity (`MainActivity`, Material 3 Expressive dashboard, Combo Studio, trackpad), but the gateway itself never depends on the UI: `HidService` is an always-on foreground service that can be started, stopped, and commanded entirely over ADB with the screen off. A separate headless build is no longer maintained — see `docs/prompts/headless-android-app.md` if you want to code your own.
+The Android package `com.sj010.ghid` is the single shipping app. It has a launcher activity (`MainActivity`, Material 3 Expressive dashboard, Combo Studio, trackpad, and a landscape stream-deck surface), but the gateway itself never depends on the UI: `HidService` is an always-on foreground service that can be started, stopped, and commanded entirely over ADB with the screen off. A separate headless build is no longer maintained — see `docs/prompts/headless-android-app.md` if you want to code your own.
 
 ### Service Lifecycle and Notification Channel
 The gateway implements `android.app.Service` as an ongoing foreground service:
@@ -271,3 +271,6 @@ Generic system/laptop icons are superseded by branded vector silhouettes:
 The pull-down morphing shade (`PullDownShade.kt`) computes travel distance and available surface bounds accounting for both status bar and navigation bar system insets:
 `availableHeight = maxHeight - navBarBottom - 16.dp`
 This ensures the bottom dock controls never overlap the Android system navigation bar or gesture pill on modern edge-to-edge displays.
+
+### Landscape Ghost Deck
+Rotating the phone to landscape replaces the bottom-nav scaffold with `StreamDeckScreen`: an immersive, full-bleed surface with the same five pinned-favorite slots (`PinnedFavoritesPolicy`), rendered as large, distinct M3 Expressive silhouettes scattered across the display. Tapping a pinned shape runs its combo; empty shapes open the shared favorite picker. Pulling down the top `PullDownShade` reveals every payload as a name-sized pill with a stable random M3E silhouette. Pills are sorted by `PayloadUsageRepository` dispatch counts (most-used first), then alphabetically, and tapping one types its text or sends its raw HID report.
