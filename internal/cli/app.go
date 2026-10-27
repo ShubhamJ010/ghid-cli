@@ -118,17 +118,14 @@ func (a *App) Run(args []string) int {
 	}
 
 	// Android is Single Source of Truth: if connected, auto-pull latest phone state on start
-	pulled := false
 	if mgr, err := adb.NewManager(serial); err == nil {
-		pulled = syncer.AutoPullIfConnected(mgr, a.ComboStore, a.PayloadStore)
+		_ = syncer.AutoPullIfConnected(mgr, a.ComboStore, a.PayloadStore)
 	}
-	if !pulled {
-		if a.ComboStore != nil {
-			_, _ = a.ComboStore.EnsureDefaults()
-		}
-		if a.PayloadStore != nil {
-			_, _ = a.PayloadStore.EnsureDefaults()
-		}
+	if a.ComboStore != nil {
+		_, _ = a.ComboStore.EnsureDefaults()
+	}
+	if a.PayloadStore != nil {
+		_, _ = a.PayloadStore.EnsureDefaults()
 	}
 
 	if len(filteredArgs) == 0 {
@@ -602,7 +599,7 @@ func (a *App) handleLogin(cfg config.Config, serial string, args []string, jsonO
 
 func (a *App) handleLock(serial string, jsonOutput bool) int {
 	lockSeq := combos.DefaultLockSequence
-	if c, ok := a.comboStore().Find("Lock"); ok && c.Sequence != "" {
+	if c, ok := a.comboStore().Find("Lock"); ok && c.Sequence != "" && c.Sequence != "{mod+l}" {
 		lockSeq = c.Sequence
 	}
 	return a.dispatchCombo(serial, "Lock", lockSeq, jsonOutput)
@@ -2784,7 +2781,7 @@ Commands:
                     Save a named combo (refuses missing payload references by default)
   combo send <name> [--dry-run] Send a saved combo, or print resolved HID steps only
   combo delete <name> [-f]      Delete a combo (--json skips confirmation)
-  combo <sequence>  Send a one-shot sequence (e.g. '{mod+d}', '{mod+s}'); add --dry-run
+  combo <sequence>  Send a one-shot sequence (e.g. '{win+d}', '{mod+s}'); add --dry-run
   combo mouse       Send a mouse gesture (click-left, scroll-up, double-click)
   click [button]    Click mouse at resting cursor position (left, right, middle, double)
                     (--double, --count <n>, --json; no pointer coordinates or movement)

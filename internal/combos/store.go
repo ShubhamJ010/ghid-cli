@@ -19,11 +19,11 @@ import (
 // Default combo sequences shipped with the application.
 const (
 	DefaultLoginSequence = "{ctrl+alt+del}{1s}{Escape}{800ms}{USERNAME}{800ms}{Tab}{800ms}{PASSWORD}{800ms}{Enter}"
-	DefaultLockSequence  = "{mod+l}"
+	DefaultLockSequence  = "{win+l}"
 	DefaultSleepSequence = "{WIN_SLEEP}"
 
-	DefaultMacSleepSequence     = "{mod+ctrl+q}{500ms}{Escape}"
-	DefaultMacForceQuitSequence = "{mod+alt+esc}{400ms}{Enter}{300ms}{Enter}"
+	DefaultMacSleepSequence     = "{cmd+ctrl+q}{500ms}{Escape}"
+	DefaultMacForceQuitSequence = "{cmd+alt+esc}{400ms}{Enter}{300ms}{Enter}"
 	DefaultMacPlayPauseSequence = "{PLAY_PAUSE}"
 )
 
@@ -169,7 +169,7 @@ var DefaultCombos = []Combo{
 		Sequence:    DefaultLockSequence,
 		OS:          OSWindows,
 		Emoji:       "🔒",
-		Description: "Instant lock screen ({mod+l})",
+		Description: "Instant Windows lock screen (Win + L)",
 		Favorite:    true,
 	},
 	{
@@ -353,6 +353,19 @@ func (s *Store) EnsureDefaults() ([]Combo, error) {
 					list[i].Sequence = def.Sequence
 					list[i].Payloads = def.Payloads
 					list[i].Description = def.Description
+					modified = true
+				}
+				if strings.EqualFold(list[i].Name, "Lock") && (list[i].Sequence == "{mod+l}" || list[i].Sequence == "win+l") {
+					list[i].Sequence = DefaultLockSequence
+					list[i].Description = def.Description
+					modified = true
+				}
+				if strings.EqualFold(list[i].Name, "MacSleep") && list[i].Sequence == "{mod+ctrl+q}{500ms}{Escape}" {
+					list[i].Sequence = DefaultMacSleepSequence
+					modified = true
+				}
+				if strings.EqualFold(list[i].Name, "ForceQuit") && list[i].Sequence == "{mod+alt+esc}{400ms}{Enter}{300ms}{Enter}" {
+					list[i].Sequence = DefaultMacForceQuitSequence
 					modified = true
 				}
 				if list[i].OS == "" && def.OS != "" {
