@@ -1307,7 +1307,7 @@ func (a *App) handleComboValidate(cfg config.Config, store *combos.Store, sequen
 		osName, osSource = defaultValidateOS(cfg, store, sequence)
 	}
 
-	steps, err := hid.DescribeSequence(sequence)
+	steps, err := hid.DescribeSequenceForOS(sequence, osName)
 	if err == nil {
 		err = combos.ValidateForOS(sequence, osName)
 	}
@@ -1431,7 +1431,7 @@ func (a *App) handleComboShow(store *combos.Store, name string, jsonOutput bool)
 	if !ok {
 		return a.comboFail(jsonOutput, "no saved combo named %q (run 'ghid combo list --json')", name)
 	}
-	steps, _ := hid.DescribeSequence(combo.Sequence)
+	steps, _ := hid.DescribeSequenceForOS(combo.Sequence, combo.OS)
 	report := store.PayloadRefReport(combo.Sequence)
 
 	if jsonOutput {

@@ -309,6 +309,11 @@ func isStandardKey(token string) bool {
 //  4. Standard W3C / HID key name or consumer key or mouse action -> Single key / raw / mouse step.
 //  5. Alphanumeric / Identifier ({PASSWORD}, {WIN_SLEEP}) -> Named Payload reference step.
 func ParseSequence(input string) ([]ComboStep, error) {
+	return ParseSequenceForOS(input, "")
+}
+
+// ParseSequenceForOS parses a sequence using a specific target OS ("windows", "macos", "linux").
+func ParseSequenceForOS(input string, targetOS string) ([]ComboStep, error) {
 	trimmed := strings.TrimSpace(input)
 	if trimmed == "" {
 		return nil, errors.New("empty combo sequence")
@@ -405,7 +410,7 @@ func ParseSequence(input string) ([]ComboStep, error) {
 					return nil, fmt.Errorf("consumer key %q cannot be combined with modifiers (use {%s})", strings.TrimSpace(part), consumerTokenFor(canonical))
 				}
 			}
-			mod, code, err := ParseCombo(tokenBody)
+			mod, code, err := ParseComboForOS(tokenBody, targetOS)
 			if err != nil {
 				return nil, fmt.Errorf("invalid chord %q: %w", inner, err)
 			}
@@ -435,7 +440,7 @@ func ParseSequence(input string) ([]ComboStep, error) {
 		}
 
 		if isStandardKey(tokenBody) {
-			mod, code, err := ParseCombo(tokenBody)
+			mod, code, err := ParseComboForOS(tokenBody, targetOS)
 			if err == nil {
 				flushText()
 				steps = append(steps, ComboStep{Combo: tokenBody, Modifier: mod, KeyCode: code, Hold: holdDuration})
@@ -578,7 +583,12 @@ type StepDescription struct {
 
 // DescribeSequence parses a combo and returns its steps for agents and tooling.
 func DescribeSequence(input string) ([]StepDescription, error) {
-	steps, err := ParseSequence(input)
+	return DescribeSequenceForOS(input, "")
+}
+
+// DescribeSequenceForOS translates a sequence into human- and JSON-inspectable steps for a specific target OS.
+func DescribeSequenceForOS(input string, targetOS string) ([]StepDescription, error) {
+	steps, err := ParseSequenceForOS(input, targetOS)
 	if err != nil {
 		return nil, err
 	}

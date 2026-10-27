@@ -143,11 +143,24 @@ func ValidateRaw(hexStr string) ([]byte, error) {
 }
 
 // ParseCombo translates human-readable key combinations (e.g. "ctrl+alt+del", "super+l", "esc")
-// into the corresponding HID modifier mask and primary keycode.
+// into the corresponding HID modifier mask and primary keycode using runtime.GOOS as fallback.
 func ParseCombo(combo string) (modifier byte, keyCode byte, err error) {
+	return ParseComboForOS(combo, "")
+}
+
+// ParseComboForOS translates key combinations using the specified target operating system
+// ("windows", "macos", "linux"). If targetOS is empty, it falls back to runtime.GOOS.
+func ParseComboForOS(combo string, targetOS string) (modifier byte, keyCode byte, err error) {
 	trimmed := strings.ToLower(strings.TrimSpace(combo))
 	if trimmed == "" {
 		return 0, 0, errors.New("empty key combination")
+	}
+
+	isMac := false
+	if targetOS != "" {
+		isMac = strings.EqualFold(targetOS, "macos") || strings.EqualFold(targetOS, "darwin") || strings.EqualFold(targetOS, "mac")
+	} else {
+		isMac = runtime.GOOS == "darwin"
 	}
 
 	parts := strings.Split(trimmed, "+")
@@ -155,7 +168,7 @@ func ParseCombo(combo string) (modifier byte, keyCode byte, err error) {
 		p := strings.TrimSpace(rawPart)
 		switch p {
 		case "mod":
-			if runtime.GOOS == "darwin" {
+			if isMac {
 				modifier |= ModLeftGUI
 			} else {
 				modifier |= ModLeftCtrl
