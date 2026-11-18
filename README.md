@@ -55,11 +55,11 @@ Enable Developer Options and USB Debugging on the phone. Connect over USB or Wi-
 adb connect 192.168.1.80:41839
 ```
 
-### 3. Install the Android companion app
-Install the [GhostHID Android APK](https://github.com/ShubhamJ010/ghost-hid/releases):
+### 3. Automated device setup & remote APK installation
+Run `ghid setup` to automatically inspect the connected phone, fetch the latest release APK directly from GitHub ([ShubhamJ010/ghost-hid](https://github.com/ShubhamJ010/ghost-hid)), grant all runtime permissions (`-g`), configure battery optimization whitelist, launch the background HID service, and auto-sync your library:
 
 ```bash
-ghid install-apk
+ghid setup
 ```
 
 ### 4. Pair the phone to the target computer
@@ -78,23 +78,22 @@ ghid
 
 ```text
 ┌────────────────────────────────────────────────────────┐
-  Phone Device:    KB2001 (192.168.1.80:41839)
+  Phone Device:    KB2001 (192.168.1.80:43047)
   Gateway HID:     READY
   Target Laptop:   LP-TZD-0X114650 [38:FC:98:E8:E3:87] -> ● CONNECTED
   Cached Login:    Administrator
 └────────────────────────────────────────────────────────┘
 Actions:
-  [1] login      - Automated Windows unlock and login
-  [2] lock       - Lock Windows screen (Win + L)
-  [3] sleep      - Hardware ACPI sleep sequence
-  [4] type       - Inject text string via keyboard
-  [5] combo      - Combo Studio (create, send, delete combos)
-  [6] raw        - Inject raw 16-hex byte HID report
-  [7] creds      - View and update cached login credentials
-  [d] devices    - Registered target devices and pair new laptop
-  [8] reconnect  - Re-trigger Bluetooth connection
-  [9] doctor     - Run full hardware and gateway diagnostic check
-  [0] exit       - Disconnect Bluetooth and stop phone service
+  [1] Login      - Windows unlock & credential injection (Pinned Favorite)
+  [2] Lock       - Instant Windows lock screen (Win + L)
+  [3] Sleep      - Hardware ACPI sleep sequence
+  [4] quick      - Quick send keystrokes or raw HID report (default: Type)
+  [5] payloads   - Manage payloads & secrets ({NAME})
+  [6] combo      - Create, send & edit sequences across OSs
+  [d] devices    - Registered target devices & add new Windows/Mac
+  [7] reconnect  - Re-trigger Bluetooth HID connection
+  [8] doctor     - Run full hardware & gateway diagnostic check
+  [0] exit       - Disconnect Bluetooth & terminate phone service
 ```
 
 ## Command-line usage and automation API

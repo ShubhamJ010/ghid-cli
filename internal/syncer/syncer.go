@@ -13,13 +13,16 @@ import (
 
 // SyncReport summarizes the results of a sync operation.
 type SyncReport struct {
-	CombosPulled          int  `json:"combos_pulled"`
-	CombosPushed          int  `json:"combos_pushed"`
-	PayloadsPulled        int  `json:"payloads_pulled"`
-	PayloadsPushed        int  `json:"payloads_pushed"`
-	PayloadsSkippedSecure int  `json:"payloads_skipped_secure"`
-	AppRestarted          bool `json:"app_restarted"`
-	Reconnected           bool `json:"reconnected"`
+	CombosPulled          int `json:"combos_pulled"`
+	CombosPushed          int `json:"combos_pushed"`
+	PayloadsPulled        int `json:"payloads_pulled"`
+	PayloadsPushed        int `json:"payloads_pushed"`
+	PayloadsSkippedSecure int `json:"payloads_skipped_secure"`
+	// Deprecated: the app is reloaded in place instead of restarted. Kept so
+	// existing --json consumers see the same field; it is always false now.
+	AppRestarted  bool `json:"app_restarted"`
+	StateReloaded bool `json:"state_reloaded"`
+	Reconnected   bool `json:"reconnected"`
 }
 
 // Pull merges combos and non-secure payloads from Android into the local stores.
@@ -170,11 +173,14 @@ func Push(mgr *adb.Manager, cStore *combos.Store, pStore *payloads.Store) (*Sync
 	}
 	report.PayloadsPushed = len(toPush)
 
-	// 3. Restart app and reconnect Bluetooth
-	if err := mgr.RestartAppAndReconnect(); err != nil {
-		return report, fmt.Errorf("restart and reconnect: %w", err)
+	// 3. Reload the pushed state in place and make sure the link is up. The app
+	// is never force-stopped: that dropped the Bluetooth link and could strand
+	// in-flight broadcasts in Android's deferred queue.
+	if err := mgr.ReloadAndReconnect(); err != nil {
+		return report, fmt.Errorf("reload and reconnect: %w", err)
 	}
-	report.AppRestarted = true
+	report.AppRestarted = false
+	report.StateReloaded = true
 	report.Reconnected = true
 
 	return report, nil

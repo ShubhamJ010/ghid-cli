@@ -74,6 +74,7 @@ type Controller interface {
 	GetFileLog() (string, error)
 	BuildApk() error
 	InstallApk(path string) error
+	SetupDevice(targetAddr string) (*adb.SetupReport, error)
 	GetBondedDevices() ([]adb.BondedDevice, error)
 	Manager() *adb.Manager
 }
@@ -260,6 +261,13 @@ func (g *Gateway) InstallApk(path string) error {
 		return errors.New("adb manager not initialized")
 	}
 	return g.mgr.InstallApk(path)
+}
+
+func (g *Gateway) SetupDevice(targetAddr string) (*adb.SetupReport, error) {
+	if g.mgr == nil {
+		return nil, errors.New("adb manager not initialized")
+	}
+	return g.mgr.SetupDevice(targetAddr)
 }
 
 func (g *Gateway) GetBondedDevices() ([]adb.BondedDevice, error) {

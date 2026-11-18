@@ -16,32 +16,38 @@ const (
 	payloadList payloadStudioMode = iota
 	payloadCreate
 	payloadConfirmDelete
+	payloadPromptSecure
 )
+
+// PayloadSendFunc dispatches a payload to the device.
+type PayloadSendFunc func(payload payloads.Payload) error
 
 // PayloadStudioModel allows viewing, creating, editing, and deleting payloads
 // ({USERNAME}, {PASSWORD}, and any custom text or secrets).
 type PayloadStudioModel struct {
-	store       *payloads.Store
-	list        []payloads.Payload
-	index       int
-	focus       int // 0 = list, 1 = NEW, 2 = EDIT, 3 = DELETE
-	mode        payloadStudioMode
-	formFocus   int // 0 = name, 1 = value, 2 = type toggle, 3 = secure toggle, 4 = save
-	nameInput   textinput.Model
-	valueInput  textinput.Model
-	payloadType string // "type" or "raw"
-	isSecure    bool
-	editing     string // non-empty if editing existing payload
-	notice      string
-	isError     bool
-	pendingDel  *payloads.Payload
-	width       int
-	height      int
-	quitting    bool
+	store             *payloads.Store
+	sendFn            PayloadSendFunc
+	list              []payloads.Payload
+	index             int
+	mode              payloadStudioMode
+	formFocus         int // 0 = name, 1 = value, 2 = type toggle, 3 = secure toggle, 4 = save
+	nameInput         textinput.Model
+	valueInput        textinput.Model
+	payloadType       string // "type" or "raw"
+	isSecure          bool
+	editing           string // non-empty if editing existing payload
+	notice            string
+	isError           bool
+	pendingDel        *payloads.Payload
+	promptPayload     *payloads.Payload
+	promptSecureInput textinput.Model
+	width             int
+	height            int
+	quitting          bool
 }
 
 // NewPayloadStudioModel initializes the Payload Studio.
-func NewPayloadStudioModel(store *payloads.Store) PayloadStudioModel {
+func NewPayloadStudioModel(store *payloads.Store, sendFn PayloadSendFunc) PayloadStudioModel {
 	name := textinput.New()
 	name.Placeholder = "e.g. USERNAME, PIN, API_KEY"
 	name.CharLimit = 32
@@ -52,6 +58,11 @@ func NewPayloadStudioModel(store *payloads.Store) PayloadStudioModel {
 	val.CharLimit = 256
 	val.Width = 36
 
+	pInput := textinput.New()
+	pInput.EchoMode = textinput.EchoPassword
+	pInput.EchoCharacter = '•'
+	pInput.Width = 36
+
 	var list []payloads.Payload
 	var loadErr error
 	if store != nil {
@@ -59,10 +70,12 @@ func NewPayloadStudioModel(store *payloads.Store) PayloadStudioModel {
 	}
 
 	m := PayloadStudioModel{
-		store:      store,
-		list:       list,
-		nameInput:  name,
-		valueInput: val,
+		store:             store,
+		sendFn:            sendFn,
+		list:              list,
+		nameInput:         name,
+		valueInput:        val,
+		promptSecureInput: pInput,
 	}
 
 	if loadErr != nil {
@@ -94,6 +107,8 @@ func (m PayloadStudioModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateCreate(msg)
 		case payloadConfirmDelete:
 			return m.updateConfirmDelete(msg)
+		case payloadPromptSecure:
+			return m.updatePromptSecure(msg)
 		default:
 			return m.updateList(msg)
 		}
@@ -110,83 +125,116 @@ func (m PayloadStudioModel) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case "up", "k":
-		if m.focus == 0 {
-			if m.index > 0 {
-				m.index--
-			} else if len(m.list) > 0 {
-				m.index = len(m.list) - 1
-			}
-		} else {
-			m.focus--
-			if m.focus < 1 {
-				m.focus = 3
-			}
+		if m.index > 0 {
+			m.index--
+		} else if len(m.list) > 0 {
+			m.index = len(m.list) - 1
 		}
+		m.notice = ""
 		return m, nil
 
 	case "down", "j":
-		if m.focus == 0 {
-			if m.index < len(m.list)-1 {
-				m.index++
-			} else {
-				m.index = 0
-			}
+		if m.index < len(m.list)-1 {
+			m.index++
 		} else {
-			m.focus++
-			if m.focus > 3 {
-				m.focus = 1
-			}
+			m.index = 0
 		}
-		return m, nil
-
-	case "tab":
-		m.focus = (m.focus + 1) % 4
-		return m, nil
-
-	case "shift+tab":
-		m.focus = (m.focus + 3) % 4
+		m.notice = ""
 		return m, nil
 
 	case "n", "a":
 		return m.openCreate(payloads.Payload{})
 
-	case "e", "enter":
-		if m.focus == 1 {
-			return m.openCreate(payloads.Payload{})
-		}
-		if m.focus == 2 || m.focus == 0 {
-			if len(m.list) > 0 && m.index < len(m.list) {
-				return m.openCreate(m.list[m.index])
-			}
-		}
-		if m.focus == 3 {
-			return m.startDelete()
-		}
+	case "e":
 		if len(m.list) > 0 && m.index < len(m.list) {
 			return m.openCreate(m.list[m.index])
 		}
 		return m, nil
 
-	case "d", "x", "delete":
-		return m.startDelete()
-
-	case "s":
-		// Toggle secure mode for selected payload
-		if len(m.list) > 0 && m.index < len(m.list) && m.store != nil {
-			target := m.list[m.index]
-			newSecure := !target.Secure
-			_, _ = m.store.Set(target.Name, target.Value, newSecure, target.Type)
-			m.list, _ = m.store.List()
-			status := "plain text"
-			if newSecure {
-				status = "secure (stored in Keychain)"
+	case "enter", "s":
+		// Send payload! Matches Combo Studio behavior
+		if len(m.list) > 0 && m.index < len(m.list) {
+			p := m.list[m.index]
+			if p.Secure || strings.EqualFold(p.Name, "password") {
+				return m.openPromptSecure(p)
 			}
-			m.notice = fmt.Sprintf("✔ Payload {%s} marked as %s", target.Name, status)
-			m.isError = false
+			return m.dispatchSend(p)
 		}
 		return m, nil
+
+	case "d", "x", "delete":
+		return m.startDelete()
 	}
 
+	return m, nil
+}
+
+func (m PayloadStudioModel) openPromptSecure(p payloads.Payload) (tea.Model, tea.Cmd) {
+	m.mode = payloadPromptSecure
+	m.promptPayload = &p
+	m.promptSecureInput.SetValue("")
+	m.promptSecureInput.Placeholder = fmt.Sprintf("Enter value for {%s}", strings.ToUpper(p.Name))
+	m.promptSecureInput.Focus()
+	m.notice = ""
+	m.isError = false
+	return m, textinput.Blink
+}
+
+func (m PayloadStudioModel) updatePromptSecure(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.mode = payloadList
+		m.promptPayload = nil
+		m.notice = "Send cancelled."
+		m.isError = false
+		return m, nil
+
+	case "enter":
+		if m.promptPayload == nil {
+			m.mode = payloadList
+			return m, nil
+		}
+		entered := m.promptSecureInput.Value()
+		p := *m.promptPayload
+
+		// Save entered value to payload store / keychain on-the-go
+		if m.store != nil {
+			saved, err := m.store.Set(p.Name, entered, true, p.EffectiveType())
+			if err != nil {
+				m.notice = fmt.Sprintf("Failed to save secret: %v", err)
+				m.isError = true
+				m.mode = payloadList
+				return m, nil
+			}
+			p = saved
+			m.list, _ = m.store.List()
+		}
+
+		m.mode = payloadList
+		m.promptPayload = nil
+		return m.dispatchSend(p)
+
+	default:
+		var cmd tea.Cmd
+		m.promptSecureInput, cmd = m.promptSecureInput.Update(msg)
+		return m, cmd
+	}
+}
+
+func (m PayloadStudioModel) dispatchSend(p payloads.Payload) (tea.Model, tea.Cmd) {
+	if m.sendFn == nil {
+		m.notice = fmt.Sprintf("✔ Prepared {%s} (send function not configured)", strings.ToUpper(p.Name))
+		m.isError = false
+		return m, nil
+	}
+	err := m.sendFn(p)
+	if err != nil {
+		m.notice = fmt.Sprintf("✖ Send {%s} failed: %v", strings.ToUpper(p.Name), err)
+		m.isError = true
+	} else {
+		m.notice = fmt.Sprintf("✔ Sent payload {%s}", strings.ToUpper(p.Name))
+		m.isError = false
+	}
 	return m, nil
 }
 
@@ -248,28 +296,28 @@ func (m PayloadStudioModel) updateCreate(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
 		m.mode = payloadList
-		m.editing = ""
-		m.nameInput.Blur()
-		m.valueInput.Blur()
+		m.notice = ""
 		return m, nil
 
-	case "ctrl+s":
-		return m.savePayload()
-
-	case "tab":
-		m.focusFormField(1)
+	case "tab", "down":
+		m.formFocus = (m.formFocus + 1) % 5
+		m.syncFieldFocus()
 		return m, textinput.Blink
 
-	case "shift+tab":
-		m.focusFormField(-1)
+	case "shift+tab", "up":
+		m.formFocus = (m.formFocus + 4) % 5
+		m.syncFieldFocus()
 		return m, textinput.Blink
 
-	case " ":
+	case "enter":
+		if m.formFocus == 4 || (m.formFocus == 1 && m.valueInput.Value() != "") {
+			return m.savePayload()
+		}
 		if m.formFocus == 2 {
-			if m.payloadType == "raw" {
-				m.payloadType = "type"
-			} else {
+			if m.payloadType == "type" {
 				m.payloadType = "raw"
+			} else {
+				m.payloadType = "type"
 			}
 			return m, nil
 		}
@@ -278,225 +326,196 @@ func (m PayloadStudioModel) updateCreate(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setEchoMode()
 			return m, nil
 		}
+		m.formFocus = (m.formFocus + 1) % 5
+		m.syncFieldFocus()
+		return m, textinput.Blink
 
-	case "enter":
-		switch m.formFocus {
-		case 0:
-			m.focusFormField(1)
-			return m, textinput.Blink
-		case 1:
-			m.focusFormField(1)
-			return m, textinput.Blink
-		case 2:
-			if m.payloadType == "raw" {
-				m.payloadType = "type"
-			} else {
+	case " ":
+		if m.formFocus == 2 {
+			if m.payloadType == "type" {
 				m.payloadType = "raw"
+			} else {
+				m.payloadType = "type"
 			}
 			return m, nil
-		case 3:
+		}
+		if m.formFocus == 3 {
 			m.isSecure = !m.isSecure
 			m.setEchoMode()
 			return m, nil
-		case 4:
-			return m.savePayload()
 		}
 	}
 
 	var cmd tea.Cmd
-	switch m.formFocus {
-	case 0:
+	if m.formFocus == 0 {
 		m.nameInput, cmd = m.nameInput.Update(msg)
-	case 1:
+	} else if m.formFocus == 1 {
 		m.valueInput, cmd = m.valueInput.Update(msg)
 	}
 	return m, cmd
 }
 
-func (m *PayloadStudioModel) focusFormField(delta int) {
-	order := []int{0, 1, 2, 3, 4}
-	if m.editing != "" {
-		order = []int{1, 2, 3, 4}
-	}
-
-	current := 0
-	for i, v := range order {
-		if v == m.formFocus {
-			current = i
-			break
-		}
-	}
-	next := (current + delta + len(order)) % len(order)
-	m.formFocus = order[next]
-
-	m.nameInput.Blur()
-	m.valueInput.Blur()
+func (m *PayloadStudioModel) syncFieldFocus() {
 	if m.formFocus == 0 {
 		m.nameInput.Focus()
+		m.valueInput.Blur()
 	} else if m.formFocus == 1 {
+		m.nameInput.Blur()
 		m.valueInput.Focus()
+	} else {
+		m.nameInput.Blur()
+		m.valueInput.Blur()
 	}
 }
 
 func (m PayloadStudioModel) savePayload() (tea.Model, tea.Cmd) {
 	name := strings.TrimSpace(m.nameInput.Value())
-	if m.editing != "" {
-		name = m.editing
-	}
-	cleanName, err := payloads.ValidateName(name)
-	if err != nil {
-		m.notice = "✖ " + err.Error()
+	if name == "" {
+		m.notice = "Payload name cannot be empty"
 		m.isError = true
-		m.formFocus = 0
-		m.nameInput.Focus()
-		return m, textinput.Blink
+		return m, nil
+	}
+
+	if _, err := payloads.ValidateName(name); err != nil {
+		m.notice = fmt.Sprintf("Invalid name: %v", err)
+		m.isError = true
+		return m, nil
 	}
 
 	val := m.valueInput.Value()
-	if m.store != nil {
-		_, err = m.store.Set(cleanName, val, m.isSecure, m.payloadType)
-		if err != nil {
-			m.notice = fmt.Sprintf("✖ Failed to save payload: %v", err)
-			m.isError = true
-			return m, nil
-		}
-		m.list, _ = m.store.List()
+	pType := m.payloadType
+	if pType == "" {
+		pType = "type"
 	}
 
-	m.mode = payloadList
-	m.editing = ""
-	m.notice = fmt.Sprintf("✔ Payload {%s} saved", cleanName)
-	m.isError = false
+	_, err := m.store.Set(name, val, m.isSecure, pType)
+	if err != nil {
+		m.notice = fmt.Sprintf("Failed to save payload: %v", err)
+		m.isError = true
+		return m, nil
+	}
 
-	for i, s := range m.list {
-		if strings.EqualFold(s.Name, cleanName) {
+	m.list, _ = m.store.List()
+	for i, p := range m.list {
+		if strings.EqualFold(p.Name, name) {
 			m.index = i
 			break
 		}
 	}
+
+	m.mode = payloadList
+	m.notice = fmt.Sprintf("✔ Saved payload {%s}", strings.ToUpper(name))
+	m.isError = false
 	return m, nil
 }
 
 func (m PayloadStudioModel) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "y", "Y", "enter":
+	switch strings.ToLower(msg.String()) {
+	case "y", "enter":
 		if m.pendingDel != nil {
 			name := m.pendingDel.Name
-			if m.store != nil {
-				_, _, err := m.store.Delete(name)
-				if err != nil {
-					m.notice = fmt.Sprintf("✖ Failed to delete payload: %v", err)
-					m.isError = true
-				} else {
-					m.list, _ = m.store.List()
-					if m.index >= len(m.list) && len(m.list) > 0 {
-						m.index = len(m.list) - 1
-					}
-					m.notice = fmt.Sprintf("✔ Deleted payload {%s}", name)
-					m.isError = false
+			_, _, err := m.store.Delete(name)
+			if err != nil {
+				m.notice = fmt.Sprintf("Delete error: %v", err)
+				m.isError = true
+			} else {
+				m.notice = fmt.Sprintf("✔ Deleted payload {%s}", strings.ToUpper(name))
+				m.isError = false
+				m.list, _ = m.store.List()
+				if m.index >= len(m.list) && m.index > 0 {
+					m.index = len(m.list) - 1
 				}
 			}
-			m.pendingDel = nil
-			m.mode = payloadList
 		}
+		m.mode = payloadList
+		m.pendingDel = nil
 		return m, nil
 
-	case "n", "N", "esc", "q":
-		m.pendingDel = nil
+	case "n", "esc", "q":
 		m.mode = payloadList
-		m.notice = "Deletion cancelled."
-		m.isError = false
+		m.pendingDel = nil
+		m.notice = ""
 		return m, nil
 	}
+
 	return m, nil
 }
 
-func (m PayloadStudioModel) cardWidth() int {
-	return calculateCardWidth(m.width)
-}
-
 func (m PayloadStudioModel) View() string {
-	var sb strings.Builder
-
-	sb.WriteString(TitleStyle.Render("📋 PAYLOAD STUDIO · Named Payloads & Secrets"))
-	sb.WriteString("\n")
-	sb.WriteString(SubtitleStyle.Render("Define text and secure payloads for combos ({USERNAME}, {PASSWORD}, {WIN_SLEEP})"))
-	sb.WriteString("\n\n")
-
-	if m.notice != "" {
-		style := lipgloss.NewStyle().Foreground(ColorGreen).Bold(true)
-		if m.isError {
-			style = lipgloss.NewStyle().Foreground(ColorRed).Bold(true)
-		}
-		sb.WriteString(style.Render(m.notice))
-		sb.WriteString("\n\n")
+	if m.quitting {
+		return ""
 	}
 
+	var content string
 	switch m.mode {
 	case payloadCreate:
-		sb.WriteString(m.renderCreateForm())
+		content = m.renderCreateForm()
 	case payloadConfirmDelete:
-		sb.WriteString(m.renderDeleteConfirm())
+		content = m.renderDeleteConfirm()
+	case payloadPromptSecure:
+		content = m.renderPromptSecure()
 	default:
-		sb.WriteString(m.renderList())
+		content = m.renderList()
 	}
 
-	sb.WriteString("\n\n")
-	sb.WriteString(m.renderStudioFooter())
+	cardWidth := calculateCardWidth(m.width)
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ColorPurple).
+		Padding(1, 2).
+		Width(cardWidth).
+		Render(content)
 
-	return FocusCardStyle.Width(m.cardWidth()).Render(sb.String())
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
 }
 
 func (m PayloadStudioModel) renderList() string {
-	var sb strings.Builder
+	header := m.renderHeader()
+	table := m.renderTable()
+	footer := m.renderFooter()
 
-	if len(m.list) == 0 {
-		empty := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(ColorPurple).
-			Padding(1, 3).
-			Background(ColorBgCard).
-			Render(
-				TitleStyle.Render("No payloads found") + "\n\n" +
-					lipgloss.NewStyle().Foreground(ColorFgLight).Bold(true).Render("Press [n] to create your first payload.") + "\n" +
-					SubtitleStyle.Render("Payloads can be referenced in combo sequences as {NAME}."))
-		sb.WriteString(empty)
-		sb.WriteString("\n\n")
-	} else {
-		sb.WriteString(m.renderPayloadTable())
-		sb.WriteString("\n")
+	var noticeBlock string
+	if m.notice != "" {
+		st := SuccessStyle
+		if m.isError {
+			st = ErrorStyle
+		}
+		noticeBlock = "\n\n" + st.Render(m.notice)
 	}
 
-	sb.WriteString(m.renderButtons())
-	return sb.String()
+	return fmt.Sprintf("%s\n\n%s%s\n\n%s", header, table, noticeBlock, footer)
 }
 
-func (m PayloadStudioModel) renderPayloadTable() string {
-	cardWidth := m.cardWidth()
-	innerWidth := cardWidth - 6
+func (m PayloadStudioModel) renderHeader() string {
+	title := TitleStyle.Render("📋 PAYLOAD STUDIO")
+	count := SubtitleStyle.Render(fmt.Sprintf("%d universal payloads configured", len(m.list)))
+	return fmt.Sprintf("%s  %s\n%s", title, count, SubtitleStyle.Render(strings.Repeat("─", 68)))
+}
 
-	colNum := 5
-	colVar := 18
-	colType := 8
-	colSec := 15
-	valWidth := innerWidth - colNum - colVar - colType - colSec - 8
-	if valWidth < 14 {
-		valWidth = 14
+func (m PayloadStudioModel) renderTable() string {
+	if len(m.list) == 0 {
+		return SubtitleStyle.Render("  No payloads found. Press [n] to create your first payload.")
 	}
 
-	headerPrefix := "  "
+	colNum := 6
+	colVar := 22
+	colType := 10
+	colSec := 18
+	valWidth := 20
+
 	headerNum := padRight("  #", colNum)
-	headerVar := padRight("PAYLOAD", colVar)
+	headerVar := padRight("TOKEN", colVar)
 	headerType := padRight("TYPE", colType)
 	headerVal := padRight("VALUE", valWidth)
 	headerSec := padRight("SECURITY", colSec)
-	headerLine := fmt.Sprintf("%s%s %s %s %s %s", headerPrefix, headerNum, headerVar, headerType, headerVal, headerSec)
-	header := lipgloss.NewStyle().Foreground(ColorFgMuted).Render(headerLine)
 
-	var rows []string
-	rows = append(rows, header)
+	headerLine := SubtitleStyle.Render(fmt.Sprintf("  %s %s %s %s %s", headerNum, headerVar, headerType, headerVal, headerSec))
+	divLine := SubtitleStyle.Render(fmt.Sprintf("  %s", strings.Repeat("─", 74)))
+
+	rows := []string{headerLine, divLine}
+
 	for i, s := range m.list {
-		tokenName := "{" + s.Name + "}"
+		tokenName := fmt.Sprintf("{%s}", strings.ToUpper(s.Name))
 		numCol := padRight(fmt.Sprintf("   %-2d", i+1), colNum)
 		varCol := padRight(truncate(tokenName, colVar), colVar)
 		typeCol := padRight(strings.ToUpper(s.EffectiveType()), colType)
@@ -512,17 +531,11 @@ func (m PayloadStudioModel) renderPayloadTable() string {
 		if i == m.index {
 			prefix := "▸ "
 			line := fmt.Sprintf("%s%s %s %s %s %s", prefix, numCol, varCol, typeCol, valCol, secCol)
-			if m.focus == 0 {
-				rows = append(rows, lipgloss.NewStyle().
-					Bold(true).
-					Foreground(ColorCyan).
-					Background(lipgloss.Color("#313244")).
-					Render(line))
-			} else {
-				rows = append(rows, lipgloss.NewStyle().
-					Foreground(ColorCyan).
-					Render(line))
-			}
+			rows = append(rows, lipgloss.NewStyle().
+				Bold(true).
+				Foreground(ColorCyan).
+				Background(lipgloss.Color("#313244")).
+				Render(line))
 		} else {
 			prefix := "  "
 			line := fmt.Sprintf("%s%s %s %s %s %s", prefix, numCol, varCol, typeCol, valCol, secCol)
@@ -534,26 +547,51 @@ func (m PayloadStudioModel) renderPayloadTable() string {
 	return strings.Join(rows, "\n")
 }
 
-func (m PayloadStudioModel) renderButtons() string {
-	labels := []string{"+ NEW", "✎ EDIT", "🗑 DELETE"}
-	buttons := make([]string, 0, len(labels))
-	for i, label := range labels {
-		style := lipgloss.NewStyle().
-			Foreground(ColorFgLight).
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(ColorFgMuted).
-			Padding(0, 2).
-			Background(ColorBgCard)
-		if m.focus == i+1 {
-			style = style.
-				Bold(true).
-				Foreground(ColorBgDark).
-				Background(ColorCyan).
-				BorderForeground(ColorCyan)
-		}
-		buttons = append(buttons, style.Render(label))
+func (m PayloadStudioModel) renderFooter() string {
+	switch m.mode {
+	case payloadCreate:
+		return HelpStyle.Render("[Tab / ↓]: Next field • [Enter]: Save payload • [Esc]: Cancel")
+	case payloadConfirmDelete:
+		return HelpStyle.Render("[Y / Enter]: Delete • [N / Esc]: Cancel")
+	case payloadPromptSecure:
+		return HelpStyle.Render("[Enter]: Save & Send • [Esc]: Cancel")
+	default:
+		return HelpStyle.Render("↑/↓: Navigate • [Enter / s]: Send • [n]: New • [e]: Edit • [d]: Delete • [Esc/q]: Back")
 	}
-	return lipgloss.JoinHorizontal(lipgloss.Center, buttons[0], "  ", buttons[1], "  ", buttons[2])
+}
+
+func (m PayloadStudioModel) renderPromptSecure() string {
+	tokenName := "PAYLOAD"
+	if m.promptPayload != nil {
+		tokenName = "{" + strings.ToUpper(m.promptPayload.Name) + "}"
+	}
+
+	title := lipgloss.NewStyle().Bold(true).Foreground(ColorCyan).Render("🔐 SECURE PAYLOAD INPUT")
+	sub := SubtitleStyle.Render(fmt.Sprintf("Enter on-the-go value for %s:", tokenName))
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ColorCyan).
+		Padding(0, 1).
+		Width(40).
+		Render(m.promptSecureInput.View())
+
+	help := HelpStyle.Render("[Enter]: Save & Send • [Esc]: Cancel")
+
+	card := lipgloss.JoinVertical(lipgloss.Left,
+		title,
+		"",
+		sub,
+		box,
+		"",
+		help,
+	)
+
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ColorCyan).
+		Padding(1, 3).
+		Background(ColorBgCard).
+		Render(card)
 }
 
 func (m PayloadStudioModel) renderCreateForm() string {
@@ -648,16 +686,13 @@ func (m PayloadStudioModel) renderDeleteConfirm() string {
 		BorderForeground(ColorRed).
 		Padding(1, 3).
 		Background(ColorBgCard).
-		Width(64).
 		Render(body)
 }
 
-func (m PayloadStudioModel) renderStudioFooter() string {
-	if m.mode == payloadCreate {
-		return HelpStyle.Render("[Tab]: Switch field • [Space]: Toggle option • [Enter / Ctrl+S]: Save • [Esc]: Cancel")
-	}
-	if m.mode == payloadConfirmDelete {
-		return HelpStyle.Render("[y]: Confirm delete • [n / Esc]: Cancel")
-	}
-	return HelpStyle.Render("↑/↓: Navigate • [Enter/e]: Edit • [n]: New • [d]: Delete • [s]: Toggle Keychain • [Tab]: Focus buttons • [Esc/q]: Back")
+// RunPayloadStudio runs the Payload Studio standalone in a Bubble Tea program.
+func RunPayloadStudio(store *payloads.Store, sendFn PayloadSendFunc) error {
+	m := NewPayloadStudioModel(store, sendFn)
+	p := tea.NewProgram(m, tea.WithAltScreen())
+	_, err := p.Run()
+	return err
 }

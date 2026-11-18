@@ -24,21 +24,23 @@ import (
 	"github.com/ShubhamJ010/ghid-cli/internal/tui"
 	"github.com/ShubhamJ010/ghid-cli/internal/vault"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/term"
 	"github.com/mattn/go-runewidth"
 )
 
 // App manages command line execution and dependency lifecycle.
 type App struct {
-	Version        string
-	ConfigStore    *config.Store
-	ComboStore     *combos.Store
-	PayloadStore   *payloads.Store
-	Vault          vault.Vault
-	GatewayFactory func(serial string) (gateway.Controller, error)
-	InteractiveFn  func(mgr *adb.Manager, cfg config.Config) error
-	ComboStudioFn  func(store *combos.Store, send tui.ComboSendFunc) error
-	Stdout         io.Writer
-	Stderr         io.Writer
+	Version         string
+	ConfigStore     *config.Store
+	ComboStore      *combos.Store
+	PayloadStore    *payloads.Store
+	Vault           vault.Vault
+	GatewayFactory  func(serial string) (gateway.Controller, error)
+	InteractiveFn   func(mgr *adb.Manager, cfg config.Config) error
+	ComboStudioFn   func(store *combos.Store, send tui.ComboSendFunc) error
+	PayloadStudioFn func(store *payloads.Store, send tui.PayloadSendFunc) error
+	Stdout          io.Writer
+	Stderr          io.Writer
 }
 
 // NewApp creates a default production App.
@@ -73,6 +75,9 @@ func NewApp(version string) *App {
 		},
 		ComboStudioFn: func(store *combos.Store, send tui.ComboSendFunc) error {
 			return tui.RunComboStudio(store, send)
+		},
+		PayloadStudioFn: func(store *payloads.Store, send tui.PayloadSendFunc) error {
+			return tui.RunPayloadStudio(store, send)
 		},
 		Stdout: os.Stdout,
 		Stderr: os.Stderr,
@@ -200,6 +205,9 @@ func (a *App) Run(args []string) int {
 
 	case "sync":
 		return a.handleSync(serial, cmdArgs, jsonOutput)
+
+	case "setup":
+		return a.handleSetup(serial, cmdArgs, jsonOutput)
 
 	case "build":
 		return a.handleBuild()
@@ -1816,11 +1824,24 @@ func (a *App) handlePayloads(serial string, args []string, jsonOutput bool) int 
 	store := a.payloadStore()
 	_, _ = store.EnsureDefaults()
 	if len(args) == 0 {
-		args = []string{"list"}
+		if !stdinIsTerminal() || jsonOutput {
+			args = []string{"list"}
+		} else {
+			return a.openPayloadStudio(store, serial)
+		}
 	}
 
 	subcmd := args[0]
 	switch subcmd {
+	case "studio", "new", "ui", "interactive":
+		return a.openPayloadStudio(store, serial)
+
+	case "check", "test", "inspect":
+		name := ""
+		if len(args) > 1 {
+			name = args[1]
+		}
+		return a.handlePayloadCheck(store, name, jsonOutput)
 	case "list", "ls":
 		list, err := store.List()
 		if err != nil {
@@ -2246,6 +2267,26 @@ func (a *App) handleMouse(serial string, args []string, jsonOutput bool) int {
 }
 
 func (a *App) dispatchCombo(serial, name, sequence string, jsonOutput bool) int {
+	pStore := a.payloadStore()
+	if stdinIsTerminal() && !jsonOutput && pStore != nil {
+		refs := hid.ExtractPayloads(sequence)
+		for _, ref := range refs {
+			p, ok, _ := pStore.Get(ref)
+			if (ok && p.Secure) || strings.EqualFold(ref, "password") || !ok || p.Value == "" {
+				fmt.Fprintf(a.Stdout, "🔐 Enter value for {%s}: ", strings.ToUpper(ref))
+				byteVal, readErr := term.ReadPassword(os.Stdin.Fd())
+				fmt.Fprintln(a.Stdout)
+				if readErr == nil && len(byteVal) > 0 {
+					pType := "type"
+					if ok {
+						pType = p.EffectiveType()
+					}
+					_, _ = pStore.Set(ref, string(byteVal), true, pType)
+				}
+			}
+		}
+	}
+
 	gw, err := a.GatewayFactory(serial)
 	if err != nil {
 		return a.comboFail(jsonOutput, "%v", err)
@@ -2539,71 +2580,259 @@ func (a *App) handleFileLog(serial string) int {
 	return 0
 }
 
-func (a *App) handleBuild() int {
-	var cmd *exec.Cmd
-	artifact := "build/ghost-hid.apk"
-	if _, err := os.Stat("build.sh"); err == nil {
-		fmt.Fprintln(a.Stdout, "Building GhostHID release APK (bash build.sh -> :app:assembleRelease)...")
-		cmd = exec.Command("bash", "build.sh")
-	} else if _, err := os.Stat(filepath.Join("android", "gradlew")); err == nil {
-		fmt.Fprintln(a.Stdout, "Building GhostHID release APK (android/gradlew :app:assembleRelease)...")
-		cmd = exec.Command("./gradlew", ":app:assembleRelease")
-		cmd.Dir = "android"
-		artifact = "android/app/build/outputs/apk/release/app-release.apk"
-	} else if _, err := os.Stat(filepath.Join("..", "ghost-hid", "build.sh")); err == nil {
-		fmt.Fprintln(a.Stdout, "Building GhostHID release APK (../ghost-hid/build.sh -> :app:assembleRelease)...")
-		cmd = exec.Command("bash", "build.sh")
-		cmd.Dir = filepath.Join("..", "ghost-hid")
-		artifact = filepath.Join("..", "ghost-hid", "build", "ghost-hid.apk")
+func (a *App) handleSetup(serial string, args []string, jsonOutput bool) int {
+	if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
+		fmt.Fprintln(a.Stdout, "Usage: ghid setup [target_mac_address]")
+		fmt.Fprintln(a.Stdout, "Automated installation and setup flow for ADB connected Android phone.")
+		fmt.Fprintln(a.Stdout, "Downloads latest release APK if not installed, grants all permissions, whitelists battery, starts service, and connects.")
+		return 0
+	}
+
+	cfg := a.ConfigStore.Load()
+	targetAddr := cfg.TargetAddress
+	if len(args) > 0 {
+		targetAddr = args[0]
+	}
+
+	mgr, err := adb.NewManager(serial)
+	if err != nil {
+		if jsonOutput {
+			writeJSONIndent(a.Stdout, map[string]interface{}{"error": err.Error(), "setup": false})
+		} else {
+			fmt.Fprintf(a.Stderr, "✖ ADB Error: %v\n", err)
+		}
+		return 1
+	}
+
+	if !jsonOutput {
+		fmt.Fprintln(a.Stdout, "\n🚀 GhostHID Device Setup")
+	}
+
+	rep, err := mgr.SetupDevice(targetAddr)
+	if err != nil {
+		if jsonOutput {
+			writeJSONIndent(a.Stdout, map[string]interface{}{"error": err.Error(), "setup": false, "report": rep})
+		} else {
+			fmt.Fprintf(a.Stderr, "✖ Setup failed: %v\n", err)
+		}
+		return 1
+	}
+
+	// Auto-sync combos & non-secure payloads so the device has latest definitions
+	pushed, _, syncErr := a.autoPush(mgr.Serial)
+
+	if jsonOutput {
+		writeJSONIndent(a.Stdout, map[string]interface{}{
+			"setup":  true,
+			"report": rep,
+			"synced": pushed && syncErr == nil,
+		})
+		return 0
+	}
+
+	fmt.Fprintf(a.Stdout, "  ✔ Connected Phone:     %s [%s]\n", rep.DeviceModel, rep.DeviceSerial)
+	if rep.ApkDownloaded {
+		fmt.Fprintf(a.Stdout, "  ✔ Release APK:         Downloaded & installed from %s\n", adb.DefaultGhostHidRepo)
 	} else {
-		fmt.Fprintln(a.Stderr, "Build failed: build.sh not found (run ghid build from ghost-hid repository)")
-		return 1
+		fmt.Fprintln(a.Stdout, "  ✔ GhostHID Package:    Already installed (com.sj010.ghid)")
 	}
-	cmd.Stdout = a.Stdout
-	cmd.Stderr = a.Stderr
-	if err := cmd.Run(); err != nil {
-		fmt.Fprintf(a.Stderr, "Build failed: %v\n", err)
-		return 1
+	fmt.Fprintln(a.Stdout, "  ✔ Permissions:         Runtime permissions granted & battery whitelist active")
+	if rep.ServiceStarted {
+		fmt.Fprintln(a.Stdout, "  ✔ Service State:       Foreground HidService active")
 	}
-	fmt.Fprintf(a.Stdout, "✔ Build successful: %s (release)\n", artifact)
+	if rep.BluetoothOn {
+		fmt.Fprintln(a.Stdout, "  ✔ Phone Bluetooth:     Enabled")
+	} else {
+		fmt.Fprintln(a.Stdout, "  ⚠ Phone Bluetooth:     Disabled (please turn on Bluetooth on your phone)")
+	}
+	if rep.Registered {
+		fmt.Fprintln(a.Stdout, "  ✔ HID Profile:         Registered (SDP published)")
+	}
+	if rep.Connected {
+		fmt.Fprintf(a.Stdout, "  ✔ Bluetooth Link:      Connected to %s\n", rep.Target)
+	} else if rep.Target != "" {
+		fmt.Fprintf(a.Stdout, "  ℹ Bluetooth Link:      Connection signal sent for %s\n", rep.Target)
+	}
+	if pushed && syncErr == nil {
+		fmt.Fprintln(a.Stdout, "  ✔ Library Sync:        Combos & payloads synchronized to phone")
+	}
+	fmt.Fprintln(a.Stdout, "\n✔ Setup completed successfully! Run 'ghid' to open dashboard.")
+	return 0
+}
+
+func (a *App) handleBuild() int {
+	fmt.Fprintln(a.Stdout, "Local APK building is deprecated.")
+	fmt.Fprintf(a.Stdout, "GhostHID releases are fetched automatically from GitHub (%s).\n", adb.DefaultGhostHidRepo)
+	fmt.Fprintln(a.Stdout, "Run 'ghid setup' or 'ghid install-apk' to download and install the latest APK onto your connected phone.")
 	return 0
 }
 
 func (a *App) handleInstallApk(serial string, args []string) int {
-	apkPath := ""
-	if len(args) > 0 {
-		apkPath = args[0]
-	} else {
-		candidates := []string{
-			"build/ghost-hid.apk",
-			filepath.Join("..", "ghost-hid", "build", "ghost-hid.apk"),
-			filepath.Join("..", "ghost-hid", "app", "build", "outputs", "apk", "release", "app-release.apk"),
-			"android/app/build/outputs/apk/release/app-release.apk",
-			"ghost-hid.apk",
-		}
-		for _, cand := range candidates {
-			if _, err := os.Stat(cand); err == nil {
-				apkPath = cand
-				break
-			}
-		}
-		if apkPath == "" {
-			apkPath = "build/ghost-hid.apk"
-		}
-	}
 	mgr, err := adb.NewManager(serial)
 	if err != nil {
 		fmt.Fprintf(a.Stderr, "Error: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(a.Stdout, "Installing %s onto Android device...\n", apkPath)
-	err = mgr.InstallApk(apkPath)
+
+	customPath := ""
+	if len(args) > 0 {
+		customPath = args[0]
+		fmt.Fprintf(a.Stdout, "Installing custom APK %s onto Android device...\n", customPath)
+	} else {
+		fmt.Fprintf(a.Stdout, "Fetching latest GhostHID release APK from GitHub (%s)...\n", adb.DefaultGhostHidRepo)
+	}
+
+	err = mgr.InstallApk(customPath)
 	if err != nil {
 		fmt.Fprintf(a.Stderr, "Install failed: %v\n", err)
 		return 1
 	}
-	fmt.Fprintln(a.Stdout, "✔ APK successfully installed!")
+	fmt.Fprintln(a.Stdout, "✔ GhostHID APK installed with all runtime permissions granted!")
+	_ = mgr.StartGateway()
 	return 0
+}
+
+func (a *App) openPayloadStudio(store *payloads.Store, serial string) int {
+	if a.PayloadStudioFn == nil {
+		views := make([]payloads.View, 0)
+		if list, err := store.List(); err == nil {
+			for _, p := range list {
+				views = append(views, p.View())
+			}
+		}
+		writeJSONIndent(a.Stdout, views)
+		return 0
+	}
+	send := func(p payloads.Payload) error {
+		gw, err := a.GatewayFactory(serial)
+		if err != nil {
+			return err
+		}
+		return gw.ComboWithResolver("{"+p.Name+"}", a.payloadResolver())
+	}
+	if err := a.PayloadStudioFn(store, send); err != nil {
+		fmt.Fprintf(a.Stderr, "Payload studio error: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+type PayloadCheckResult struct {
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	Secure  bool   `json:"secure"`
+	Present bool   `json:"present"`
+	Valid   bool   `json:"valid"`
+	Status  string `json:"status"`
+	Error   string `json:"error,omitempty"`
+}
+
+func (a *App) handlePayloadCheck(store *payloads.Store, targetName string, jsonOutput bool) int {
+	var checkList []payloads.Payload
+	if targetName != "" {
+		p, ok, err := store.Get(targetName)
+		if err != nil {
+			return a.payloadFail(jsonOutput, "load payload %q: %v", targetName, err)
+		}
+		if !ok {
+			return a.payloadFail(jsonOutput, "payload %q not found", targetName)
+		}
+		checkList = []payloads.Payload{p}
+	} else {
+		var err error
+		checkList, err = store.List()
+		if err != nil {
+			return a.payloadFail(jsonOutput, "list payloads: %v", err)
+		}
+	}
+
+	results := make([]PayloadCheckResult, 0, len(checkList))
+	allValid := true
+
+	for _, p := range checkList {
+		res := PayloadCheckResult{
+			Name:    p.Name,
+			Type:    p.EffectiveType(),
+			Secure:  p.Secure,
+			Present: true,
+			Valid:   true,
+			Status:  "OK",
+		}
+
+		if _, err := payloads.ValidateName(p.Name); err != nil {
+			res.Valid = false
+			res.Status = "Invalid Name"
+			res.Error = err.Error()
+		}
+
+		if res.Valid && (res.Type == "raw" || strings.HasPrefix(strings.ToLower(p.Value), "raw:")) {
+			hexVal := strings.TrimPrefix(p.Value, "raw:")
+			hexVal = strings.TrimPrefix(hexVal, "RAW:")
+			if _, err := hid.ValidateRaw(hexVal); err != nil {
+				res.Valid = false
+				res.Status = "Invalid Raw Hex"
+				res.Error = err.Error()
+			}
+		}
+
+		if p.Secure {
+			view := p.View()
+			if !view.Present || p.Value == "" {
+				res.Present = false
+				res.Valid = false
+				res.Status = "Missing Keychain Secret"
+				res.Error = "Keychain item not found or secret is empty"
+			}
+		}
+
+		if !res.Valid {
+			allValid = false
+		}
+		results = append(results, res)
+	}
+
+	if jsonOutput {
+		writeJSONIndent(a.Stdout, map[string]interface{}{
+			"valid":    allValid,
+			"total":    len(results),
+			"payloads": results,
+		})
+		if !allValid {
+			return 1
+		}
+		return 0
+	}
+
+	fmt.Fprintln(a.Stdout, "\n📋 PAYLOAD VALIDATION & HEALTH CHECK")
+	if len(results) == 0 {
+		fmt.Fprintln(a.Stdout, "  No payloads found to check.")
+		return 0
+	}
+
+	fmt.Fprintf(a.Stdout, "  %-3s %-20s %-8s %-16s %s\n", "#", "TOKEN", "TYPE", "SECURITY", "STATUS")
+	for i, r := range results {
+		tokenName := "{" + strings.ToUpper(r.Name) + "}"
+		sec := "[PLAIN]"
+		if r.Secure {
+			sec = "[KEYCHAIN 🔒]"
+		}
+		statusMark := "✔ " + r.Status
+		if !r.Valid {
+			statusMark = "✖ " + r.Status
+			if r.Error != "" {
+				statusMark += " (" + r.Error + ")"
+			}
+		}
+		fmt.Fprintf(a.Stdout, "  %2d. %-20s %-8s %-16s %s\n", i+1, tokenName, r.Type, sec, statusMark)
+	}
+
+	if allValid {
+		fmt.Fprintf(a.Stdout, "\n✔ All %d payload(s) passed validation and are ready to use.\n", len(results))
+		return 0
+	} else {
+		fmt.Fprintf(a.Stdout, "\n✖ One or more payloads failed validation or are missing secrets.\n")
+		return 1
+	}
 }
 
 func (a *App) handleInstallBin() int {
@@ -2737,11 +2966,11 @@ func (a *App) handleSync(serial string, args []string, jsonOutput bool) int {
 	if report.PayloadsSkippedSecure > 0 {
 		fmt.Fprintf(a.Stdout, "  Secure skipped:   %d payloads (values scrubbed; secrets stay device-only)\n", report.PayloadsSkippedSecure)
 	}
-	if report.AppRestarted {
-		fmt.Fprintf(a.Stdout, "  App Restarted:    ✔ com.sj010.ghid\n")
+	if report.StateReloaded {
+		fmt.Fprintf(a.Stdout, "  State Reloaded:   ✔ com.sj010.ghid (link kept up)\n")
 	}
 	if report.Reconnected {
-		fmt.Fprintf(a.Stdout, "  Bluetooth Link:   ✔ Reconnect broadcast dispatched\n")
+		fmt.Fprintf(a.Stdout, "  Bluetooth Link:   ✔ Connected\n")
 	}
 	fmt.Fprintln(a.Stdout)
 	return 0
@@ -2755,12 +2984,15 @@ Usage:
 
 Commands:
   interactive (i)   Launch animated 24-bit Lip Gloss interactive dashboard (default)
+  setup [target]    Automated release APK install & setup flow with full permissions
+  install-apk [apk] Install GhostHID APK from GitHub release (or file) with runtime permissions
   status            Query gateway & Bluetooth status; exit 1 unless the HID link is connected
                     (--json reports gateway, hid_link, can_send, os_source, secure_payloads)
   doctor            Comprehensive hardware & network diagnostic health check
   devices           Manage registered target devices (list, add, select, delete)
   payload           Manage text & secret payloads ({NAME}, custom)
   payload list      List all payloads with source/security (--json supported)
+  payload check     Inspect and validate payload health, formatting, and keychain secrets
   payload get <name> Get payload value; secure misses report present:false + exit 1
   payload set <name> <value> [--secure] [--type type|raw] Save or update payload
                     (flags accepted in any position; --type raw and --type=raw both work)

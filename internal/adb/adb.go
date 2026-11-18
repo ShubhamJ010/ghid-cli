@@ -1,11 +1,11 @@
 package adb
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -210,51 +210,26 @@ func (m *Manager) IsPackageInstalled() bool {
 }
 
 func (m *Manager) InstallApk(customPath string) error {
-	apkPath := customPath
-	if apkPath == "" {
-		candidates := []string{
-			filepath.Join(m.Root, "build", "ghost-hid.apk"),
-			"build/ghost-hid.apk",
-		}
-		for _, c := range candidates {
-			if _, err := os.Stat(c); err == nil {
-				apkPath = c
-				break
-			}
-		}
+	if customPath == "" {
+		return m.InstallReleaseApk(DefaultGhostHidRepo)
 	}
-	if apkPath == "" {
-		return errors.New("ghost-hid.apk not found. Build it with 'ghid build' first")
-	}
-
-	_, err := m.Run("install", "-r", apkPath)
+	_, err := m.Run("install", "-g", "-r", customPath)
 	if err != nil {
-		return err
+		if strings.Contains(err.Error(), "unknown option -g") || strings.Contains(err.Error(), "invalid option") {
+			_, err = m.Run("install", "-r", customPath)
+		}
+		if err != nil {
+			return err
+		}
 	}
-	// Force-stop to prevent Android Package Manager from retaining stale process memory
+	m.GrantAllPermissions()
 	_, _ = m.Run("shell", "am", "force-stop", PackageName)
 	return nil
 }
 
+// BuildApk is deprecated; release APKs are downloaded directly from GitHub releases.
 func (m *Manager) BuildApk() error {
-	buildScript := filepath.Join(m.Root, "build.sh")
-	if _, err := os.Stat(buildScript); err != nil {
-		ghostBuild := filepath.Join(m.Root, "..", "ghost-hid", "build.sh")
-		if _, errGhost := os.Stat(ghostBuild); errGhost == nil {
-			buildScript = ghostBuild
-		} else {
-			buildScript = "build.sh"
-		}
-	}
-
-	if m.runner == nil {
-		r, err := NewExecRunner()
-		if err != nil {
-			return err
-		}
-		m.runner = r
-	}
-	return m.runner.RunCommand(filepath.Dir(buildScript), "bash", buildScript)
+	return errors.New("ghid build is deprecated; release APKs are downloaded directly from GitHub releases")
 }
 
 func (m *Manager) GetBluetoothState() bool {
@@ -360,6 +335,17 @@ func parseBondedDevices(out string) []BondedDevice {
 	return devices
 }
 
+// broadcastArgs is the common head of every gateway broadcast.
+//
+// --receiver-foreground marks the intent as a foreground broadcast. GhostHID is
+// a UI-less foreground service, and OEM ROMs (and Android's own background
+// broadcast deferral) otherwise park commands in a "deliver until active" queue
+// that never clears, because a service-only app never becomes active. The flag
+// makes delivery immediate.
+func broadcastArgs(action string) []string {
+	return []string{"shell", "am", "broadcast", "--receiver-foreground", "-n", ReceiverName, "-a", action}
+}
+
 func (m *Manager) StartGateway() error {
 	_, _ = m.Run("shell", "dumpsys", "deviceidle", "whitelist", "+"+PackageName)
 	_, err := m.Run("shell", "am", "start-foreground-service", "-n", ServiceName)
@@ -368,17 +354,38 @@ func (m *Manager) StartGateway() error {
 
 func (m *Manager) StopGateway() error {
 	_, _ = m.Run("shell", "dumpsys", "deviceidle", "whitelist", "+"+PackageName)
-	_, _ = m.Run("shell", "am", "broadcast", "-n", ReceiverName, "-a", ActionCmd, "--es", "cmd", "stop")
+	_, _ = m.Run(append(broadcastArgs(ActionCmd), "--es", "cmd", "stop")...)
 	_, err := m.Run("shell", "am", "stopservice", "-n", ServiceName)
 	return err
 }
 
-func (m *Manager) RestartAppAndReconnect() error {
-	_, _ = m.Run("shell", "am", "force-stop", PackageName)
-	_, _ = m.Run("shell", "am", "start", "-n", AppMainActivity)
-	time.Sleep(1500 * time.Millisecond)
-	_, err := m.Run("shell", "am", "broadcast", "-a", ActionCmd, "-n", ReceiverName, "--es", "cmd", "connect")
-	return err
+// ReloadAndReconnect makes sure freshly pushed combos and payloads take effect
+// in the running service, then makes sure the gateway is up and the HID link is
+// connected.
+//
+// It deliberately never force-stops the app. A force-stop tears down the
+// Bluetooth link and, when a sync lands while a broadcast is in flight, leaves
+// that delivery unfinished so later commands sit in Android's deferred queue.
+// `cmd=reload` re-reads the pushed files in place instead, so the link survives
+// a `combo save` or `payload set`.
+func (m *Manager) ReloadAndReconnect() error {
+	// Best effort: the reload broadcast itself cold-starts the app when it is
+	// not running, and a start failure must not fail an otherwise good push.
+	_, _ = m.Run(append(broadcastArgs(ActionCmd), "--es", "cmd", "reload")...)
+	_, _ = m.Run("shell", "am", "start-foreground-service", "-n", ServiceName)
+	for attempt := 0; attempt < 4; attempt++ {
+		time.Sleep(1200 * time.Millisecond)
+		status := m.GetStatus()
+		if status.Registered && status.Connected {
+			return nil
+		}
+		// The HID proxy needs a moment after a cold start, so the first connect
+		// is routinely dropped. Retry until the link is up.
+		if _, err := m.Run(append(broadcastArgs(ActionCmd), "--es", "cmd", "connect")...); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (m *Manager) GetStatus() GatewayStatus {
@@ -411,7 +418,7 @@ func (m *Manager) GetStatus() GatewayStatus {
 }
 
 func (m *Manager) ConnectTarget(address string) error {
-	args := []string{"shell", "am", "broadcast", "-n", ReceiverName, "-a", ActionCmd, "--es", "cmd", "connect"}
+	args := append(broadcastArgs(ActionCmd), "--es", "cmd", "connect")
 	if address != "" {
 		args = append(args, "--es", "address", address)
 	}
@@ -420,17 +427,17 @@ func (m *Manager) ConnectTarget(address string) error {
 }
 
 func (m *Manager) DisconnectTarget() error {
-	_, err := m.Run("shell", "am", "broadcast", "-n", ReceiverName, "-a", ActionCmd, "--es", "cmd", "disconnect")
+	_, err := m.Run(append(broadcastArgs(ActionCmd), "--es", "cmd", "disconnect")...)
 	return err
 }
 
 func (m *Manager) UnpairTarget() error {
-	_, err := m.Run("shell", "am", "broadcast", "-n", ReceiverName, "-a", ActionCmd, "--es", "cmd", "unpair")
+	_, err := m.Run(append(broadcastArgs(ActionCmd), "--es", "cmd", "unpair")...)
 	return err
 }
 
 func (m *Manager) SendLock() error {
-	_, err := m.Run("shell", "am", "broadcast", "-n", ReceiverName, "-a", ActionLock)
+	_, err := m.Run(broadcastArgs(ActionLock)...)
 	return err
 }
 
@@ -439,87 +446,68 @@ func (m *Manager) SendCombo(sequence string) error {
 	return m.SendComboWithResolver(sequence, nil)
 }
 
-// SendComboWithResolver executes a combo sequence, resolving any {PAYLOAD}
-// references using the supplied resolver function.
+// shellQuote makes one argument survive `adb shell`'s space-joined command
+// line, so sequences with spaces, quotes, or shell metacharacters arrive intact.
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}
+
+// SendComboWithResolver resolves payload references on the host and sends the
+// whole sequence as one broadcast. The phone parses the DSL and executes it as
+// a single FIFO job, so two macros can never interleave their scancodes.
 func (m *Manager) SendComboWithResolver(sequence string, resolver hid.PayloadResolver) error {
 	steps, err := hid.ParseSequence(sequence)
 	if err != nil {
 		return err
 	}
+
+	payloads := make(map[string]string)
 	for _, step := range steps {
-		if step.Payload != "" {
-			if resolver == nil {
-				return fmt.Errorf("payload {%s} requires a resolver", step.Payload)
-			}
-			val, isRaw, err := resolver(step.Payload)
-			if err != nil {
-				return err
-			}
-			if strings.TrimSpace(val) == "" {
-				return fmt.Errorf("payload {%s} is empty", step.Payload)
-			}
-			cleanVal := strings.TrimSpace(val)
-			isExplicitRaw := strings.HasPrefix(strings.ToLower(cleanVal), "raw:")
-			if isRaw || isExplicitRaw {
-				rawHex := cleanVal
-				if isExplicitRaw {
-					rawHex = strings.TrimSpace(cleanVal[4:])
-				}
-				rawHex = strings.ReplaceAll(rawHex, " ", "")
-				if _, rawErr := hid.ValidateRaw(rawHex); rawErr != nil {
-					return fmt.Errorf("invalid raw hex in payload {%s}: %w", step.Payload, rawErr)
-				}
-				if err := m.SendRawWithHold(rawHex, step.Hold); err != nil {
-					return err
-				}
-				if step.Hold > 0 {
-					time.Sleep(step.Hold)
-				}
-			} else {
-				if err := m.TypeText(val); err != nil {
-					return err
-				}
-			}
-		} else if step.Raw != "" {
-			if err := m.SendRawWithHold(step.Raw, step.Hold); err != nil {
-				return err
-			}
-			if step.Hold > 0 {
-				time.Sleep(step.Hold)
-			}
-		} else if step.Text != "" {
-			if err := m.TypeText(step.Text); err != nil {
-				return err
-			}
-		} else if step.Mouse != nil {
-			if err := m.sendMouseAction(*step.Mouse); err != nil {
-				return err
-			}
-		} else if step.Modifier != 0 || step.KeyCode != 0 || step.Combo != "" {
-			if step.Delay > 0 && step.Modifier == 0 && step.KeyCode == 0 {
-				// Pure delay step
-			} else {
-				clean := hid.NormalizeComboForAndroid(step.Combo)
-				if !strings.HasPrefix(clean, "{") {
-					clean = "{" + clean + "}"
-				}
-				args := []string{"shell", "am", "broadcast", "-n", ReceiverName, "-a", ActionCmd, "--es", "cmd", "combo", "--es", "keys", clean}
-				if step.Hold > 0 {
-					args = append(args, "--el", "hold_ms", strconv.FormatInt(step.Hold.Milliseconds(), 10))
-				}
-				if _, err := m.Run(args...); err != nil {
-					return err
-				}
-				if step.Hold > 0 {
-					time.Sleep(step.Hold)
-				}
-			}
+		if step.Payload == "" {
+			continue
 		}
-		if step.Delay > 0 {
-			time.Sleep(step.Delay)
+		if resolver == nil {
+			return fmt.Errorf("payload {%s} requires a resolver", step.Payload)
+		}
+		val, isRaw, err := resolver(step.Payload)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(val) == "" {
+			return fmt.Errorf("payload {%s} is empty", step.Payload)
+		}
+		cleanVal := strings.TrimSpace(val)
+		isExplicitRaw := strings.HasPrefix(strings.ToLower(cleanVal), "raw:")
+		if isRaw || isExplicitRaw {
+			rawHex := cleanVal
+			if isExplicitRaw {
+				rawHex = strings.TrimSpace(cleanVal[4:])
+			}
+			rawHex = strings.ReplaceAll(rawHex, " ", "")
+			if _, rawErr := hid.ValidateRaw(rawHex); rawErr != nil {
+				return fmt.Errorf("invalid raw hex in payload {%s}: %w", step.Payload, rawErr)
+			}
+			payloads[step.Payload] = "raw:" + rawHex
+		} else {
+			payloads[step.Payload] = cleanVal
 		}
 	}
-	return nil
+
+	args := append(broadcastArgs(ActionCmd),
+		"--es", "cmd", "combo",
+		"--es", "keys", shellQuote(sequence),
+	)
+	if len(payloads) > 0 {
+		data, err := json.Marshal(payloads)
+		if err != nil {
+			return err
+		}
+		// Base64 keeps JSON quotes, braces, and raw: markers intact through the
+		// remote shell without relying on platform-specific escaping.
+		args = append(args, "--es", "payloads_b64", base64.StdEncoding.EncodeToString(data))
+	}
+	_, err = m.Run(args...)
+	return err
 }
 
 // SendClick dispatches a mouse click at the resting cursor position.
@@ -571,12 +559,12 @@ func (m *Manager) SendMouse(action string) error {
 }
 
 func (m *Manager) sendMouseAction(action hid.MouseAction) error {
-	_, err := m.Run("shell", "am", "broadcast", "-n", ReceiverName, "-a", ActionCmd, "--es", "cmd", "mouse", "--es", "action", action.Name)
+	_, err := m.Run(append(broadcastArgs(ActionCmd), "--es", "cmd", "mouse", "--es", "action", action.Name)...)
 	return err
 }
 
 func (m *Manager) TypeText(text string) error {
-	_, err := m.Run("shell", "am", "broadcast", "-n", ReceiverName, "-a", ActionCmd, "--es", "cmd", "type", "--es", "text", text)
+	_, err := m.Run(append(broadcastArgs(ActionCmd), "--es", "cmd", "type", "--es", "text", shellQuote(text))...)
 	return err
 }
 
@@ -589,7 +577,7 @@ func (m *Manager) SendRawWithHold(hexReport string, hold time.Duration) error {
 	if _, err := hid.ValidateRaw(cleanHex); err != nil {
 		return err
 	}
-	args := []string{"shell", "am", "broadcast", "-n", ReceiverName, "-a", ActionCmd, "--es", "cmd", "raw", "--es", "hex", cleanHex}
+	args := append(broadcastArgs(ActionCmd), "--es", "cmd", "raw", "--es", "hex", cleanHex)
 	if hold > 0 {
 		args = append(args, "--el", "hold_ms", strconv.FormatInt(hold.Milliseconds(), 10))
 	}
@@ -598,12 +586,12 @@ func (m *Manager) SendRawWithHold(hexReport string, hold time.Duration) error {
 }
 
 func (m *Manager) SendInstantSleep() error {
-	_, err := m.Run("shell", "am", "broadcast", "-n", ReceiverName, "-a", ActionCmd, "--es", "cmd", "sleep")
+	_, err := m.Run(append(broadcastArgs(ActionCmd), "--es", "cmd", "sleep")...)
 	return err
 }
 
 func (m *Manager) SendMediaKey(key string) error {
-	_, err := m.Run("shell", "am", "broadcast", "-n", ReceiverName, "-a", ActionCmd, "--es", "cmd", "media", "--es", "key", key)
+	_, err := m.Run(append(broadcastArgs(ActionCmd), "--es", "cmd", "media", "--es", "key", key)...)
 	return err
 }
 

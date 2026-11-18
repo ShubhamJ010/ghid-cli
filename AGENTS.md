@@ -43,7 +43,7 @@ go build ./...
 ## Update CLI on this Mac
 
 ```bash
-cd /Users/sj/Desktop/ws/ghost-hid
+cd /Users/sj/Desktop/ws/ghid/ghid-cli
 gofmt -w cmd internal
 go vet ./...
 go build -o ghid ./cmd/ghid
@@ -61,47 +61,52 @@ Two install paths exist:
 `~/go/bin` usually wins in PATH. Update both, or `rm ~/go/bin/ghid` once to use symlink only.
 Resolve with `which ghid`.
 
-## Update APK on this Mac
+## Device Setup & Remote APK Installation
 
-Phone must be visible to ADB first: `ghid doctor --json`.
+No local APK builds or stale candidates needed. `ghid` fetches releases directly from `ShubhamJ010/ghost-hid`:
 
 ```bash
-cd /Users/sj/Desktop/ws/ghost-hid
-./build.sh
-ghid install-apk
-ghid restart
-sleep 2
-ghid connect
-ghid status
-```
+# Automated setup (installs APK from GitHub release, grants runtime permissions, starts service, connects)
+ghid setup
 
-Want `SDP Registered: true` and `Connection: CONNECTED`.
+# Or target a specific MAC address:
+ghid setup 38:FC:98:E8:E3:87
+
+# Direct APK install from latest release:
+ghid install-apk
+```
 
 If HID descriptor, report IDs, subclass, or mouse support changed:
 **unpair GhostHID on Windows, then pair again.** Old pairing caches old descriptor. Kotlin-only or UI changes need install + restart, not re-pair.
 
-## Update both
+## TUI Layout & Studio Navigation
 
-```bash
-cd /Users/sj/Desktop/ws/ghost-hid
-gofmt -w cmd internal
-go vet ./...
-./build.sh
-ghid install-apk
-ghid restart
-go build -o ghid ./cmd/ghid
-go install ./cmd/ghid
-./ghid install-bin
-sleep 2
-ghid connect
-ghid status
-```
+- **Main Menu Item Order**:
+  1. Favorite Combos (pinned dynamic items)
+  2. `quick` (keystroke / raw injection)
+  3. `payloads` (Payload Studio)
+  4. `combo` (Combo Studio)
+  5. `devices` (Registered Bluetooth targets)
+  6. `reconnect` (Bluetooth link reset)
+  7. `doctor` (Hardware & health diagnostics)
+  8. `exit` (Terminate)
+- **Unified Studio Keybindings** (Payload Studio & Combo Studio):
+  - `Enter` / `s`: Send sequence / payload (prompts on-the-go modal for secure tokens)
+  - `e`: Edit selected entry
+  - `n` / `a`: Create new entry
+  - `d` / `x`: Delete entry
+  - `↑` / `k`, `↓` / `j`: Navigate
+  - `Esc` / `q`: Return to dashboard
+- **Secure Payload Prompt Window**:
+  - Combos or payloads with secure tokens (`Secure: true` or named `password`) trigger an interactive on-the-go prompt modal with password masking `•`. Values are saved securely to Keychain/Store on the fly and dispatched.
 
 ## Agent JSON contract
 
 `--json` = non-interactive. No prompts, no ANSI, JSON on stdout, diagnostics on stderr.
 
 - Exit `0` success, `1` error. `status` exits `1` while the HID link is disconnected (JSON body is still emitted).
+- `setup [--json]` = automated phone environment setup & report.
+- `payload check [name] [--json]` = inspect and validate payload tokens, types, raw hex formatting, and keychain secrets without sending.
 - Combo errors: `{"status":"error","error":"..."}` on stdout + exit 1. Payload errors use the same shape.
 - `combo schema --json` / `combo keys --json` = grammar + every valid token. Agents discover, no hard-code.
 - `combo validate <keys> [--os ...] --json` = parse + resolve payload refs without send/save.

@@ -216,17 +216,17 @@ func (m *Model) refreshMenuItems() {
 		}
 	}
 
-	// Standard action items
-	items = append(items,
-		MenuItem{Key: fmt.Sprintf("%d", idx), Title: "combo", Description: "Create, send & edit sequences across OSs", Icon: "🎹"},
-	)
-	idx++
+	// Standard action items: quick, payloads, combos, rest stays same
 	items = append(items,
 		MenuItem{Key: fmt.Sprintf("%d", idx), Title: "quick", Description: "Quick send keystrokes or raw HID report (default: Type)", Icon: "⚡"},
 	)
 	idx++
 	items = append(items,
 		MenuItem{Key: fmt.Sprintf("%d", idx), Title: "payloads", Description: "Manage payloads & secrets ({NAME})", Icon: "📋"},
+	)
+	idx++
+	items = append(items,
+		MenuItem{Key: fmt.Sprintf("%d", idx), Title: "combo", Description: "Create, send & edit sequences across OSs", Icon: "🎹"},
 	)
 	idx++
 	items = append(items,
@@ -665,7 +665,13 @@ func (m Model) triggerAction(action string) (tea.Model, tea.Cmd) {
 		return m, textinput.Blink
 
 	case "payloads", "payload":
-		studio := NewPayloadStudioModel(m.payloadsStore)
+		sendFn := func(p payloads.Payload) error {
+			if m.manager == nil {
+				return fmt.Errorf("adb manager not initialized")
+			}
+			return m.manager.SendComboWithResolver("{"+p.Name+"}", m.payloadsStore.Resolver())
+		}
+		studio := NewPayloadStudioModel(m.payloadsStore, sendFn)
 		studio.width = m.width
 		studio.height = m.height
 		m.payloadStudio = &studio
